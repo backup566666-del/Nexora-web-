@@ -227,3 +227,123 @@ test('existing Firebase project configuration and OAuth client remain preserved 
     '894494849299-hle9jspcklpl49ar5jbbln1uc5nlu522.apps.googleusercontent.com'
   );
 });
+
+test('firestore.rules allows verified owners to update onboarding/profile fields while preserving RBAC locks', async () => {
+  const fs = await import('node:fs');
+  const rules = fs.readFileSync('firestore.rules', 'utf8');
+
+  // Default deny safety net and verified write gate remain intact
+  assert.ok(rules.includes('allow read, write: if false;'));
+  assert.ok(rules.includes('function isVerified()'));
+  assert.ok(rules.includes('request.auth.token.email_verified == true'));
+
+  // Owner & Admin protections remain intact
+  assert.ok(rules.includes('function isFounderOwner()'));
+  assert.ok(rules.includes('function isPlatformOwner()'));
+  assert.ok(rules.includes('!isTargetPlatformOwner(userId)'));
+
+  // Users update branch allows all onboarding fields (avatar, cover, coverPositionY, username, bio, interests, onboardingCompleted)
+  for (const field of [
+    "'avatarUrl'",
+    "'coverUrl'",
+    "'coverPositionY'",
+    "'username'",
+    "'bio'",
+    "'interests'",
+    "'onboardingCompleted'",
+    "'updatedAt'",
+  ]) {
+    assert.ok(rules.includes(field), `Expected ${field} in firestore.rules`);
+  }
+
+  // Avatar & cover inline payload caps exceed mediaUploadService compression caps
+  assert.ok(rules.includes("isOptionalString(data, 'avatarUrl', 200000)"));
+  assert.ok(rules.includes("isOptionalString(data, 'coverUrl', 400000)"));
+
+  // Privilege escalation fields are NOT in the regular owner update allowlist
+  const ownerUpdateMatch = rules.match(
+    /isOwner\(userId\)\s*&& isNotSuspended\(\)[\s\S]*?affectedKeys\(\)\.hasOnly\(\[([\s\S]*?)\]\)/
+  );
+  assert.ok(ownerUpdateMatch, 'Owner update affectedKeys().hasOnly block must exist');
+  const allowlisted = ownerUpdateMatch[1];
+  assert.equal(allowlisted.includes("'verified'"), false);
+  assert.equal(allowlisted.includes("'suspended'"), false);
+  assert.equal(allowlisted.includes("'followersCount'"), false);
+  assert.equal(allowlisted.includes("'likesCount'"), false);
+
+  // Username claim creation & owner-only cleanup rules exist
+  assert.ok(rules.includes('match /usernames/{username}'));
+  assert.ok(rules.includes('allow delete: if isValidId(username) && isVerified() && existing().uid == request.auth.uid;'));
+});
+
+test('error reporting explicitly distinguishes Firestore errors from Firebase Storage errors', async () => {
+  const { formatStorageErrorMessage } = await import('../src/services/firebase/errorHandler');
+
+  const firestoreErr = extractReadableErrorMessage(
+    new Error(
+      JSON.stringify({
+        error: '7 PERMISSION_DENIED: Missing or insufficient permissions.',
+        operationType: 'update',
+        path: 'users/test_uid_123',
+        authInfo: { userId: 'test_uid_123', emailVerified: true },
+      })
+    )
+  );
+  assert.ok(firestoreErr.startsWith('Firestore permission denied (update users/test_uid_123)'));
+
+  const storageUnauth = extractReadableErrorMessage(
+    new Error(formatStorageErrorMessage({ code: 'storage/unauthorized', message: 'User does not have permission' }, 'users/test_uid_123/cover/banner.jpg'))
+  );
+  assert.ok(storageUnauth.startsWith('Firebase Storage permission denied (storage/unauthorized)'));
+  assert.ok(storageUnauth.includes('users/test_uid_123/cover/banner.jpg'));
+
+  const storageBucket = extractReadableErrorMessage({ code: 'storage/bucket-not-found', message: '404 Not Found' });
+  assert.ok(storageBucket.startsWith('Firebase Storage bucket not provisioned (storage/bucket-not-found)'));
+});
+
+test('firebase.json targets the exact named Firestore database and storage.rules isolates user media writes', async () => {
+  const fs = await import('node:fs');
+  const fbJson = JSON.parse(fs.readFileSync('firebase.json', 'utf8'));
+  assert.equal(fbJson.firestore.database, firebaseConfig.firestoreDatabaseId);
+  assert.equal(fbJson.firestore.rules, 'firestore.rules');
+  assert.equal(fbJson.storage.rules, 'storage.rules');
+
+  const storageRules = fs.readFileSync('storage.rules', 'utf8');
+  assert.ok(storageRules.includes('allow read, write: if false;'));
+  assert.ok(storageRules.includes('match /users/{userId}/{allMedia=**}'));
+  assert.ok(storageRules.includes('allow write: if isSignedInVerified() && request.auth.uid == userId && isAllowedMedia();'));
+});
+
+test('5-step onboarding payload (avatar, username, bio, interests, cover, coverPositionY, onboardingCompleted) matches firestore.rules caps and allowlist', async () => {
+  const fs = await import('node:fs');
+  const rules = fs.readFileSync('firestore.rules', 'utf8');
+  const ownerUpdateMatch = rules.match(
+    /isOwner\(userId\)\s*&& isNotSuspended\(\)[\s\S]*?affectedKeys\(\)\.hasOnly\(\[([\s\S]*?)\]\)/
+  );
+  assert.ok(ownerUpdateMatch);
+  const allowlistedFields = new Set(
+    [...ownerUpdateMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1])
+  );
+
+  // Simulated 5-step onboarding update keys from OnboardingFlow -> updateUserProfileFields
+  const avatarLimits = resolveInlineCompressionLimits('users/uid_test/avatar');
+  const coverLimits = resolveInlineCompressionLimits('users/uid_test/cover');
+  const step5Payload = {
+    avatarUrl: 'data:image/jpeg;base64,' + 'A'.repeat(avatarLimits.maxBytes - 30),
+    username: normalizeUsername('Test_User_01'),
+    bio: sanitizeString('Creator building on Nexora.', 400),
+    interests: ['Spatial Design', 'Software Craft'],
+    coverUrl: 'data:image/jpeg;base64,' + 'B'.repeat(coverLimits.maxBytes - 30),
+    coverPositionY: 42,
+    onboardingCompleted: true,
+    updatedAt: 'serverTimestamp()',
+  };
+
+  for (const key of Object.keys(step5Payload)) {
+    assert.ok(allowlistedFields.has(key), `Key ${key} must be in owner affectedKeys() allowlist`);
+  }
+  assert.ok(step5Payload.avatarUrl.length <= 200_000);
+  assert.ok(step5Payload.coverUrl.length <= 400_000);
+  assert.ok(isValidUsername(step5Payload.username));
+  assert.ok(step5Payload.coverPositionY >= 0 && step5Payload.coverPositionY <= 100);
+});

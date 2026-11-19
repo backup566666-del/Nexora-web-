@@ -13,6 +13,7 @@ import {
   User,
 } from 'firebase/auth';
 import {
+  deleteDoc,
   doc,
   getDoc,
   serverTimestamp,
@@ -431,6 +432,13 @@ export async function updateUserProfileFields(
   }>,
   previousUsername?: string
 ): Promise<void> {
+  if (auth.currentUser) {
+    if (auth.currentUser.uid !== uid) {
+      throw new Error(`Firestore permission guard: signed-in user (${auth.currentUser.uid}) cannot modify profile users/${uid}.`);
+    }
+    await ensureVerifiedTokenClaims(auth.currentUser);
+  }
+
   const sanitized: Record<string, unknown> = { updatedAt: serverTimestamp() };
 
   if (updates.displayName !== undefined) {
@@ -467,8 +475,8 @@ export async function updateUserProfileFields(
           usernameClaimToDelete = cleanPrevious;
         }
       }
+      sanitized.username = nextUsername;
     }
-    sanitized.username = nextUsername;
   }
 
   if (updates.bio !== undefined) sanitized.bio = sanitizeString(updates.bio, BLUEPRINT_LIMITS.BIO_MAX);
@@ -506,13 +514,18 @@ export async function updateUserProfileFields(
         createdAt: serverTimestamp(),
       });
     }
-    if (usernameClaimToDelete) {
-      batch.delete(doc(db, 'usernames', usernameClaimToDelete));
-    }
     batch.update(doc(db, 'users', uid), sanitized);
     await batch.commit();
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
+  }
+
+  if (usernameClaimToDelete) {
+    try {
+      await deleteDoc(doc(db, 'usernames', usernameClaimToDelete));
+    } catch {
+      // Non-blocking cleanup if previous claim cannot be removed under active rules
+    }
   }
 }
 

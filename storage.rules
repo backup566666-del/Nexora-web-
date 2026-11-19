@@ -14,9 +14,10 @@ service firebase.storage {
     }
 
     function isAllowedMedia() {
-      return request.resource.size <= 25 * 1024 * 1024
+      return request.resource != null
+        && request.resource.size <= 25 * 1024 * 1024
         && (
-          request.resource.contentType.matches('image/(jpeg|png|webp|gif)') ||
+          request.resource.contentType.matches('image/(jpeg|jpg|png|webp|gif)') ||
           request.resource.contentType.matches('video/(mp4|webm|quicktime)') ||
           request.resource.contentType.matches('audio/(webm|mpeg|wav|ogg)') ||
           request.resource.contentType.matches('application/pdf') ||

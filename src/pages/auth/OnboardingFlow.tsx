@@ -116,19 +116,34 @@ export function OnboardingFlow() {
       if (!isValidUsername(cleanUsername)) {
         throw new Error('Username must be 3-30 characters using lowercase letters, numbers, or underscores.');
       }
-      await updateUserProfileFields(
-        profile.uid,
-        {
-          avatarUrl,
-          username: cleanUsername,
-          bio,
-          interests,
-          coverUrl,
-          coverPositionY,
-          onboardingCompleted: true,
-        },
-        profile.username
-      );
+
+      const updates: Parameters<typeof updateUserProfileFields>[1] = {
+        onboardingCompleted: true,
+      };
+      if (avatarUrl && avatarUrl !== profile.avatarUrl) {
+        updates.avatarUrl = avatarUrl;
+      }
+      if (cleanUsername !== profile.username) {
+        updates.username = cleanUsername;
+      }
+      if (bio !== (profile.bio || '')) {
+        updates.bio = bio;
+      }
+      const existingInterests = profile.interests || [];
+      if (
+        interests.length !== existingInterests.length ||
+        interests.some((item, idx) => item !== existingInterests[idx])
+      ) {
+        updates.interests = interests;
+      }
+      if (coverUrl && coverUrl !== profile.coverUrl) {
+        updates.coverUrl = coverUrl;
+      }
+      if (coverPositionY !== (profile.coverPositionY ?? 50)) {
+        updates.coverPositionY = coverPositionY;
+      }
+
+      await updateUserProfileFields(profile.uid, updates, profile.username);
       await refreshUserAndProfile();
     } catch (err) {
       setError(extractReadableErrorMessage(err, 'Could not complete onboarding.'));

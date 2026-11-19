@@ -1,5 +1,6 @@
 import { getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage';
 import { storage } from '../firebase/config';
+import { formatStorageErrorMessage } from '../firebase/errorHandler';
 
 if (typeof storage === 'object' && storage !== null) {
   storage.maxUploadRetryTime = 3500;
@@ -13,6 +14,7 @@ export interface UploadedMediaResult {
   category: MediaCategory;
   fileName: string;
   storageBacked: boolean;
+  storageDiagnostic?: string;
 }
 
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
@@ -171,13 +173,20 @@ export async function encodeRestrictedIdentityDocument(
   return { dataUrl, fileName: safeName };
 }
 
+interface StorageAttemptResult {
+  url: string | null;
+  diagnostic?: string;
+}
+
+let lastStorageDiagnostic: string | undefined;
+
 async function tryFirebaseStorageUpload(
   storagePath: string,
   file: Blob,
   contentType: string
-): Promise<string | null> {
+): Promise<StorageAttemptResult> {
   if (Date.now() < storageProbeBlockedUntil) {
-    return null;
+    return { url: null, diagnostic: lastStorageDiagnostic };
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -212,11 +221,19 @@ async function tryFirebaseStorageUpload(
     });
     const result = await Promise.race([uploadPromise, timeoutPromise]);
     if (result === 'TIMEOUT') {
+      const diagnostic = formatStorageErrorMessage(
+        { code: 'storage/retry-limit-exceeded', message: 'Upload timed out after 4000ms.' },
+        storagePath
+      );
+      lastStorageDiagnostic = diagnostic;
       storageProbeBlockedUntil = Date.now() + STORAGE_PROBE_BACKOFF_MS;
-      return null;
+      console.warn('[Firebase Storage fallback]', diagnostic);
+      return { url: null, diagnostic };
     }
-    return result;
+    lastStorageDiagnostic = undefined;
+    return { url: result };
   } catch (err) {
+    const diagnostic = formatStorageErrorMessage(err, storagePath);
     const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
     const code = (err as { code?: string })?.code ?? '';
     if (
@@ -229,9 +246,11 @@ async function tryFirebaseStorageUpload(
       msg.includes('not found') ||
       msg.includes('cors')
     ) {
+      lastStorageDiagnostic = diagnostic;
       storageProbeBlockedUntil = Date.now() + STORAGE_PROBE_BACKOFF_MS;
     }
-    return null;
+    console.warn('[Firebase Storage fallback]', diagnostic);
+    return { url: null, diagnostic };
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -246,10 +265,10 @@ export async function uploadMediaAsset(
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 64);
   const storagePath = `${folderPath}/${Date.now()}_${safeName}`;
 
-  const remoteUrl = await tryFirebaseStorageUpload(storagePath, file, file.type);
-  if (remoteUrl) {
+  const storageAttempt = await tryFirebaseStorageUpload(storagePath, file, file.type);
+  if (storageAttempt.url) {
     return {
-      url: remoteUrl,
+      url: storageAttempt.url,
       category,
       fileName: safeName,
       storageBacked: true,
@@ -270,6 +289,7 @@ export async function uploadMediaAsset(
       category,
       fileName: safeName,
       storageBacked: false,
+      storageDiagnostic: storageAttempt.diagnostic,
     };
   }
 
@@ -280,11 +300,13 @@ export async function uploadMediaAsset(
       category,
       fileName: safeName,
       storageBacked: false,
+      storageDiagnostic: storageAttempt.diagnostic,
     };
   }
 
   throw new Error(
-    'Large video/audio uploads require Firebase Storage to be enabled and CORS-configured in your Firebase Console.'
+    storageAttempt.diagnostic ||
+      `Firebase Storage error at "${storagePath}": Large video/audio uploads require Firebase Storage to be enabled and CORS-configured in your Firebase Console.`
   );
 }
 
@@ -296,14 +318,14 @@ export async function uploadBlobAsset(
 ): Promise<UploadedMediaResult> {
   const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 64);
   const storagePath = `${folderPath}/${Date.now()}_${safeName}`;
-  const remoteUrl = await tryFirebaseStorageUpload(
+  const storageAttempt = await tryFirebaseStorageUpload(
     storagePath,
     blob,
     blob.type || 'application/octet-stream'
   );
-  if (remoteUrl) {
+  if (storageAttempt.url) {
     return {
-      url: remoteUrl,
+      url: storageAttempt.url,
       category,
       fileName: safeName,
       storageBacked: true,
@@ -323,6 +345,7 @@ export async function uploadBlobAsset(
       category,
       fileName: safeName,
       storageBacked: false,
+      storageDiagnostic: storageAttempt.diagnostic,
     };
   }
 
@@ -333,10 +356,12 @@ export async function uploadBlobAsset(
       category,
       fileName: safeName,
       storageBacked: false,
+      storageDiagnostic: storageAttempt.diagnostic,
     };
   }
 
   throw new Error(
-    'Recording exceeds 260 KB inline fallback limit. Enable Firebase Storage in your Firebase Console for multi-megabyte media.'
+    storageAttempt.diagnostic ||
+      `Firebase Storage error at "${storagePath}": Recording exceeds 260 KB inline fallback limit. Enable Firebase Storage in your Firebase Console for multi-megabyte media.`
   );
 }
