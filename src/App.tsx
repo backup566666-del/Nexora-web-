@@ -48,6 +48,7 @@ function NexoraAppContent() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [savedPostIds, setSavedPostIds] = useState<string[]>([]);
+  const [deepLinkHandled, setDeepLinkHandled] = useState(false);
 
   useEffect(() => {
     if (!authReady || !user || !user.emailVerified) return;
@@ -70,6 +71,23 @@ function NexoraAppContent() {
       u7();
     };
   }, [authReady, user?.uid, user?.emailVerified]);
+
+  useEffect(() => {
+    if (deepLinkHandled || !profile?.onboardingCompleted || users.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const sharedUsername = params.get('u')?.trim().toLowerCase();
+    if (!sharedUsername) {
+      setDeepLinkHandled(true);
+      return;
+    }
+    const matched = users.find((u) => u.username.toLowerCase() === sharedUsername);
+    if (matched) {
+      setTargetProfileUid(matched.uid === profile.uid ? null : matched.uid);
+      setActiveSection('profile');
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    setDeepLinkHandled(true);
+  }, [deepLinkHandled, profile?.onboardingCompleted, profile?.uid, users]);
 
   if (loading) {
     return <LoadingScreen />;
