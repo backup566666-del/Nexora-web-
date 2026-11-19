@@ -8,7 +8,6 @@ import {
   getDocs,
   limit,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -79,11 +78,27 @@ export async function recordAuditLog(params: {
 }
 
 export function subscribeAuditLogs(callback: (logs: AuditLogEntry[]) => void): Unsubscribe {
-  const q = query(collection(db, 'audit_logs'), orderBy('createdAt', 'desc'), limit(120));
+  const q = query(
+    collection(db, 'audit_logs'),
+    where('category', 'in', [
+      'admin',
+      'community',
+      'verification',
+      'identity',
+      'platform',
+      'moderation',
+      'notification',
+    ]),
+    limit(120)
+  );
   return onSnapshot(
     q,
     (snap) =>
-      callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<AuditLogEntry, 'id'>) }))),
+      callback(
+        snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as Omit<AuditLogEntry, 'id'>) }))
+          .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
+      ),
     (err) => handleFirestoreError(err, OperationType.LIST, 'audit_logs')
   );
 }
