@@ -25,6 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import { ResilientImage } from '../../components/common/ResilientImage';
+import { VerifiedBadge } from '../../components/common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
 import {
   createGroupConversation,
@@ -63,7 +64,7 @@ interface CallLogEntry {
 const QUICK_EMOJIS = ['💜', '🔥', '👏', '😂', '😮', '🙌', '✨', '👍'];
 
 export function ChatPage({ users, stories, initialConvId }: ChatPageProps) {
-  const { profile } = useAuth();
+  const { profile, getBadgeVariant } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConvId, setSelectedConvId] = useState<string | null>(initialConvId || null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -169,6 +170,14 @@ export function ChatPage({ users, stories, initialConvId }: ChatPageProps) {
     if (c.isGroup) return false;
     const otherId = c.participantIds.find((id) => id !== profile.uid);
     return users.find((u) => u.uid === otherId)?.isOnline ?? false;
+  };
+
+  const getOtherBadge = (c: Conversation) => {
+    if (c.isGroup) return null;
+    const otherId = c.participantIds.find((id) => id !== profile.uid);
+    if (!otherId) return null;
+    const partner = users.find((u) => u.uid === otherId);
+    return getBadgeVariant(otherId, partner?.verified);
   };
 
   const isConversationUnread = (c: Conversation) => {
@@ -580,8 +589,9 @@ export function ChatPage({ users, stories, initialConvId }: ChatPageProps) {
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-white truncate">
-                        {getConvTitle(c)}
+                      <p className="text-sm font-semibold text-white truncate inline-flex items-center gap-1.5">
+                        <span className="truncate">{getConvTitle(c)}</span>
+                        {getOtherBadge(c) && <VerifiedBadge size={13} variant={getOtherBadge(c)} />}
                       </p>
                       <span className="text-[11px] font-mono-tabular text-[#64748B] shrink-0">
                         {formatRelativeTime(c.updatedAt)}
@@ -633,8 +643,11 @@ export function ChatPage({ users, stories, initialConvId }: ChatPageProps) {
                   )}
                 </div>
                 <div className="min-w-0">
-                  <h2 className="font-display text-base font-semibold text-white truncate">
-                    {getConvTitle(activeConv)}
+                  <h2 className="font-display text-base font-semibold text-white truncate inline-flex items-center gap-1.5">
+                    <span className="truncate">{getConvTitle(activeConv)}</span>
+                    {getOtherBadge(activeConv) && (
+                      <VerifiedBadge size={15} variant={getOtherBadge(activeConv)} />
+                    )}
                   </h2>
                   <p className="text-xs text-[#94A3B8]">
                     {activeTypingUsers.length > 0 ? (

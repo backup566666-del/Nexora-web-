@@ -28,7 +28,7 @@ const STORY_GRADIENTS = [
 ];
 
 export function StoriesBar({ stories, users, onOpenChatThread }: StoriesBarProps) {
-  const { profile } = useAuth();
+  const { profile, getBadgeVariant } = useAuth();
   const [showCreate, setShowCreate] = useState(false);
   const [activeStory, setActiveStory] = useState<Story | null>(null);
   const [viewers, setViewers] = useState<StoryView[]>([]);
@@ -364,7 +364,12 @@ export function StoriesBar({ stories, users, onOpenChatThread }: StoriesBarProps
                 <div>
                   <p className="text-xs font-semibold text-white inline-flex items-center gap-1">
                     {activeStory.authorName}
-                    {activeStory.authorVerified && <VerifiedBadge size={12} />}
+                    {getBadgeVariant(activeStory.authorId, activeStory.authorVerified) && (
+                      <VerifiedBadge
+                        size={12}
+                        variant={getBadgeVariant(activeStory.authorId, activeStory.authorVerified)}
+                      />
+                    )}
                   </p>
                   <p className="text-[11px] text-white/70">
                     {formatRelativeTime(activeStory.createdAt)} · {activeStory.privacy}

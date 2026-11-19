@@ -16,6 +16,9 @@
         "location": { "type": "string", "maxLength": 100 },
         "interests": { "type": "array" },
         "verified": { "type": "boolean" },
+        "suspended": { "type": "boolean" },
+        "suspendedReason": { "type": "string", "maxLength": 300 },
+        "suspendedAt": { "type": "string", "format": "date-time" },
         "onboardingCompleted": { "type": "boolean" },
         "followersCount": { "type": "number" },
         "followingCount": { "type": "number" },
@@ -50,6 +53,137 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "createdAt"]
+    },
+    "PlatformRole": {
+      "title": "PlatformRole",
+      "description": "Trusted private RBAC assignment for Nexora owner and internal administrative staff.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 254 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "username": { "type": "string", "minLength": 3, "maxLength": 30 },
+        "role": { "type": "string", "enum": ["owner", "administrator", "moderator", "verification_reviewer", "support"] },
+        "permissions": { "type": "array" },
+        "active": { "type": "boolean" },
+        "ownerBadge": { "type": "boolean" },
+        "specialBadge": { "type": "string", "maxLength": 40 },
+        "assignedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "username", "role", "permissions", "active", "ownerBadge", "assignedBy", "createdAt", "updatedAt"]
+    },
+    "VerifiedBadgeRecord": {
+      "title": "VerifiedBadgeRecord",
+      "description": "Public zero-PII trusted badge registry controlled exclusively by platform administration.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "badgeType": { "type": "string", "enum": ["owner", "verified", "partner", "creator", "founder_circle"] },
+        "label": { "type": "string", "maxLength": 60 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "badgeType", "label", "updatedBy", "updatedAt"]
+    },
+    "VerificationRequest": {
+      "title": "VerificationRequest",
+      "description": "Public verification and special platform badge application.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "username": { "type": "string", "minLength": 3, "maxLength": 30 },
+        "avatarUrl": { "type": "string", "maxLength": 200000 },
+        "requestedBadge": { "type": "string", "enum": ["verified", "creator", "partner"] },
+        "category": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "rationale": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "referenceLink": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewerUid": { "type": "string", "maxLength": 128 },
+        "reviewerNote": { "type": "string", "maxLength": 300 },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "username", "requestedBadge", "category", "rationale", "status", "createdAt", "updatedAt"]
+    },
+    "IdentityVerification": {
+      "title": "IdentityVerification",
+      "description": "Confidential identity verification application restricted strictly to applicant and authorized reviewers.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "username": { "type": "string", "minLength": 3, "maxLength": 30 },
+        "legalFullName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "documentType": { "type": "string", "enum": ["passport", "national_id", "drivers_license"] },
+        "documentCountry": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "documentPreviewUrl": { "type": "string", "minLength": 1, "maxLength": 450000 },
+        "documentFileName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewerUid": { "type": "string", "maxLength": 128 },
+        "reviewerNote": { "type": "string", "maxLength": 300 },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "username", "legalFullName", "documentType", "documentCountry", "documentPreviewUrl", "documentFileName", "status", "createdAt", "updatedAt"]
+    },
+    "PlatformConfig": {
+      "title": "PlatformConfig",
+      "description": "Global Nexora platform branding, feature toggles, maintenance mode, and policy settings.",
+      "type": "object",
+      "properties": {
+        "platformName": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "slogan": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 400 },
+        "logoMode": { "type": "string", "enum": ["standard", "minimal", "monochrome"] },
+        "supportEmail": { "type": "string", "maxLength": 120 },
+        "maintenanceMode": { "type": "boolean" },
+        "maintenanceMessage": { "type": "string", "maxLength": 300 },
+        "features": { "type": "object" },
+        "contentPolicy": { "type": "string", "maxLength": 2000 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["platformName", "slogan", "description", "logoMode", "supportEmail", "maintenanceMode", "maintenanceMessage", "features", "contentPolicy", "updatedBy", "updatedAt"]
+    },
+    "PlatformAnnouncement": {
+      "title": "PlatformAnnouncement",
+      "description": "Official platform-wide announcement or security notice.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "message": { "type": "string", "minLength": 2, "maxLength": 500 },
+        "severity": { "type": "string", "enum": ["info", "warning", "security"] },
+        "active": { "type": "boolean" },
+        "authorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "message", "severity", "active", "authorUid", "authorName", "createdAt", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable administrative audit record.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "actorRole": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "action": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "category": { "type": "string", "enum": ["admin", "community", "verification", "identity", "platform", "moderation", "notification"] },
+        "targetType": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "targetLabel": { "type": "string", "maxLength": 120 },
+        "result": { "type": "string", "enum": ["success", "rejected"] },
+        "details": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorUid", "actorName", "actorRole", "action", "category", "targetType", "targetId", "result", "createdAt"]
     },
     "Post": {
       "title": "Post",
@@ -220,6 +354,8 @@
         "ownerName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "ownerUsername": { "type": "string", "minLength": 3, "maxLength": 30 },
         "verified": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["active", "pending", "suspended"] },
+        "suspensionReason": { "type": "string", "maxLength": 300 },
         "membersCount": { "type": "number" },
         "isPrivate": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -311,14 +447,14 @@
     },
     "Notification": {
       "title": "Notification",
-      "description": "User activity notification.",
+      "description": "User activity or administrative notification.",
       "type": "object",
       "properties": {
         "recipientId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "actorId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "actorName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "actorAvatar": { "type": "string", "maxLength": 200000 },
-        "type": { "type": "string", "enum": ["like", "comment", "follow", "repost", "space_invite", "message"] },
+        "type": { "type": "string", "enum": ["like", "comment", "follow", "repost", "space_invite", "message", "announcement", "security_alert", "admin_notice"] },
         "targetId": { "type": "string", "maxLength": 128 },
         "preview": { "type": "string", "maxLength": 200 },
         "read": { "type": "boolean" },
@@ -335,6 +471,10 @@
         "targetType": { "type": "string", "enum": ["post", "user", "space", "vibe"] },
         "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "reason": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "status": { "type": "string", "enum": ["open", "resolved", "dismissed"] },
+        "resolutionNote": { "type": "string", "maxLength": 300 },
+        "resolvedBy": { "type": "string", "maxLength": 128 },
+        "resolvedAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["reporterId", "targetType", "targetId", "reason", "createdAt"]
@@ -364,6 +504,34 @@
     "/usernames/{username}": {
       "schema": { "$ref": "#/entities/UsernameClaim" },
       "description": "Username uniqueness registry."
+    },
+    "/platform_roles/{userId}": {
+      "schema": { "$ref": "#/entities/PlatformRole" },
+      "description": "Private RBAC registry for Nexora owner and authorized administrators."
+    },
+    "/verified_badges/{userId}": {
+      "schema": { "$ref": "#/entities/VerifiedBadgeRecord" },
+      "description": "Zero-PII trusted badge registry."
+    },
+    "/verification_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/VerificationRequest" },
+      "description": "Verification badge requests."
+    },
+    "/identity_verifications/{requestId}": {
+      "schema": { "$ref": "#/entities/IdentityVerification" },
+      "description": "Restricted identity verification documents and reviews."
+    },
+    "/platform_config/{configId}": {
+      "schema": { "$ref": "#/entities/PlatformConfig" },
+      "description": "Platform-wide branding, feature switches, maintenance mode, and policy."
+    },
+    "/platform_announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/PlatformAnnouncement" },
+      "description": "Platform-wide announcements and security alerts."
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable administrative audit logs."
     },
     "/posts/{postId}": {
       "schema": { "$ref": "#/entities/Post" },

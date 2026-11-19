@@ -34,7 +34,8 @@ interface PostCardProps {
 }
 
 export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
-  const { profile } = useAuth();
+  const { profile, getBadgeVariant } = useAuth();
+  const postBadge = getBadgeVariant(post.authorId, post.authorVerified);
   const [liked, setLiked] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [comments, setComments] = useState<PostComment[]>([]);
@@ -128,7 +129,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
               >
                 {post.authorName}
               </button>
-              {post.authorVerified && <VerifiedBadge size={14} />}
+              {postBadge && <VerifiedBadge size={14} variant={postBadge} />}
               <span className="text-xs text-[#64748B] truncate">@{post.authorUsername}</span>
               <span aria-hidden="true" className="text-xs text-[#64748B]">·</span>
               <span className="text-xs text-[#64748B]">{formatRelativeTime(post.createdAt)}</span>
@@ -360,7 +361,15 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
                         alt={c.authorName}
                         className="w-5 h-5 rounded-full object-cover"
                       />
-                      <span className="text-xs font-semibold text-white">{c.authorName}</span>
+                      <span className="text-xs font-semibold text-white inline-flex items-center gap-1">
+                        {c.authorName}
+                        {getBadgeVariant(c.authorId, c.authorVerified) && (
+                          <VerifiedBadge
+                            size={12}
+                            variant={getBadgeVariant(c.authorId, c.authorVerified)}
+                          />
+                        )}
+                      </span>
                       <span className="text-[11px] text-[#64748B]">
                         {formatRelativeTime(c.createdAt)}
                       </span>

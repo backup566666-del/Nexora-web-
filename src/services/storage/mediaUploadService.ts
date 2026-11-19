@@ -79,6 +79,36 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+/**
+ * Confidential identity verification documents are encoded directly as bounded
+ * inline Data URLs inside Firestore `/identity_verifications/{id}` so access
+ * is strictly enforced by Firestore RBAC security rules (`review_identity_docs` or `owner`)
+ * rather than unauthenticated public download URLs.
+ */
+export async function encodeRestrictedIdentityDocument(
+  file: File
+): Promise<{ dataUrl: string; fileName: string }> {
+  const category = validateMediaFile(file, ['image', 'document']);
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
+
+  if (category === 'image') {
+    const dataUrl = await compressImageToDataUrl(file, 1400, 0.82, 420_000);
+    if (dataUrl.length > 445_000) {
+      throw new Error('Identity document image is too complex. Please upload a clearer cropped photo.');
+    }
+    return { dataUrl, fileName: safeName };
+  }
+
+  if (file.size > 320_000) {
+    throw new Error('PDF/Text identity documents must be under 320 KB, or upload an image scan (JPG/PNG/WebP).');
+  }
+  const dataUrl = await blobToDataUrl(file);
+  if (dataUrl.length > 445_000) {
+    throw new Error('Encoded identity document exceeds the confidential 450 KB vault cap.');
+  }
+  return { dataUrl, fileName: safeName };
+}
+
 async function tryFirebaseStorageUpload(
   storagePath: string,
   file: Blob,

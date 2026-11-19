@@ -54,7 +54,11 @@ import {
   SpaceMember,
   UserProfile,
 } from '../../types/nexora';
-import { formatCompactCount, formatRelativeTime } from '../../utils/validation';
+import {
+  formatCompactCount,
+  formatRelativeTime,
+  hasAdminPermission,
+} from '../../utils/validation';
 
 interface SpacesPageProps {
   spaces: Space[];
@@ -85,7 +89,7 @@ export function SpacesPage({
   initialSpaceId,
   onOpenProfile,
 }: SpacesPageProps) {
-  const { profile } = useAuth();
+  const { profile, myRole, platformConfig } = useAuth();
   const [sidebarTab, setSidebarTab] = useState<'discover' | 'mine' | 'invites' | 'joined' | 'create'>('discover');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showMoreCategories, setShowMoreCategories] = useState(false);
@@ -187,11 +191,15 @@ export function SpacesPage({
     }
   };
 
+  const canManageAllCommunities = hasAdminPermission(myRole, 'manage_communities');
+
   const handleCreateSpace = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setCreating(true);
     try {
+      const requiresApproval =
+        Boolean(platformConfig.features.communityApprovalRequired) && !canManageAllCommunities;
       const id = await createSpace({
         owner: profile,
         name,
@@ -199,6 +207,7 @@ export function SpacesPage({
         category,
         coverUrl,
         isPrivate,
+        initialStatus: requiresApproval ? 'pending' : 'active',
       });
       setName('');
       setDescription('');
@@ -212,6 +221,10 @@ export function SpacesPage({
   };
 
   const filteredSpaces = spaces.filter((s) => {
+    if (s.status === 'suspended' && !canManageAllCommunities) return false;
+    if (s.status === 'pending' && s.ownerId !== profile.uid && !canManageAllCommunities) {
+      return false;
+    }
     if (sidebarTab === 'mine' && s.ownerId !== profile.uid) return false;
     if (sidebarTab === 'joined' && !membershipsMap[s.id]) return false;
     if (selectedCategory !== 'All' && s.category !== selectedCategory) return false;
@@ -1092,6 +1105,16 @@ export function SpacesPage({
                             <h2 className="font-display text-xl lg:text-2xl font-bold text-white inline-flex items-center gap-2">
                               {space.name}
                               {space.verified && <VerifiedBadge size={17} />}
+                              {space.status === 'pending' && (
+                                <span className="px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-400/30 text-[10px] font-medium text-amber-300">
+                                  Pending Approval
+                                </span>
+                              )}
+                              {space.status === 'suspended' && (
+                                <span className="px-2 py-0.5 rounded-md bg-rose-500/20 border border-rose-400/30 text-[10px] font-medium text-rose-300">
+                                  Suspended
+                                </span>
+                              )}
                             </h2>
                             <p className="text-xs text-[#E2E8F0] line-clamp-2 leading-relaxed">
                               {space.description}

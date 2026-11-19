@@ -56,7 +56,13 @@ export function ProfilePage({
   onOpenChatThread,
   onOpenVibes,
 }: ProfilePageProps) {
-  const { user: firebaseUser, profile: currentUser, privateInfo, refreshUserAndProfile } = useAuth();
+  const {
+    user: firebaseUser,
+    profile: currentUser,
+    privateInfo,
+    getBadgeVariant,
+    refreshUserAndProfile,
+  } = useAuth();
   const [viewedProfile, setViewedProfile] = useState<UserProfile | null>(null);
   const [isFollowing, setIsFollowing] = useState(false);
   const [contentTab, setContentTab] = useState<'posts' | 'videos' | 'photos' | 'spaces' | 'saved'>('posts');
@@ -369,7 +375,12 @@ export function ProfilePage({
                   <h1 className="font-display text-2xl lg:text-3xl font-bold text-white tracking-tight">
                     {activeProfile.displayName}
                   </h1>
-                  {activeProfile.verified && <VerifiedBadge size={20} />}
+                  {getBadgeVariant(activeProfile.uid, activeProfile.verified) && (
+                    <VerifiedBadge
+                      size={20}
+                      variant={getBadgeVariant(activeProfile.uid, activeProfile.verified)}
+                    />
+                  )}
                 </div>
 
                 <p className="text-sm font-medium text-[#A855F7]">@{activeProfile.username}</p>

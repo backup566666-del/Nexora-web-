@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { Ban, LogOut, Wrench } from 'lucide-react';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { LoadingScreen } from './components/common/LoadingScreen';
+import { NexoraLogo } from './components/branding/NexoraLogo';
 import { DashboardShell } from './components/navigation/DashboardShell';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { AuthView } from './pages/auth/AuthView';
@@ -13,6 +15,7 @@ import { ProfilePage } from './pages/profile/ProfilePage';
 import { SettingsPage } from './pages/settings/SettingsPage';
 import { SpacesPage } from './pages/spaces/SpacesPage';
 import { VibesPage } from './pages/vibes/VibesPage';
+import { logoutUser } from './services/auth/authService';
 import {
   subscribeDirectoryUsers,
   subscribeFeedPosts,
@@ -33,9 +36,10 @@ import {
 } from './types/nexora';
 
 function NexoraAppContent() {
-  const { user, profile, loading, authReady } = useAuth();
+  const { user, profile, myRole, platformConfig, loading, authReady } = useAuth();
   const [authScreenMode, setAuthScreenMode] = useState<'landing' | 'login' | 'register'>('landing');
   const [activeSection, setActiveSection] = useState<NavSection>('home');
+  const [openAdminSettings, setOpenAdminSettings] = useState(false);
   const [targetProfileUid, setTargetProfileUid] = useState<string | null>(null);
   const [targetSpaceId, setTargetSpaceId] = useState<string | null>(null);
   const [targetConvId, setTargetConvId] = useState<string | null>(null);
@@ -89,6 +93,20 @@ function NexoraAppContent() {
     setDeepLinkHandled(true);
   }, [deepLinkHandled, profile?.onboardingCompleted, profile?.uid, users]);
 
+  const isActiveStaff = Boolean(myRole && myRole.active);
+
+  // Redirect non-staff cleanly away from disabled sections
+  useEffect(() => {
+    if (isActiveStaff) return;
+    if (activeSection === 'vibes' && !platformConfig.features.vibesEnabled) {
+      setActiveSection('home');
+    } else if (activeSection === 'spaces' && !platformConfig.features.spacesEnabled) {
+      setActiveSection('home');
+    } else if (activeSection === 'chat' && !platformConfig.features.chatEnabled) {
+      setActiveSection('home');
+    }
+  }, [activeSection, isActiveStaff, platformConfig.features]);
+
   if (loading) {
     return <LoadingScreen />;
   }
@@ -121,11 +139,87 @@ function NexoraAppContent() {
     return <LoadingScreen label="Synchronizing your Nexora profile" />;
   }
 
+  // Suspended account gate (permanent Owner cannot be suspended)
+  if (profile.suspended && myRole?.role !== 'owner') {
+    return (
+      <div className="min-h-screen bg-[#06060A] text-white flex items-center justify-center p-6">
+        <div className="max-w-md w-full rounded-2xl bg-[#0D0B16] border border-rose-500/30 p-7 space-y-5 text-center">
+          <div className="flex justify-center">
+            <NexoraLogo />
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto text-rose-400">
+            <Ban size={22} />
+          </div>
+          <div className="space-y-2">
+            <h1 className="font-display text-xl font-bold text-white">Account Suspended</h1>
+            <p className="text-xs text-[#CBD5E1] leading-relaxed">
+              Your Nexora account (@{profile.username}) has been suspended by platform moderation.
+            </p>
+            {profile.suspendedReason && (
+              <p className="text-xs text-rose-200 bg-rose-500/10 border border-rose-500/20 rounded-xl p-3">
+                Reason: {profile.suspendedReason}
+              </p>
+            )}
+            {platformConfig.supportEmail && (
+              <p className="text-[11px] text-[#94A3B8]">
+                Appeals & support: {platformConfig.supportEmail}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => void logoutUser(profile.uid)}
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-semibold text-white"
+          >
+            <LogOut size={14} /> Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Global Maintenance Mode gate (exempts authorized active staff)
+  if (platformConfig.maintenanceMode && !isActiveStaff) {
+    return (
+      <div className="min-h-screen bg-[#06060A] text-white flex items-center justify-center p-6">
+        <div className="max-w-lg w-full rounded-2xl bg-[#0D0B16] border border-amber-500/30 p-8 space-y-5 text-center">
+          <div className="flex justify-center">
+            <NexoraLogo />
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-300">
+            <Wrench size={22} />
+          </div>
+          <div className="space-y-2">
+            <h1 className="font-display text-xl font-bold text-white">
+              Scheduled Maintenance
+            </h1>
+            <p className="text-sm text-[#CBD5E1] leading-relaxed">
+              {platformConfig.maintenanceMessage}
+            </p>
+            {platformConfig.supportEmail && (
+              <p className="text-xs text-[#94A3B8]">
+                Contact: {platformConfig.supportEmail}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => void logoutUser(profile.uid)}
+            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-semibold text-white"
+          >
+            <LogOut size={14} /> Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!profile.onboardingCompleted) {
     return <OnboardingFlow />;
   }
 
   const handleNavigate = (section: NavSection, targetId?: string) => {
+    setOpenAdminSettings(false);
     setActiveSection(section);
     if (section === 'profile') {
       setTargetProfileUid(targetId || null);
@@ -155,6 +249,10 @@ function NexoraAppContent() {
       activeSection={activeSection}
       onNavigate={handleNavigate}
       onOpenUserProfile={handleOpenUserProfile}
+      onOpenAdminSettings={() => {
+        setOpenAdminSettings(true);
+        setActiveSection('settings');
+      }}
       notifications={notifications}
       spaces={spaces}
       posts={posts}
@@ -220,7 +318,15 @@ function NexoraAppContent() {
         />
       )}
 
-      {activeSection === 'settings' && <SettingsPage users={users} />}
+      {activeSection === 'settings' && (
+        <SettingsPage
+          users={users}
+          posts={posts}
+          vibes={vibes}
+          spaces={spaces}
+          initialAdminOpen={openAdminSettings}
+        />
+      )}
     </DashboardShell>
   );
 }

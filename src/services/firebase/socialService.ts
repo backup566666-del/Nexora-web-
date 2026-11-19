@@ -788,6 +788,7 @@ export async function createSpace(params: {
   coverUrl: string;
   coverPositionY?: number;
   isPrivate: boolean;
+  initialStatus?: 'active' | 'pending';
 }): Promise<string> {
   const cleanName = sanitizeString(params.name, BLUEPRINT_LIMITS.SPACE_NAME_MAX);
   const slug = cleanName
@@ -809,6 +810,7 @@ export async function createSpace(params: {
       ownerName: sanitizeString(params.owner.displayName, 80),
       ownerUsername: params.owner.username,
       verified: false,
+      status: params.initialStatus || 'active',
       membersCount: 1,
       isPrivate: params.isPrivate,
       createdAt: serverTimestamp(),
@@ -1338,6 +1340,7 @@ export async function submitModerationReport(params: {
       targetType: params.targetType,
       targetId: sanitizeString(params.targetId, 128),
       reason: sanitizeString(params.reason, 300),
+      status: 'open',
       createdAt: serverTimestamp(),
     });
   } catch (err) {

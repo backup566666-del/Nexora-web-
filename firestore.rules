@@ -36,8 +36,47 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    // Cryptographic Firebase Auth email anchor for the permanent Nexora Founder/Owner
+    function isFounderOwner() {
+      return isVerified() && request.auth.token.email == 'backup566666@gmail.com';
+    }
+
+    function hasRoleDoc() {
+      return exists(/databases/$(database)/documents/platform_roles/$(request.auth.uid));
+    }
+
+    function roleDoc() {
+      return get(/databases/$(database)/documents/platform_roles/$(request.auth.uid)).data;
+    }
+
+    function isActiveStaff() {
+      return isVerified() && hasRoleDoc() && roleDoc().active == true;
+    }
+
+    function isPlatformOwner() {
+      return isFounderOwner() || (isActiveStaff() && roleDoc().role == 'owner');
+    }
+
+    function hasPerm(perm) {
+      return isPlatformOwner() || (isActiveStaff() && roleDoc().role in ['administrator', 'moderator', 'verification_reviewer', 'support'] && perm in roleDoc().permissions);
+    }
+
+    function isTargetPlatformOwner(uid) {
+      return exists(/databases/$(database)/documents/platform_roles/$(uid))
+        && get(/databases/$(database)/documents/platform_roles/$(uid)).data.role == 'owner';
+    }
+
+    function isNotSuspended() {
+      return isFounderOwner()
+        || !exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        || !('suspended' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+        || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.suspended != true;
+    }
+
     function isAdmin() {
-      return isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+      return isPlatformOwner()
+        || (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)))
+        || (isActiveStaff() && roleDoc().role in ['owner', 'administrator', 'moderator']);
     }
 
     function isOptionalString(data, field, maxLen) {
@@ -58,6 +97,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'uid', 'displayName', 'username', 'bio', 'avatarUrl', 'coverUrl',
           'coverPositionY', 'website', 'location', 'interests', 'verified',
+          'suspended', 'suspendedReason', 'suspendedAt',
           'onboardingCompleted', 'followersCount', 'followingCount', 'postsCount',
           'likesCount', 'isOnline', 'lastActiveAt', 'createdAt', 'updatedAt'
         ])
@@ -72,6 +112,9 @@ service cloud.firestore {
         && isOptionalString(data, 'location', 100)
         && (!('interests' in data) || isBoundedStringList(data.interests, 10, 40))
         && data.verified is bool
+        && (!('suspended' in data) || data.suspended is bool)
+        && isOptionalString(data, 'suspendedReason', 300)
+        && (!('suspendedAt' in data) || data.suspendedAt is timestamp)
         && data.onboardingCompleted is bool
         && data.followersCount is int && data.followersCount >= 0
         && data.followingCount is int && data.followingCount >= 0
@@ -103,6 +146,156 @@ service cloud.firestore {
       return data.keys().hasAll(['uid', 'createdAt'])
         && data.keys().hasOnly(['uid', 'createdAt'])
         && isValidId(data.uid)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPlatformRole(data) {
+      return data.keys().hasAll([
+          'uid', 'email', 'displayName', 'username', 'role',
+          'permissions', 'active', 'ownerBadge', 'assignedBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'username', 'role',
+          'permissions', 'active', 'ownerBadge', 'specialBadge', 'assignedBy', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.username is string && data.username.size() >= 3 && data.username.size() <= 30
+        && data.role in ['owner', 'administrator', 'moderator', 'verification_reviewer', 'support']
+        && isBoundedStringList(data.permissions, 12, 40)
+        && data.active is bool
+        && data.ownerBadge is bool
+        && isOptionalString(data, 'specialBadge', 40)
+        && isValidId(data.assignedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVerifiedBadgeRecord(data) {
+      return data.keys().hasAll(['uid', 'badgeType', 'label', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'badgeType', 'label', 'updatedBy', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.badgeType in ['owner', 'verified', 'partner', 'creator', 'founder_circle']
+        && data.label is string && data.label.size() >= 1 && data.label.size() <= 60
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVerificationRequest(data) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'username', 'requestedBadge',
+          'category', 'rationale', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'username', 'avatarUrl', 'requestedBadge',
+          'category', 'rationale', 'referenceLink', 'status',
+          'reviewerUid', 'reviewerNote', 'reviewedAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.username is string && data.username.size() >= 3 && data.username.size() <= 30
+        && isOptionalString(data, 'avatarUrl', 200000)
+        && data.requestedBadge in ['verified', 'creator', 'partner']
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 60
+        && data.rationale is string && data.rationale.size() >= 1 && data.rationale.size() <= 600
+        && isOptionalString(data, 'referenceLink', 200)
+        && data.status in ['pending', 'approved', 'rejected']
+        && isOptionalString(data, 'reviewerUid', 128)
+        && isOptionalString(data, 'reviewerNote', 300)
+        && (!('reviewedAt' in data) || data.reviewedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidIdentityVerification(data) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'username', 'legalFullName', 'documentType',
+          'documentCountry', 'documentPreviewUrl', 'documentFileName', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'username', 'legalFullName', 'documentType',
+          'documentCountry', 'documentPreviewUrl', 'documentFileName', 'status',
+          'reviewerUid', 'reviewerNote', 'reviewedAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.username is string && data.username.size() >= 3 && data.username.size() <= 30
+        && data.legalFullName is string && data.legalFullName.size() >= 2 && data.legalFullName.size() <= 100
+        && data.documentType in ['passport', 'national_id', 'drivers_license']
+        && data.documentCountry is string && data.documentCountry.size() >= 2 && data.documentCountry.size() <= 80
+        && data.documentPreviewUrl is string && data.documentPreviewUrl.size() >= 1 && data.documentPreviewUrl.size() <= 450000
+        && data.documentFileName is string && data.documentFileName.size() >= 1 && data.documentFileName.size() <= 120
+        && data.status in ['pending', 'approved', 'rejected']
+        && isOptionalString(data, 'reviewerUid', 128)
+        && isOptionalString(data, 'reviewerNote', 300)
+        && (!('reviewedAt' in data) || data.reviewedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlatformConfig(data) {
+      return data.keys().hasAll([
+          'platformName', 'slogan', 'description', 'logoMode', 'supportEmail',
+          'maintenanceMode', 'maintenanceMessage', 'features', 'contentPolicy', 'updatedBy', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'platformName', 'slogan', 'description', 'logoMode', 'supportEmail',
+          'maintenanceMode', 'maintenanceMessage', 'features', 'contentPolicy', 'updatedBy', 'updatedAt'
+        ])
+        && data.platformName is string && data.platformName.size() >= 2 && data.platformName.size() <= 60
+        && data.slogan is string && data.slogan.size() >= 2 && data.slogan.size() <= 120
+        && data.description is string && data.description.size() <= 400
+        && data.logoMode in ['standard', 'minimal', 'monochrome']
+        && data.supportEmail is string && data.supportEmail.size() <= 120
+        && data.maintenanceMode is bool
+        && data.maintenanceMessage is string && data.maintenanceMessage.size() <= 300
+        && data.features is map
+        && data.features.keys().hasAll([
+          'registrationOpen', 'communityApprovalRequired', 'vibesEnabled',
+          'spacesEnabled', 'chatEnabled', 'storiesEnabled'
+        ])
+        && data.features.keys().hasOnly([
+          'registrationOpen', 'communityApprovalRequired', 'vibesEnabled',
+          'spacesEnabled', 'chatEnabled', 'storiesEnabled'
+        ])
+        && data.features.registrationOpen is bool
+        && data.features.communityApprovalRequired is bool
+        && data.features.vibesEnabled is bool
+        && data.features.spacesEnabled is bool
+        && data.features.chatEnabled is bool
+        && data.features.storiesEnabled is bool
+        && data.contentPolicy is string && data.contentPolicy.size() <= 2000
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlatformAnnouncement(data) {
+      return data.keys().hasAll(['title', 'message', 'severity', 'active', 'authorUid', 'authorName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['title', 'message', 'severity', 'active', 'authorUid', 'authorName', 'createdAt', 'updatedAt'])
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 100
+        && data.message is string && data.message.size() >= 2 && data.message.size() <= 500
+        && data.severity in ['info', 'warning', 'security']
+        && data.active is bool
+        && isValidId(data.authorUid)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['actorUid', 'actorName', 'actorRole', 'action', 'category', 'targetType', 'targetId', 'result', 'createdAt'])
+        && data.keys().hasOnly(['actorUid', 'actorName', 'actorRole', 'action', 'category', 'targetType', 'targetId', 'targetLabel', 'result', 'details', 'createdAt'])
+        && isValidId(data.actorUid)
+        && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80
+        && data.actorRole is string && data.actorRole.size() >= 1 && data.actorRole.size() <= 40
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 100
+        && data.category in ['admin', 'community', 'verification', 'identity', 'platform', 'moderation', 'notification']
+        && data.targetType is string && data.targetType.size() >= 1 && data.targetType.size() <= 40
+        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
+        && isOptionalString(data, 'targetLabel', 120)
+        && data.result in ['success', 'rejected']
+        && isOptionalString(data, 'details', 400)
         && data.createdAt is timestamp;
     }
 
@@ -260,8 +453,8 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'name', 'slug', 'description', 'category', 'coverUrl', 'coverPositionY',
-          'ownerId', 'ownerName', 'ownerUsername', 'verified', 'membersCount',
-          'isPrivate', 'createdAt', 'updatedAt'
+          'ownerId', 'ownerName', 'ownerUsername', 'verified', 'status', 'suspensionReason',
+          'membersCount', 'isPrivate', 'createdAt', 'updatedAt'
         ])
         && data.name is string && data.name.size() >= 2 && data.name.size() <= 60
         && data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 60
@@ -273,6 +466,8 @@ service cloud.firestore {
         && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80
         && data.ownerUsername is string && data.ownerUsername.size() >= 3 && data.ownerUsername.size() <= 30
         && data.verified is bool
+        && (!('status' in data) || data.status in ['active', 'pending', 'suspended'])
+        && isOptionalString(data, 'suspensionReason', 300)
         && data.membersCount is int && data.membersCount >= 0
         && data.isPrivate is bool
         && data.createdAt is timestamp
@@ -356,7 +551,7 @@ service cloud.firestore {
         && isValidId(data.actorId)
         && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80
         && isOptionalString(data, 'actorAvatar', 200000)
-        && data.type in ['like', 'comment', 'follow', 'repost', 'space_invite', 'message']
+        && data.type in ['like', 'comment', 'follow', 'repost', 'space_invite', 'message', 'announcement', 'security_alert', 'admin_notice']
         && isOptionalString(data, 'targetId', 128)
         && isOptionalString(data, 'preview', 200)
         && data.read is bool
@@ -365,11 +560,15 @@ service cloud.firestore {
 
     function isValidReport(data) {
       return data.keys().hasAll(['reporterId', 'targetType', 'targetId', 'reason', 'createdAt'])
-        && data.keys().hasOnly(['reporterId', 'targetType', 'targetId', 'reason', 'createdAt'])
+        && data.keys().hasOnly(['reporterId', 'targetType', 'targetId', 'reason', 'status', 'resolutionNote', 'resolvedBy', 'resolvedAt', 'createdAt'])
         && isValidId(data.reporterId)
         && data.targetType in ['post', 'user', 'space', 'vibe']
         && isValidId(data.targetId)
         && data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 300
+        && (!('status' in data) || data.status in ['open', 'resolved', 'dismissed'])
+        && isOptionalString(data, 'resolutionNote', 300)
+        && isOptionalString(data, 'resolvedBy', 128)
+        && (!('resolvedAt' in data) || data.resolvedAt is timestamp)
         && data.createdAt is timestamp;
     }
 
@@ -379,16 +578,216 @@ service cloud.firestore {
       allow get: if isValidId(adminId) && isOwner(adminId);
     }
 
+    // Private RBAC Staff Registry
+    match /platform_roles/{userId} {
+      allow get: if isValidId(userId) && isVerified() && (
+        isOwner(userId) || isPlatformOwner() || hasPerm('manage_admins')
+      );
+      allow list: if isVerified() && (isPlatformOwner() || hasPerm('manage_admins'))
+        && existing().role in ['owner', 'administrator', 'moderator', 'verification_reviewer', 'support'];
+
+      allow create: if isValidId(userId)
+        && isVerified()
+        && isValidPlatformRole(incoming())
+        && incoming().uid == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (isFounderOwner() && isOwner(userId) && incoming().role == 'owner' && incoming().ownerBadge == true && incoming().active == true) ||
+          (isPlatformOwner() && incoming().role in ['administrator', 'moderator', 'verification_reviewer', 'support'] && incoming().ownerBadge == false) ||
+          (hasPerm('manage_admins') && incoming().role in ['moderator', 'verification_reviewer', 'support'] && incoming().ownerBadge == false)
+        );
+
+      allow update: if isValidId(userId)
+        && isVerified()
+        && isValidPlatformRole(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (isFounderOwner() && isOwner(userId) && incoming().role == 'owner' && incoming().ownerBadge == true && incoming().active == true) ||
+          (
+            existing().role != 'owner'
+            && incoming().ownerBadge == false
+            && (
+              (isPlatformOwner() && incoming().role in ['administrator', 'moderator', 'verification_reviewer', 'support']) ||
+              (hasPerm('manage_admins') && existing().role in ['moderator', 'verification_reviewer', 'support'] && incoming().role in ['moderator', 'verification_reviewer', 'support'])
+            )
+          )
+        );
+
+      allow delete: if isValidId(userId)
+        && isVerified()
+        && existing().role != 'owner'
+        && (
+          isPlatformOwner() ||
+          (hasPerm('manage_admins') && existing().role in ['moderator', 'verification_reviewer', 'support'])
+        );
+    }
+
+    // Public Zero-PII Trusted Badge Registry
+    match /verified_badges/{userId} {
+      allow get: if isValidId(userId);
+      allow list: if isSignedIn() && existing().badgeType in ['owner', 'verified', 'partner', 'creator', 'founder_circle'];
+
+      allow create, update: if isValidId(userId)
+        && isVerified()
+        && isValidVerifiedBadgeRecord(incoming())
+        && incoming().uid == userId
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time
+        && (
+          (isFounderOwner() && isOwner(userId) && incoming().badgeType == 'owner') ||
+          (
+            incoming().badgeType in ['verified', 'partner', 'creator', 'founder_circle']
+            && !isTargetPlatformOwner(userId)
+            && (isPlatformOwner() || hasPerm('manage_verification'))
+          )
+        );
+
+      allow delete: if isValidId(userId)
+        && isVerified()
+        && existing().badgeType != 'owner'
+        && !isTargetPlatformOwner(userId)
+        && (isPlatformOwner() || hasPerm('manage_verification'));
+    }
+
+    // Verification Applications
+    match /verification_requests/{requestId} {
+      allow get: if isValidId(requestId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner() || hasPerm('manage_verification')
+      );
+      allow list: if isVerified() && (
+        isOwner(existing().uid) ||
+        ((isPlatformOwner() || hasPerm('manage_verification')) && existing().status in ['pending', 'approved', 'rejected'])
+      );
+
+      allow create: if isValidId(requestId)
+        && isVerified()
+        && isNotSuspended()
+        && isValidVerificationRequest(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().status == 'pending'
+        && !('reviewerUid' in incoming())
+        && !('reviewerNote' in incoming())
+        && !('reviewedAt' in incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(requestId)
+        && isVerified()
+        && isValidVerificationRequest(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_verification'))
+        && incoming().reviewerUid == request.auth.uid;
+
+      allow delete: if isValidId(requestId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner() || hasPerm('manage_verification')
+      );
+    }
+
+    // Confidential Identity Verification Documents
+    match /identity_verifications/{requestId} {
+      allow get: if isValidId(requestId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner() || hasPerm('review_identity_docs')
+      );
+      allow list: if isVerified() && (
+        isOwner(existing().uid) ||
+        ((isPlatformOwner() || hasPerm('review_identity_docs')) && existing().status in ['pending', 'approved', 'rejected'])
+      );
+
+      allow create: if isValidId(requestId)
+        && isVerified()
+        && isNotSuspended()
+        && isValidIdentityVerification(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().status == 'pending'
+        && !('reviewerUid' in incoming())
+        && !('reviewerNote' in incoming())
+        && !('reviewedAt' in incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(requestId)
+        && isVerified()
+        && isValidIdentityVerification(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('review_identity_docs'))
+        && incoming().reviewerUid == request.auth.uid;
+
+      allow delete: if isValidId(requestId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner()
+      );
+    }
+
+    // Platform Global Settings
+    match /platform_config/{configId} {
+      allow get: if isValidId(configId) && configId == 'global';
+      allow create, update: if isValidId(configId)
+        && configId == 'global'
+        && isVerified()
+        && isValidPlatformConfig(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_platform'));
+    }
+
+    // Platform Announcements
+    match /platform_announcements/{announcementId} {
+      allow get: if isValidId(announcementId) && isSignedIn();
+      allow list: if isSignedIn() && existing().active in [true, false];
+
+      allow create: if isValidId(announcementId)
+        && isVerified()
+        && isValidPlatformAnnouncement(incoming())
+        && incoming().authorUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_platform') || hasPerm('manage_notifications'));
+
+      allow update: if isValidId(announcementId)
+        && isVerified()
+        && isValidPlatformAnnouncement(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_platform') || hasPerm('manage_notifications'));
+
+      allow delete: if isValidId(announcementId) && isVerified()
+        && (isPlatformOwner() || hasPerm('manage_platform') || hasPerm('manage_notifications'));
+    }
+
+    // Immutable Audit Logs
+    match /audit_logs/{logId} {
+      allow get: if isValidId(logId) && isVerified() && (isPlatformOwner() || hasPerm('view_audit_logs') || hasPerm('manage_admins'));
+      allow list: if isVerified() && (isPlatformOwner() || hasPerm('view_audit_logs') || hasPerm('manage_admins'))
+        && existing().category in ['admin', 'community', 'verification', 'identity', 'platform', 'moderation', 'notification'];
+
+      allow create: if isValidId(logId)
+        && isVerified()
+        && isValidAuditLog(incoming())
+        && incoming().actorUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && (isPlatformOwner() || isActiveStaff());
+
+      allow update, delete: if false;
+    }
+
     match /users/{userId} {
       allow get: if isValidId(userId) && (isSignedIn() || existing().onboardingCompleted == true);
-      allow list: if isSignedIn() && existing().onboardingCompleted == true;
+      allow list: if isSignedIn() && existing().onboardingCompleted in [true, false];
 
       allow create: if isValidId(userId)
         && isVerified()
         && isOwner(userId)
         && isValidUserProfile(incoming())
         && incoming().uid == userId
-        && incoming().verified == false
+        && (incoming().verified == false || isFounderOwner())
+        && (!('suspended' in incoming()) || incoming().suspended == false)
         && incoming().followersCount == 0
         && incoming().followingCount == 0
         && incoming().postsCount == 0
@@ -403,10 +802,27 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          isAdmin() ||
+          (isFounderOwner() && isOwner(userId) && (!('suspended' in incoming()) || incoming().suspended == false)) ||
+          (
+            !isTargetPlatformOwner(userId)
+            && isPlatformOwner()
+          ) ||
+          (
+            !isTargetPlatformOwner(userId)
+            && hasPerm('manage_verification')
+            && incoming().diff(existing()).affectedKeys().hasOnly(['verified', 'updatedAt'])
+          ) ||
+          (
+            !isTargetPlatformOwner(userId)
+            && hasPerm('moderate_content')
+            && incoming().verified == existing().verified
+            && incoming().diff(existing()).affectedKeys().hasOnly(['suspended', 'suspendedReason', 'suspendedAt', 'updatedAt'])
+          ) ||
           (
             isOwner(userId)
+            && isNotSuspended()
             && incoming().verified == existing().verified
+            && (!('suspended' in incoming()) ? !('suspended' in existing()) : ('suspended' in existing() && incoming().suspended == existing().suspended))
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'displayName', 'username', 'bio', 'avatarUrl', 'coverUrl',
               'coverPositionY', 'website', 'location', 'interests',
@@ -416,11 +832,12 @@ service cloud.firestore {
           ) ||
           (
             incoming().verified == existing().verified
+            && (!('suspended' in incoming()) ? !('suspended' in existing()) : ('suspended' in existing() && incoming().suspended == existing().suspended))
             && incoming().diff(existing()).affectedKeys().hasOnly(['followersCount', 'likesCount', 'updatedAt'])
           )
         );
 
-      allow delete: if isValidId(userId) && isAdmin();
+      allow delete: if isValidId(userId) && isPlatformOwner() && !isTargetPlatformOwner(userId);
 
       match /private/{docId} {
         allow get: if isValidId(userId) && isValidId(docId) && isOwner(userId);
@@ -481,6 +898,7 @@ service cloud.firestore {
 
       allow create: if isValidId(postId)
         && isVerified()
+        && isNotSuspended()
         && isValidPost(incoming())
         && incoming().authorId == request.auth.uid
         && incoming().likesCount == 0
@@ -497,9 +915,10 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          isAdmin() ||
+          isAdmin() || hasPerm('moderate_content') ||
           (
             isOwner(existing().authorId)
+            && isNotSuspended()
             && incoming().diff(existing()).affectedKeys().hasOnly(['text', 'location', 'audience', 'hashtags', 'mentions', 'updatedAt'])
           ) ||
           (
@@ -507,7 +926,7 @@ service cloud.firestore {
           )
         );
 
-      allow delete: if isValidId(postId) && isVerified() && (isOwner(existing().authorId) || isAdmin());
+      allow delete: if isValidId(postId) && isVerified() && (isOwner(existing().authorId) || isAdmin() || hasPerm('moderate_content'));
 
       match /likes/{userId} {
         allow get: if isValidId(postId) && isValidId(userId) && isSignedIn();
@@ -524,12 +943,13 @@ service cloud.firestore {
         allow get: if isValidId(postId) && isValidId(commentId) && isSignedIn();
         allow list: if isValidId(postId) && isSignedIn();
         allow create: if isValidId(postId) && isValidId(commentId) && isVerified()
+          && isNotSuspended()
           && exists(/databases/$(database)/documents/posts/$(postId))
           && isValidPostComment(incoming())
           && incoming().postId == postId
           && incoming().authorId == request.auth.uid
           && incoming().createdAt == request.time;
-        allow delete: if isValidId(postId) && isValidId(commentId) && isVerified() && (isOwner(existing().authorId) || isAdmin());
+        allow delete: if isValidId(postId) && isValidId(commentId) && isVerified() && (isOwner(existing().authorId) || isAdmin() || hasPerm('moderate_content'));
       }
 
       match /votes/{userId} {
@@ -548,6 +968,7 @@ service cloud.firestore {
 
       allow create: if isValidId(storyId)
         && isVerified()
+        && isNotSuspended()
         && isValidStory(incoming())
         && incoming().authorId == request.auth.uid
         && incoming().viewsCount == 0
@@ -560,7 +981,7 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount']);
 
-      allow delete: if isValidId(storyId) && isVerified() && (isOwner(existing().authorId) || isAdmin());
+      allow delete: if isValidId(storyId) && isVerified() && (isOwner(existing().authorId) || isAdmin() || hasPerm('moderate_content'));
 
       match /views/{viewerId} {
         allow get: if isValidId(storyId) && isValidId(viewerId) && isSignedIn();
@@ -585,6 +1006,7 @@ service cloud.firestore {
 
       allow create: if isValidId(vibeId)
         && isVerified()
+        && isNotSuspended()
         && isValidVibe(incoming())
         && incoming().authorId == request.auth.uid
         && incoming().likesCount == 0
@@ -602,9 +1024,10 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          isAdmin() ||
+          isAdmin() || hasPerm('moderate_content') ||
           (
             isOwner(existing().authorId)
+            && isNotSuspended()
             && incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'hashtags', 'thumbnailUrl', 'updatedAt'])
           ) ||
           (
@@ -612,7 +1035,7 @@ service cloud.firestore {
           )
         );
 
-      allow delete: if isValidId(vibeId) && isVerified() && (isOwner(existing().authorId) || isAdmin());
+      allow delete: if isValidId(vibeId) && isVerified() && (isOwner(existing().authorId) || isAdmin() || hasPerm('moderate_content'));
 
       match /likes/{userId} {
         allow get: if isValidId(vibeId) && isValidId(userId) && isSignedIn();
@@ -629,12 +1052,13 @@ service cloud.firestore {
         allow get: if isValidId(vibeId) && isValidId(commentId) && isSignedIn();
         allow list: if isValidId(vibeId) && isSignedIn();
         allow create: if isValidId(vibeId) && isValidId(commentId) && isVerified()
+          && isNotSuspended()
           && exists(/databases/$(database)/documents/vibes/$(vibeId))
           && isValidPostComment(incoming())
           && incoming().postId == vibeId
           && incoming().authorId == request.auth.uid
           && incoming().createdAt == request.time;
-        allow delete: if isValidId(vibeId) && isValidId(commentId) && isVerified() && (isOwner(existing().authorId) || isAdmin());
+        allow delete: if isValidId(vibeId) && isValidId(commentId) && isVerified() && (isOwner(existing().authorId) || isAdmin() || hasPerm('moderate_content'));
       }
     }
 
@@ -644,9 +1068,11 @@ service cloud.firestore {
 
       allow create: if isValidId(spaceId)
         && isVerified()
+        && isNotSuspended()
         && isValidSpace(incoming())
         && incoming().ownerId == request.auth.uid
         && incoming().verified == false
+        && (!('status' in incoming()) || incoming().status in ['active', 'pending'])
         && incoming().membersCount == 1
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
@@ -654,33 +1080,41 @@ service cloud.firestore {
       allow update: if isValidId(spaceId)
         && isVerified()
         && isValidSpace(incoming())
-        && incoming().ownerId == existing().ownerId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          isAdmin() ||
+          isPlatformOwner() || hasPerm('manage_communities') ||
           (
-            isOwner(existing().ownerId)
+            incoming().ownerId == existing().ownerId
+            && isOwner(existing().ownerId)
+            && isNotSuspended()
             && incoming().verified == existing().verified
+            && (!('status' in incoming()) ? !('status' in existing()) : ('status' in existing() && incoming().status == existing().status))
             && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'category', 'coverUrl', 'coverPositionY', 'isPrivate', 'updatedAt'])
           ) ||
           (
-            incoming().verified == existing().verified
+            incoming().ownerId == existing().ownerId
+            && incoming().verified == existing().verified
+            && (!('status' in incoming()) ? !('status' in existing()) : ('status' in existing() && incoming().status == existing().status))
             && incoming().diff(existing()).affectedKeys().hasOnly(['membersCount', 'updatedAt'])
           )
         );
 
-      allow delete: if isValidId(spaceId) && isVerified() && (isOwner(existing().ownerId) || isAdmin());
+      allow delete: if isValidId(spaceId) && isVerified() && (
+        isOwner(existing().ownerId) || isPlatformOwner() || hasPerm('manage_communities') || hasPerm('moderate_content')
+      );
 
       match /members/{userId} {
         allow get: if isValidId(spaceId) && isValidId(userId) && isSignedIn();
         allow list: if isValidId(spaceId) && isSignedIn();
-        allow create: if isValidId(spaceId) && isValidId(userId) && isVerified() && isOwner(userId)
+        allow create: if isValidId(spaceId) && isValidId(userId) && isVerified()
+          && (isOwner(userId) || isPlatformOwner() || hasPerm('manage_communities'))
           && (exists(/databases/$(database)/documents/spaces/$(spaceId)) || existsAfter(/databases/$(database)/documents/spaces/$(spaceId)))
           && isValidSpaceMember(incoming())
           && incoming().uid == userId
           && incoming().joinedAt == request.time
           && (
+            isPlatformOwner() || hasPerm('manage_communities') ||
             incoming().role == 'member' ||
             (incoming().role == 'owner' && (
               (exists(/databases/$(database)/documents/spaces/$(spaceId)) && get(/databases/$(database)/documents/spaces/$(spaceId)).data.ownerId == request.auth.uid) ||
@@ -689,38 +1123,48 @@ service cloud.firestore {
           );
         allow update: if isValidId(spaceId) && isValidId(userId) && isVerified()
           && isValidSpaceMember(incoming())
-          && get(/databases/$(database)/documents/spaces/$(spaceId)).data.ownerId == request.auth.uid
+          && (
+            isPlatformOwner() || hasPerm('manage_communities') ||
+            get(/databases/$(database)/documents/spaces/$(spaceId)).data.ownerId == request.auth.uid
+          )
           && incoming().uid == existing().uid
           && incoming().joinedAt == existing().joinedAt
           && incoming().diff(existing()).affectedKeys().hasOnly(['role']);
         allow delete: if isValidId(spaceId) && isValidId(userId) && isVerified()
-          && (isOwner(userId) || get(/databases/$(database)/documents/spaces/$(spaceId)).data.ownerId == request.auth.uid);
+          && (
+            isOwner(userId) ||
+            isPlatformOwner() ||
+            hasPerm('manage_communities') ||
+            get(/databases/$(database)/documents/spaces/$(spaceId)).data.ownerId == request.auth.uid
+          );
       }
 
       match /discussions/{msgId} {
         allow get: if isValidId(spaceId) && isValidId(msgId) && isSignedIn()
-          && exists(/databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid));
+          && (exists(/databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid)) || isPlatformOwner() || hasPerm('moderate_content'));
         allow list: if isValidId(spaceId) && isSignedIn()
-          && exists(/databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid));
+          && (exists(/databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid)) || isPlatformOwner() || hasPerm('moderate_content'));
         allow create: if isValidId(spaceId) && isValidId(msgId) && isVerified()
+          && isNotSuspended()
           && exists(/databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid))
           && isValidSpaceDiscussion(incoming())
           && incoming().authorId == request.auth.uid
           && incoming().createdAt == request.time;
         allow delete: if isValidId(spaceId) && isValidId(msgId) && isVerified()
-          && (isOwner(existing().authorId) || get(/databases/$(database)/documents/spaces/$(spaceId)).data.ownerId == request.auth.uid);
+          && (isOwner(existing().authorId) || get(/databases/$(database)/documents/spaces/$(spaceId)).data.ownerId == request.auth.uid || isPlatformOwner() || hasPerm('moderate_content'));
       }
 
       match /events/{eventId} {
         allow get: if isValidId(spaceId) && isValidId(eventId) && isSignedIn();
         allow list: if isValidId(spaceId) && isSignedIn();
         allow create: if isValidId(spaceId) && isValidId(eventId) && isVerified()
+          && isNotSuspended()
           && exists(/databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid))
           && isValidSpaceEvent(incoming())
           && incoming().hostId == request.auth.uid
           && incoming().createdAt == request.time;
         allow delete: if isValidId(spaceId) && isValidId(eventId) && isVerified()
-          && (isOwner(existing().hostId) || get(/databases/$(database)/documents/spaces/$(spaceId)).data.ownerId == request.auth.uid);
+          && (isOwner(existing().hostId) || get(/databases/$(database)/documents/spaces/$(spaceId)).data.ownerId == request.auth.uid || isPlatformOwner() || hasPerm('manage_communities'));
       }
     }
 
@@ -730,6 +1174,7 @@ service cloud.firestore {
 
       allow create: if isValidId(convId)
         && isVerified()
+        && isNotSuspended()
         && isValidConversation(incoming())
         && incoming().createdBy == request.auth.uid
         && request.auth.uid in incoming().participantIds
@@ -738,6 +1183,7 @@ service cloud.firestore {
 
       allow update: if isValidId(convId)
         && isVerified()
+        && isNotSuspended()
         && isValidConversation(incoming())
         && request.auth.uid in existing().participantIds
         && incoming().createdBy == existing().createdBy
@@ -763,6 +1209,7 @@ service cloud.firestore {
           && request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participantIds;
 
         allow create: if isValidId(convId) && isValidId(messageId) && isVerified()
+          && isNotSuspended()
           && request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participantIds
           && isValidChatMessage(incoming())
           && incoming().senderId == request.auth.uid
@@ -772,6 +1219,7 @@ service cloud.firestore {
           && incoming().updatedAt == request.time;
 
         allow update: if isValidId(convId) && isValidId(messageId) && isVerified()
+          && isNotSuspended()
           && request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participantIds
           && isValidChatMessage(incoming())
           && incoming().senderId == existing().senderId
@@ -793,7 +1241,12 @@ service cloud.firestore {
         && isValidNotification(incoming())
         && incoming().actorId == request.auth.uid
         && incoming().read == false
-        && incoming().createdAt == request.time;
+        && incoming().createdAt == request.time
+        && (
+          incoming().type in ['like', 'comment', 'follow', 'repost', 'space_invite', 'message'] ||
+          isPlatformOwner() ||
+          hasPerm('manage_notifications')
+        );
 
       allow update: if isValidId(notifId)
         && isVerified()
@@ -808,12 +1261,29 @@ service cloud.firestore {
     }
 
     match /reports/{reportId} {
-      allow get: if isValidId(reportId) && isVerified() && (isOwner(existing().reporterId) || isAdmin());
-      allow list: if isAdmin();
+      allow get: if isValidId(reportId) && isVerified() && (
+        isOwner(existing().reporterId) || isPlatformOwner() || hasPerm('moderate_content') || hasPerm('manage_communities')
+      );
+      allow list: if isVerified() && (isPlatformOwner() || hasPerm('moderate_content') || hasPerm('manage_communities'))
+        && existing().targetType in ['post', 'user', 'space', 'vibe'];
+
       allow create: if isValidId(reportId) && isVerified()
+        && isNotSuspended()
         && isValidReport(incoming())
         && incoming().reporterId == request.auth.uid
+        && (!('status' in incoming()) || incoming().status == 'open')
         && incoming().createdAt == request.time;
+
+      allow update: if isValidId(reportId) && isVerified()
+        && isValidReport(incoming())
+        && (isPlatformOwner() || hasPerm('moderate_content') || hasPerm('manage_communities'))
+        && incoming().reporterId == existing().reporterId
+        && incoming().targetType == existing().targetType
+        && incoming().targetId == existing().targetId
+        && incoming().createdAt == existing().createdAt
+        && incoming().resolvedBy == request.auth.uid
+        && incoming().resolvedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'resolutionNote', 'resolvedBy', 'resolvedAt']);
     }
   }
 }

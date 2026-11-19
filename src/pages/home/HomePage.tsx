@@ -24,7 +24,7 @@ export function HomePage({
   onOpenProfile,
   onOpenChatThread,
 }: HomePageProps) {
-  const { privateInfo } = useAuth();
+  const { privateInfo, platformConfig } = useAuth();
   const [filter, setFilter] = useState<'all' | 'discussions' | 'media' | 'polls'>('all');
 
   const blockedSet = useMemo(
@@ -45,13 +45,15 @@ export function HomePage({
   return (
     <div className="w-full space-y-5">
       {/* Stories Bar */}
-      <div className="p-4 rounded-2xl bg-[#0D0B16]/75 border border-[#8B5CF6]/15">
-        <StoriesBar
-          stories={stories}
-          users={users}
-          onOpenChatThread={onOpenChatThread}
-        />
-      </div>
+      {platformConfig.features.storiesEnabled && (
+        <div className="p-4 rounded-2xl bg-[#0D0B16]/75 border border-[#8B5CF6]/15">
+          <StoriesBar
+            stories={stories}
+            users={users}
+            onOpenChatThread={onOpenChatThread}
+          />
+        </div>
+      )}
 
       {/* Main Composer */}
       <PostComposer spaces={spaces} />

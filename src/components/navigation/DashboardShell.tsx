@@ -1,14 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   Bell,
   Compass,
   Film,
   Home,
   LogOut,
+  Megaphone,
   MessageSquare,
   PlusSquare,
   Search,
   Settings,
+  Shield,
   User as UserIcon,
   UserPlus,
   X,
@@ -35,6 +38,7 @@ import { formatCompactCount, formatRelativeTime } from '../../utils/validation';
 interface DashboardShellProps {
   activeSection: NavSection;
   onNavigate: (section: NavSection, targetId?: string) => void;
+  onOpenAdminSettings?: () => void;
   onOpenUserProfile: (uid: string) => void;
   notifications: NotificationItem[];
   spaces: Space[];
@@ -69,6 +73,7 @@ const SECTION_LABELS: Record<NavSection, string> = {
 export function DashboardShell({
   activeSection,
   onNavigate,
+  onOpenAdminSettings,
   onOpenUserProfile,
   notifications,
   spaces,
@@ -76,7 +81,7 @@ export function DashboardShell({
   users,
   children,
 }: DashboardShellProps) {
-  const { profile } = useAuth();
+  const { profile, myRole, announcements, platformConfig, getBadgeVariant } = useAuth();
   const [navPhase, setNavPhase] = useState<'expanded' | 'logo-only' | 'hidden'>('expanded');
   const lastScrollY = useRef(0);
   const phaseTimerRef = useRef<number | null>(null);
@@ -86,6 +91,7 @@ export function DashboardShell({
   const [showNotifs, setShowNotifs] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [followedUids, setFollowedUids] = useState<Record<string, boolean>>({});
+  const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState<string[]>([]);
 
   // Adaptive Navigation Scroll Behavior:
   // Scrolling upwards contracts into Nexora logo and eventually hides.
@@ -177,7 +183,28 @@ export function DashboardShell({
     };
   }, [searchQuery, users, spaces, posts]);
 
+  const isActiveStaff = Boolean(myRole && myRole.active);
+  const visibleNavItems = useMemo(() => {
+    return NAV_ITEMS.filter((item) => {
+      if (isActiveStaff) return true;
+      if (item.id === 'vibes' && !platformConfig.features.vibesEnabled) return false;
+      if (item.id === 'spaces' && !platformConfig.features.spacesEnabled) return false;
+      if (item.id === 'chat' && !platformConfig.features.chatEnabled) return false;
+      return true;
+    });
+  }, [isActiveStaff, platformConfig.features]);
+
+  const activeBannerAnnouncements = useMemo(
+    () =>
+      announcements.filter(
+        (a) => a.active && !dismissedAnnouncementIds.includes(a.id)
+      ),
+    [announcements, dismissedAnnouncementIds]
+  );
+
   if (!profile) return null;
+
+  const selfBadgeVariant = getBadgeVariant(profile.uid, profile.verified);
 
   const handleNotificationClick = async (n: NotificationItem) => {
     if (!n.read) {
@@ -257,7 +284,7 @@ export function DashboardShell({
                 : 'opacity-100'
             }`}
           >
-            {NAV_ITEMS.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const active = activeSection === item.id;
               return (
@@ -341,8 +368,14 @@ export function DashboardShell({
                                 className="w-8 h-8 rounded-full object-cover shrink-0"
                               />
                               <div className="min-w-0">
-                                <p className="text-xs font-semibold text-white truncate">
+                                <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
                                   {u.displayName}
+                                  {getBadgeVariant(u.uid, u.verified) && (
+                                    <VerifiedBadge
+                                      size={12}
+                                      variant={getBadgeVariant(u.uid, u.verified)}
+                                    />
+                                  )}
                                 </p>
                                 <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
                               </div>
@@ -511,7 +544,7 @@ export function DashboardShell({
                   <div className="px-3 py-2.5 border-b border-white/10">
                     <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
                       {profile.displayName}
-                      {profile.verified && <VerifiedBadge size={13} />}
+                      {selfBadgeVariant && <VerifiedBadge size={13} variant={selfBadgeVariant} />}
                     </p>
                     <p className="text-[11px] text-[#94A3B8] truncate">@{profile.username}</p>
                   </div>
@@ -535,6 +568,22 @@ export function DashboardShell({
                   >
                     <Settings size={14} /> Account & Privacy Settings
                   </button>
+                  {isActiveStaff && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        if (onOpenAdminSettings) {
+                          onOpenAdminSettings();
+                        } else {
+                          onNavigate('settings');
+                        }
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-sky-300 bg-sky-500/10 hover:bg-sky-500/20 text-left font-medium"
+                    >
+                      <Shield size={14} /> Nexora Administration
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => void logoutUser(profile.uid)}
@@ -550,7 +599,7 @@ export function DashboardShell({
 
         {/* Mobile / Tablet compact horizontal nav */}
         <nav className="flex md:hidden items-center justify-around border-t border-white/[0.06] px-2 py-1.5 overflow-x-auto">
-          {NAV_ITEMS.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = activeSection === item.id;
             return (
@@ -569,6 +618,45 @@ export function DashboardShell({
           })}
         </nav>
       </header>
+
+      {/* Active Platform Announcements Banner */}
+      {activeBannerAnnouncements.length > 0 && (
+        <div className="relative z-10 max-w-[1640px] w-full mx-auto px-4 lg:px-8 pt-3 space-y-2">
+          {activeBannerAnnouncements.slice(0, 2).map((ann) => (
+            <div
+              key={ann.id}
+              className={`flex items-center justify-between gap-4 px-4 py-2.5 rounded-xl border text-xs ${
+                ann.severity === 'security'
+                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-100'
+                  : ann.severity === 'warning'
+                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-100'
+                  : 'bg-[#7C3AED]/15 border-[#8B5CF6]/30 text-[#E9D5FF]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                {ann.severity === 'security' || ann.severity === 'warning' ? (
+                  <AlertTriangle size={14} className="shrink-0" />
+                ) : (
+                  <Megaphone size={14} className="shrink-0 text-[#C084FC]" />
+                )}
+                <p className="truncate">
+                  <span className="font-semibold">{ann.title}:</span> {ann.message}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setDismissedAnnouncementIds((prev) => [...prev, ann.id])
+                }
+                aria-label="Dismiss announcement"
+                className="p-1 rounded-lg hover:bg-white/10 shrink-0"
+              >
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Section-Specific Desktop Viewport Architectures */}
       {activeSection === 'vibes' && (
@@ -600,7 +688,7 @@ export function DashboardShell({
       )}
 
       {activeSection === 'settings' && (
-        <main className="relative z-10 flex-1 max-w-[1080px] w-full mx-auto px-4 lg:px-8 py-6">
+        <main className="relative z-10 flex-1 max-w-[1440px] w-full mx-auto px-4 lg:px-8 py-6">
           {children}
         </main>
       )}
@@ -622,9 +710,10 @@ export function DashboardShell({
                     <button
                       type="button"
                       onClick={() => onNavigate('profile')}
-                      className="font-display text-sm font-semibold text-white hover:text-[#C084FC] truncate block text-left"
+                      className="font-display text-sm font-semibold text-white hover:text-[#C084FC] truncate inline-flex items-center gap-1.5 text-left"
                     >
-                      {profile.displayName}
+                      <span className="truncate">{profile.displayName}</span>
+                      {selfBadgeVariant && <VerifiedBadge size={13} variant={selfBadgeVariant} />}
                     </button>
                     <p className="text-xs text-[#94A3B8] truncate">@{profile.username}</p>
                   </div>
@@ -728,7 +817,12 @@ export function DashboardShell({
                             <div className="min-w-0">
                               <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
                                 {u.displayName}
-                                {u.verified && <VerifiedBadge size={12} />}
+                                {getBadgeVariant(u.uid, u.verified) && (
+                                  <VerifiedBadge
+                                    size={12}
+                                    variant={getBadgeVariant(u.uid, u.verified)}
+                                  />
+                                )}
                               </p>
                               <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
                             </div>

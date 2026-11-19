@@ -21,7 +21,7 @@ interface AuthViewProps {
 }
 
 export function AuthView({ initialMode, onBackToLanding }: AuthViewProps) {
-  const { user, refreshUserAndProfile } = useAuth();
+  const { user, platformConfig, refreshUserAndProfile } = useAuth();
   const [mode, setMode] = useState<'login' | 'register' | 'forgot' | 'verify-email'>(initialMode);
 
   // Shared states
@@ -111,6 +111,11 @@ export function AuthView({ initialMode, onBackToLanding }: AuthViewProps) {
     e.preventDefault();
     setError('');
     setNotice('');
+
+    if (!platformConfig.features.registrationOpen) {
+      setError('New registrations are temporarily paused by Nexora administration.');
+      return;
+    }
 
     if (password.length < 6) {
       setError('Password must be at least 6 characters.');

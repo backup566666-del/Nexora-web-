@@ -65,7 +65,7 @@ interface VibesPageProps {
 }
 
 export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPageProps) {
-  const { profile } = useAuth();
+  const { profile, getBadgeVariant } = useAuth();
   const [activeIndex, setActiveIndex] = useState(0);
   const [likedIds, setLikedIds] = useState<string[]>([]);
   const [followingAuthor, setFollowingAuthor] = useState(false);
@@ -400,7 +400,12 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
                   <div>
                     <p className="text-sm font-semibold text-white inline-flex items-center gap-1">
                       {profile.displayName}
-                      {profile.verified && <VerifiedBadge size={14} />}
+                      {getBadgeVariant(profile.uid, profile.verified) && (
+                        <VerifiedBadge
+                          size={14}
+                          variant={getBadgeVariant(profile.uid, profile.verified)}
+                        />
+                      )}
                     </p>
                     <p className="text-[11px] text-white/70">@{profile.username} · Demo Showcase</p>
                   </div>
@@ -575,7 +580,12 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-white inline-flex items-center gap-1 truncate">
                               {currentVibe.authorName}
-                              {currentVibe.authorVerified && <VerifiedBadge size={14} />}
+                              {getBadgeVariant(currentVibe.authorId, currentVibe.authorVerified) && (
+                                <VerifiedBadge
+                                  size={14}
+                                  variant={getBadgeVariant(currentVibe.authorId, currentVibe.authorVerified)}
+                                />
+                              )}
                             </p>
                             <p className="text-[11px] text-white/75 truncate">
                               @{currentVibe.authorUsername}
