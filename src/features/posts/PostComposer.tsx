@@ -16,7 +16,7 @@ import {
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
-import { createPost, subscribeDirectoryUsers } from '../../services/firebase/socialService';
+import { createPost, searchDirectoryUsers, subscribeDirectoryUsers } from '../../services/firebase/socialService';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
 import { AudienceType, PostType, Space, UserProfile } from '../../types/nexora';
 import { BLUEPRINT_LIMITS } from '../../utils/validation';
@@ -53,6 +53,7 @@ export function PostComposer({
   const [collaboratorUsers, setCollaboratorUsers] = useState<UserProfile[]>([]);
   const [pickerMode, setPickerMode] = useState<'none' | 'tag' | 'collab'>('none');
   const [pickerSearch, setPickerSearch] = useState('');
+  const [remoteCandidates, setRemoteCandidates] = useState<UserProfile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -67,6 +68,23 @@ export function PostComposer({
     }
     return subscribeDirectoryUsers(setDirectoryUsers);
   }, [propUsers]);
+
+  useEffect(() => {
+    const clean = pickerSearch.trim();
+    if (pickerMode === 'none' || clean.length < 2) {
+      setRemoteCandidates([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const found = await searchDirectoryUsers(clean, 10).catch(() => []);
+      if (!cancelled) setRemoteCandidates(found);
+    }, 240);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [pickerSearch, pickerMode]);
 
   useEffect(() => {
     if (initialMediaUrl) {
@@ -85,7 +103,12 @@ export function PostComposer({
   const filteredCandidates = useMemo(() => {
     if (!profile) return [];
     const term = pickerSearch.trim().toLowerCase();
-    return directoryUsers
+    const mergedMap = new Map<string, UserProfile>();
+    directoryUsers.forEach((u) => mergedMap.set(u.uid, u));
+    remoteCandidates.forEach((u) => {
+      if (!mergedMap.has(u.uid)) mergedMap.set(u.uid, u);
+    });
+    return Array.from(mergedMap.values())
       .filter((u) => u.uid !== profile.uid && !u.suspended && !blockedSet.has(u.uid))
       .filter((u) => {
         if (!term) return true;
@@ -95,7 +118,7 @@ export function PostComposer({
         );
       })
       .slice(0, 12);
-  }, [directoryUsers, profile, blockedSet, pickerSearch]);
+  }, [directoryUsers, remoteCandidates, profile, blockedSet, pickerSearch]);
 
   if (!profile) return null;
 

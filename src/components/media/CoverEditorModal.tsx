@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { Check, MoveVertical, Upload, X, ZoomIn } from 'lucide-react';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
 
 interface CoverEditorModalProps {
@@ -42,7 +43,7 @@ export function CoverEditorModal({
       setPositionY(50);
       setZoom(1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to process image.');
+      setError(extractReadableErrorMessage(err, 'Unable to process image.'));
     } finally {
       setUploading(false);
     }
@@ -55,7 +56,7 @@ export function CoverEditorModal({
       await onSave(imageUrl, positionY);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save cover changes.');
+      setError(extractReadableErrorMessage(err, 'Failed to save cover changes.'));
     } finally {
       setSaving(false);
     }

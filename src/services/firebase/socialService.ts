@@ -3,6 +3,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  endAt,
   getDoc,
   getDocs,
   increment,
@@ -12,6 +13,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  startAt,
   Timestamp,
   Unsubscribe,
   updateDoc,
@@ -19,6 +21,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from './config';
+import { getUserProfile, resolveUidByUsername } from '../auth/authService';
 import { handleFirestoreError, OperationType } from './errorHandler';
 import {
   dispatchDualNotification,
@@ -52,6 +55,7 @@ import {
   BLUEPRINT_LIMITS,
   extractHashtags,
   extractMentions,
+  normalizeUsername,
   sanitizeString,
 } from '../../utils/validation';
 
@@ -89,7 +93,8 @@ export function subscribeNotifications(
   const q = query(
     collection(db, 'notifications'),
     where('recipientId', '==', uid),
-    limit(40)
+    orderBy('createdAt', 'desc'),
+    limit(50)
   );
   return onSnapshot(
     q,
@@ -130,13 +135,58 @@ export function subscribeDirectoryUsers(callback: (users: UserProfile[]) => void
   const q = query(
     collection(db, 'users'),
     where('onboardingCompleted', '==', true),
-    limit(50)
+    orderBy('createdAt', 'desc'),
+    limit(250)
   );
   return onSnapshot(
     q,
     (snap) => callback(snap.docs.map((d) => d.data() as UserProfile)),
     (error) => handleFirestoreError(error, OperationType.LIST, 'users')
   );
+}
+
+export async function getUserByUsername(rawUsername: string): Promise<UserProfile | null> {
+  const uid = await resolveUidByUsername(rawUsername);
+  if (!uid) return null;
+  try {
+    return await getUserProfile(uid);
+  } catch {
+    return null;
+  }
+}
+
+export async function searchDirectoryUsers(
+  rawTerm: string,
+  maxResults = 20
+): Promise<UserProfile[]> {
+  const prefix = normalizeUsername(rawTerm);
+  if (!prefix) return [];
+
+  const q = query(
+    collection(db, 'users'),
+    where('onboardingCompleted', '==', true),
+    orderBy('username'),
+    startAt(prefix),
+    endAt(`${prefix}\uf8ff`),
+    limit(maxResults)
+  );
+
+  const [prefixSnap, exactMatch] = await Promise.all([
+    getDocs(q).catch(() => null),
+    prefix.length >= 3 ? getUserByUsername(prefix) : Promise.resolve(null),
+  ]);
+
+  const merged = new Map<string, UserProfile>();
+  if (exactMatch && !exactMatch.suspended) {
+    merged.set(exactMatch.uid, exactMatch);
+  }
+  prefixSnap?.docs.forEach((d) => {
+    const u = d.data() as UserProfile;
+    if (!u.suspended && !merged.has(u.uid)) {
+      merged.set(u.uid, u);
+    }
+  });
+  return Array.from(merged.values()).slice(0, maxResults);
 }
 
 export async function checkIsFollowing(currentUid: string, targetUid: string): Promise<boolean> {
@@ -201,21 +251,26 @@ export function subscribeFeedPosts(
   callback: (posts: Post[]) => void,
   spaceId?: string
 ): Unsubscribe {
-  const q = query(
-    collection(db, 'posts'),
-    where('audience', 'in', ['public', 'followers', 'space']),
-    limit(60)
-  );
+  const q = spaceId
+    ? query(
+        collection(db, 'posts'),
+        where('audience', 'in', ['public', 'followers', 'space']),
+        where('spaceId', '==', spaceId),
+        limit(60)
+      )
+    : query(
+        collection(db, 'posts'),
+        where('audience', 'in', ['public', 'followers', 'space']),
+        orderBy('createdAt', 'desc'),
+        limit(80)
+      );
 
   return onSnapshot(
     q,
     (snap) => {
-      let items = snap.docs
+      const items = snap.docs
         .map((d) => ({ id: d.id, ...(d.data() as Omit<Post, 'id'>) }))
         .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
-      if (spaceId) {
-        items = items.filter((p) => p.spaceId === spaceId);
-      }
       callback(items);
     },
     (error) => handleFirestoreError(error, OperationType.LIST, 'posts')
@@ -226,6 +281,7 @@ export function subscribePublicLandingPosts(callback: (posts: Post[]) => void): 
   const q = query(
     collection(db, 'posts'),
     where('audience', '==', 'public'),
+    orderBy('createdAt', 'desc'),
     limit(6)
   );
   return onSnapshot(
@@ -290,6 +346,12 @@ export async function createPost(params: {
     };
   });
 
+  const boundedMediaUrls = (params.mediaUrls || []).slice(0, 4);
+  const totalMediaChars = boundedMediaUrls.reduce((sum, u) => sum + u.length, 0);
+  if (totalMediaChars > 780_000) {
+    throw new Error('Attached media exceeds the safe per-post size budget. Please attach fewer or smaller files.');
+  }
+
   const payload = {
     authorId: params.author.uid,
     authorName: sanitizeString(params.author.displayName, 80),
@@ -300,7 +362,7 @@ export async function createPost(params: {
     spaceName: sanitizeString(params.spaceName || '', 80),
     type: params.type,
     text: cleanText,
-    mediaUrls: (params.mediaUrls || []).slice(0, 4),
+    mediaUrls: boundedMediaUrls,
     mediaTypes: (params.mediaTypes || []).slice(0, 4),
     hashtags: extractHashtags(cleanText),
     mentions: extractMentions(cleanText),
@@ -648,7 +710,8 @@ export function subscribeStories(callback: (stories: Story[]) => void): Unsubscr
   const q = query(
     collection(db, 'stories'),
     where('privacy', 'in', ['public', 'followers', 'close']),
-    limit(40)
+    orderBy('createdAt', 'desc'),
+    limit(60)
   );
   return onSnapshot(
     q,
@@ -739,7 +802,8 @@ export function subscribeVibes(callback: (vibes: Vibe[]) => void): Unsubscribe {
   const q = query(
     collection(db, 'vibes'),
     where('viewsCount', '>=', 0),
-    limit(30)
+    orderBy('createdAt', 'desc'),
+    limit(40)
   );
   return onSnapshot(
     q,
@@ -928,7 +992,8 @@ export function subscribeSpaces(callback: (spaces: Space[]) => void): Unsubscrib
   const q = query(
     collection(db, 'spaces'),
     where('isPrivate', 'in', [false, true]),
-    limit(40)
+    orderBy('createdAt', 'desc'),
+    limit(60)
   );
   return onSnapshot(
     q,
@@ -1234,7 +1299,8 @@ export function subscribeConversations(
   const q = query(
     collection(db, 'conversations'),
     where('participantIds', 'array-contains', uid),
-    limit(40)
+    orderBy('updatedAt', 'desc'),
+    limit(50)
   );
   return onSnapshot(
     q,
@@ -1561,24 +1627,56 @@ export function subscribeUserGifts(
   uid: string,
   callback: (data: { received: GiftTransaction[]; sent: GiftTransaction[] }) => void
 ): Unsubscribe {
-  const q = query(
+  let received: GiftTransaction[] = [];
+  let sent: GiftTransaction[] = [];
+
+  const emit = () => callback({ received, sent });
+
+  const receivedQ = query(
     collection(db, 'virtual_gifts'),
     where('targetType', 'in', ['profile', 'post']),
-    limit(150)
+    where('recipientUid', '==', uid),
+    limit(60)
   );
-  return onSnapshot(
-    q,
+  const sentQ = query(
+    collection(db, 'virtual_gifts'),
+    where('targetType', 'in', ['profile', 'post']),
+    where('senderUid', '==', uid),
+    limit(60)
+  );
+
+  const u1 = onSnapshot(
+    receivedQ,
     (snap) => {
-      const all = snap.docs
+      received = snap.docs
         .map((d) => ({ id: d.id, ...(d.data() as Omit<GiftTransaction, 'id'>) }))
         .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
-      callback({
-        received: all.filter((g) => g.recipientUid === uid),
-        sent: all.filter((g) => g.senderUid === uid),
-      });
+      emit();
     },
-    () => callback({ received: [], sent: [] })
+    () => {
+      received = [];
+      emit();
+    }
   );
+
+  const u2 = onSnapshot(
+    sentQ,
+    (snap) => {
+      sent = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<GiftTransaction, 'id'>) }))
+        .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+      emit();
+    },
+    () => {
+      sent = [];
+      emit();
+    }
+  );
+
+  return () => {
+    u1();
+    u2();
+  };
 }
 
 // --- Contact, Support & Ban Appeal Submissions ---

@@ -13,6 +13,7 @@ import {
 } from '../../services/auth/authService';
 import { EMAIL_CODE_PROVIDER_STATUS } from '../../services/email/verificationCodeService';
 import { useAuth } from '../../hooks/useAuth';
+import { auth } from '../../services/firebase/config';
 import { isValidUsername, normalizeUsername } from '../../utils/validation';
 
 interface AuthViewProps {
@@ -21,7 +22,7 @@ interface AuthViewProps {
 }
 
 export function AuthView({ initialMode, onBackToLanding }: AuthViewProps) {
-  const { user, platformConfig, refreshUserAndProfile } = useAuth();
+  const { user, emailVerified, platformConfig, refreshUserAndProfile } = useAuth();
   const [mode, setMode] = useState<'login' | 'register' | 'forgot' | 'verify-email'>(initialMode);
 
   // Shared states
@@ -40,12 +41,12 @@ export function AuthView({ initialMode, onBackToLanding }: AuthViewProps) {
   const [notice, setNotice] = useState('');
 
   useEffect(() => {
-    if (user && !user.emailVerified) {
+    if (user && !emailVerified) {
       setMode('verify-email');
     } else if (initialMode === 'login' || initialMode === 'register') {
       setMode(initialMode);
     }
-  }, [user, initialMode]);
+  }, [user, emailVerified, initialMode]);
 
   useEffect(() => {
     if (mode !== 'register') return;
@@ -177,7 +178,7 @@ export function AuthView({ initialMode, onBackToLanding }: AuthViewProps) {
     setBusy(true);
     try {
       await refreshUserAndProfile();
-      if (user && !user.emailVerified) {
+      if (auth.currentUser && !auth.currentUser.emailVerified) {
         setError('Your email is not verified yet. Please click the verification link in your inbox, then try again.');
       }
     } catch (err) {

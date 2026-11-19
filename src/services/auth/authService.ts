@@ -22,7 +22,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
-import { handleFirestoreError, OperationType } from '../firebase/errorHandler';
+import { extractReadableErrorMessage, handleFirestoreError, OperationType } from '../firebase/errorHandler';
 import { dispatchDualNotification } from '../notifications/notificationDispatcher';
 import { PrivacySettings, UserPrivate, UserProfile } from '../../types/nexora';
 import {
@@ -36,27 +36,91 @@ import {
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
+const PENDING_USERNAME_PREFIX = 'nexora_pending_username:';
+const PRESENCE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const AVATAR_URL_MAX_LEN = 200_000;
+const COVER_URL_MAX_LEN = 400_000;
+let activePersistenceMode: 'local' | 'session' = 'local';
+const inFlightEnsureUserDocs = new Map<string, Promise<UserProfile>>();
+
+function savePendingUsername(uid: string, username: string): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(`${PENDING_USERNAME_PREFIX}${uid}`, username);
+    }
+  } catch {
+    // Ignore storage restriction errors in private browsing
+  }
+}
+
+function readAndClearPendingUsername(uid: string): string | undefined {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const key = `${PENDING_USERNAME_PREFIX}${uid}`;
+      const value = window.localStorage.getItem(key) || undefined;
+      if (value) window.localStorage.removeItem(key);
+      return value;
+    }
+  } catch {
+    // Ignore storage restriction errors
+  }
+  return undefined;
+}
+
+export async function ensureVerifiedTokenClaims(user: User, forceRefresh = false): Promise<void> {
+  if (!user.emailVerified) {
+    throw new Error('Please verify your email address before creating your Nexora profile.');
+  }
+  let tokenResult = await user.getIdTokenResult(forceRefresh);
+  if (tokenResult.claims.email_verified !== true) {
+    await user.getIdToken(true);
+    tokenResult = await user.getIdTokenResult(false);
+  }
+  if (tokenResult.claims.email_verified !== true) {
+    throw new Error(
+      'Your verified email token is still propagating. Please wait a moment and click Retry Sync.'
+    );
+  }
+}
+
 export function mapAuthErrorMessage(err: unknown): string {
   const code = (err as { code?: string })?.code ?? '';
   switch (code) {
     case 'auth/operation-not-allowed':
-      return 'Email/Password sign-in is not yet enabled in the Firebase Console. Enable it under Authentication -> Sign-in method, or use Continue with Google.';
+      return 'This sign-in provider is not currently enabled in Firebase Console (Authentication -> Sign-in method).';
+    case 'auth/unauthorized-domain': {
+      const host =
+        typeof window !== 'undefined' && window.location?.hostname
+          ? ` (${window.location.hostname})`
+          : '';
+      return `This domain${host} is not allowlisted in Firebase Authentication Authorized Domains. Add the exact hostname under Authentication -> Settings -> Authorized domains.`;
+    }
+    case 'auth/popup-blocked':
+      return 'Your browser blocked the Google sign-in popup. Please allow popups for this site and click Continue with Google again.';
+    case 'auth/cancelled-popup-request':
+      return 'Google sign-in popup was superseded by another request. Please try again.';
+    case 'auth/account-exists-with-different-credential':
+      return 'An account already exists with this email using a different sign-in method. Sign in with your original method first.';
     case 'auth/email-already-in-use':
       return 'An account with this email address already exists.';
     case 'auth/invalid-email':
       return 'Please enter a valid email address.';
     case 'auth/weak-password':
       return 'Password must be at least 6 characters long.';
+    case 'auth/user-disabled':
+      return 'This account has been disabled in Firebase Authentication.';
     case 'auth/user-not-found':
     case 'auth/wrong-password':
     case 'auth/invalid-credential':
       return 'Incorrect email or password. Please verify your credentials.';
     case 'auth/popup-closed-by-user':
       return 'Google sign-in window was closed before completing authorization.';
+    case 'auth/network-request-failed':
+      return 'Network error while contacting authentication servers. Please check your connection and retry.';
     case 'auth/too-many-requests':
       return 'Too many attempts. Please wait a moment before trying again.';
     default:
-      return err instanceof Error ? err.message : 'Authentication failed. Please try again.';
+      return extractReadableErrorMessage(err, 'Authentication failed. Please try again.');
   }
 }
 
@@ -73,8 +137,28 @@ export async function isUsernameAvailable(rawUsername: string, currentUid?: stri
   }
 }
 
+export async function resolveUidByUsername(rawUsername: string): Promise<string | null> {
+  const username = normalizeUsername(rawUsername);
+  if (!isValidUsername(username)) return null;
+  try {
+    const snap = await getDoc(doc(db, 'usernames', username));
+    if (!snap.exists()) return null;
+    const data = snap.data() as { uid?: string };
+    return data.uid || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function signInWithGoogle(rememberSession = true): Promise<User> {
-  await setPersistence(auth, rememberSession ? browserLocalPersistence : browserSessionPersistence);
+  const targetPersistence = rememberSession ? 'local' : 'session';
+  if (activePersistenceMode !== targetPersistence) {
+    await setPersistence(
+      auth,
+      rememberSession ? browserLocalPersistence : browserSessionPersistence
+    );
+    activePersistenceMode = targetPersistence;
+  }
   const credential = await signInWithPopup(auth, googleProvider);
   await ensureUserDocuments(credential.user);
   return credential.user;
@@ -93,7 +177,13 @@ export async function registerWithEmail(params: {
     throw new Error('Username must be 3-30 characters using lowercase letters, numbers, or underscores.');
   }
 
+  const available = await isUsernameAvailable(cleanUsername);
+  if (!available) {
+    throw new Error(`@${cleanUsername} is already taken. Please choose another username.`);
+  }
+
   const credential = await createUserWithEmailAndPassword(auth, params.email.trim(), params.password);
+  savePendingUsername(credential.user.uid, cleanUsername);
   await updateProfile(credential.user, { displayName: cleanName });
   await sendEmailVerification(credential.user);
   return credential.user;
@@ -104,7 +194,14 @@ export async function loginWithEmail(
   password: string,
   rememberSession: boolean
 ): Promise<User> {
-  await setPersistence(auth, rememberSession ? browserLocalPersistence : browserSessionPersistence);
+  const targetPersistence = rememberSession ? 'local' : 'session';
+  if (activePersistenceMode !== targetPersistence) {
+    await setPersistence(
+      auth,
+      rememberSession ? browserLocalPersistence : browserSessionPersistence
+    );
+    activePersistenceMode = targetPersistence;
+  }
   const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
   if (credential.user.emailVerified) {
     await ensureUserDocuments(credential.user);
@@ -159,7 +256,7 @@ async function reserveUniqueUsername(uid: string, preferred: string): Promise<st
   let base = normalizeUsername(preferred);
   if (base.length < 3) base = `nexora_${uid.slice(0, 6).toLowerCase()}`;
 
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 6; attempt++) {
     const candidate =
       attempt === 0
         ? base
@@ -175,17 +272,35 @@ async function reserveUniqueUsername(uid: string, preferred: string): Promise<st
     }
   }
   const fallback = `user_${uid.slice(0, 10).toLowerCase()}`;
-  await setDoc(doc(db, 'usernames', fallback), { uid, createdAt: serverTimestamp() });
+  const fallbackRef = doc(db, 'usernames', fallback);
+  const fallbackSnap = await getDoc(fallbackRef);
+  if (!fallbackSnap.exists()) {
+    await setDoc(fallbackRef, { uid, createdAt: serverTimestamp() });
+  }
   return fallback;
 }
 
-export async function ensureUserDocuments(
+export function ensureUserDocuments(
   user: User,
   preferredUsername?: string
 ): Promise<UserProfile> {
-  if (!user.emailVerified) {
-    throw new Error('Please verify your email address before creating your Nexora profile.');
+  const existingTask = inFlightEnsureUserDocs.get(user.uid);
+  if (existingTask) {
+    return existingTask;
   }
+
+  const task = ensureUserDocumentsInternal(user, preferredUsername).finally(() => {
+    inFlightEnsureUserDocs.delete(user.uid);
+  });
+  inFlightEnsureUserDocs.set(user.uid, task);
+  return task;
+}
+
+async function ensureUserDocumentsInternal(
+  user: User,
+  preferredUsername?: string
+): Promise<UserProfile> {
+  await ensureVerifiedTokenClaims(user);
 
   const userRef = doc(db, 'users', user.uid);
   let snap;
@@ -197,34 +312,48 @@ export async function ensureUserDocuments(
 
   if (snap.exists()) {
     const existing = snap.data() as UserProfile;
-    try {
-      await updateDoc(userRef, {
-        isOnline: true,
-        lastActiveAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    } catch {
-      // Ignore transient online presence update errors
+    const lastActiveMs = existing.lastActiveAt?.toMillis?.() ?? 0;
+    const shouldRefreshPresence =
+      !existing.isOnline || Date.now() - lastActiveMs > PRESENCE_REFRESH_INTERVAL_MS;
+
+    if (shouldRefreshPresence) {
+      try {
+        await updateDoc(userRef, {
+          isOnline: true,
+          lastActiveAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        return { ...existing, isOnline: true };
+      } catch {
+        // Ignore transient online presence update errors
+      }
     }
     return existing;
   }
 
-  const displayName = sanitizeString(
-    user.displayName || user.email?.split('@')[0] || 'Nexora Member',
-    BLUEPRINT_LIMITS.DISPLAY_NAME_MAX
-  );
+  const pendingUsername = readAndClearPendingUsername(user.uid);
+  const rawDisplayName =
+    sanitizeString(user.displayName || '', BLUEPRINT_LIMITS.DISPLAY_NAME_MAX) ||
+    sanitizeString(user.email?.split('@')[0] || '', BLUEPRINT_LIMITS.DISPLAY_NAME_MAX) ||
+    'Nexora Member';
+
   const username = await reserveUniqueUsername(
     user.uid,
-    preferredUsername || user.email?.split('@')[0] || displayName
+    preferredUsername || pendingUsername || user.email?.split('@')[0] || rawDisplayName
   );
+
+  const safeAvatarUrl =
+    user.photoURL && user.photoURL.trim().length > 0 && user.photoURL.trim().length <= AVATAR_URL_MAX_LEN
+      ? user.photoURL.trim()
+      : '/src/assets/images/avatar_creator_one_1795066815825.jpg';
 
   const now = serverTimestamp();
   const profilePayload = {
     uid: user.uid,
-    displayName,
+    displayName: rawDisplayName,
     username,
     bio: '',
-    avatarUrl: user.photoURL || '/src/assets/images/avatar_creator_one_1795066815825.jpg',
+    avatarUrl: safeAvatarUrl,
     coverUrl: '/src/assets/images/space_cover_code_1795066815138.jpg',
     coverPositionY: 50,
     website: '',
@@ -305,40 +434,83 @@ export async function updateUserProfileFields(
   const sanitized: Record<string, unknown> = { updatedAt: serverTimestamp() };
 
   if (updates.displayName !== undefined) {
-    sanitized.displayName = sanitizeString(updates.displayName, BLUEPRINT_LIMITS.DISPLAY_NAME_MAX);
+    const cleanDisplayName = sanitizeString(updates.displayName, BLUEPRINT_LIMITS.DISPLAY_NAME_MAX);
+    if (!cleanDisplayName) {
+      throw new Error('Display name cannot be empty.');
+    }
+    sanitized.displayName = cleanDisplayName;
   }
+
+  let usernameClaimToCreate: string | null = null;
+  let usernameClaimToDelete: string | null = null;
+
   if (updates.username !== undefined) {
     const nextUsername = normalizeUsername(updates.username);
     if (!isValidUsername(nextUsername)) {
       throw new Error('Username must be 3-30 lowercase alphanumeric or underscore characters.');
     }
-    if (nextUsername !== previousUsername) {
-      const available = await isUsernameAvailable(nextUsername, uid);
-      if (!available) throw new Error(`@${nextUsername} is already taken.`);
-      await setDoc(doc(db, 'usernames', nextUsername), {
-        uid,
-        createdAt: serverTimestamp(),
-      });
+    const cleanPrevious = previousUsername ? normalizeUsername(previousUsername) : undefined;
+    if (nextUsername !== cleanPrevious) {
+      const nextSnap = await getDoc(doc(db, 'usernames', nextUsername));
+      if (nextSnap.exists()) {
+        const ownerUid = (nextSnap.data() as { uid?: string }).uid;
+        if (ownerUid !== uid) {
+          throw new Error(`@${nextUsername} is already taken.`);
+        }
+      } else {
+        usernameClaimToCreate = nextUsername;
+      }
+
+      if (cleanPrevious) {
+        const prevSnap = await getDoc(doc(db, 'usernames', cleanPrevious));
+        if (prevSnap.exists() && (prevSnap.data() as { uid?: string }).uid === uid) {
+          usernameClaimToDelete = cleanPrevious;
+        }
+      }
     }
     sanitized.username = nextUsername;
   }
+
   if (updates.bio !== undefined) sanitized.bio = sanitizeString(updates.bio, BLUEPRINT_LIMITS.BIO_MAX);
-  if (updates.avatarUrl !== undefined) sanitized.avatarUrl = sanitizeString(updates.avatarUrl, 200000);
-  if (updates.coverUrl !== undefined) sanitized.coverUrl = sanitizeString(updates.coverUrl, 400000);
+  if (updates.avatarUrl !== undefined) {
+    const trimmedAvatar = updates.avatarUrl.trim();
+    if (trimmedAvatar.length > AVATAR_URL_MAX_LEN) {
+      throw new Error('Profile photo is too large after encoding. Please choose a smaller image.');
+    }
+    sanitized.avatarUrl = trimmedAvatar;
+  }
+  if (updates.coverUrl !== undefined) {
+    const trimmedCover = updates.coverUrl.trim();
+    if (trimmedCover.length > COVER_URL_MAX_LEN) {
+      throw new Error('Cover image is too large after encoding. Please choose a smaller image.');
+    }
+    sanitized.coverUrl = trimmedCover;
+  }
   if (updates.coverPositionY !== undefined) {
     sanitized.coverPositionY = Math.max(0, Math.min(100, Math.round(updates.coverPositionY)));
   }
   if (updates.website !== undefined) sanitized.website = sanitizeString(updates.website, BLUEPRINT_LIMITS.WEBSITE_MAX);
   if (updates.location !== undefined) sanitized.location = sanitizeString(updates.location, BLUEPRINT_LIMITS.LOCATION_MAX);
   if (updates.interests !== undefined) {
-    sanitized.interests = updates.interests.slice(0, BLUEPRINT_LIMITS.MAX_INTERESTS).map((s) => sanitizeString(s, 40));
+    sanitized.interests = updates.interests.slice(0, BLUEPRINT_LIMITS.MAX_INTERESTS).map((s) => sanitizeString(s, 40)).filter(Boolean);
   }
   if (updates.onboardingCompleted !== undefined) {
     sanitized.onboardingCompleted = Boolean(updates.onboardingCompleted);
   }
 
   try {
-    await updateDoc(doc(db, 'users', uid), sanitized);
+    const batch = writeBatch(db);
+    if (usernameClaimToCreate) {
+      batch.set(doc(db, 'usernames', usernameClaimToCreate), {
+        uid,
+        createdAt: serverTimestamp(),
+      });
+    }
+    if (usernameClaimToDelete) {
+      batch.delete(doc(db, 'usernames', usernameClaimToDelete));
+    }
+    batch.update(doc(db, 'users', uid), sanitized);
+    await batch.commit();
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
   }

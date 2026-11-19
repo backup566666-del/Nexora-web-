@@ -8,6 +8,7 @@ import {
   getDocs,
   limit,
   onSnapshot,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -220,7 +221,7 @@ export function subscribeVerifiedBadges(
   const q = query(
     collection(db, 'verified_badges'),
     where('badgeType', 'in', [...ALL_VALID_BADGE_VALUES]),
-    limit(250)
+    limit(1200)
   );
   return onSnapshot(
     q,
@@ -337,7 +338,8 @@ export function subscribeAllUsersAdmin(callback: (users: UserProfile[]) => void)
   const q = query(
     collection(db, 'users'),
     where('onboardingCompleted', 'in', [true, false]),
-    limit(250)
+    orderBy('createdAt', 'desc'),
+    limit(1000)
   );
   return onSnapshot(
     q,
@@ -1326,20 +1328,57 @@ export async function fetchRealPlatformAnalytics(): Promise<PlatformAnalyticsSna
   const oneDayAgo = nowMs - 24 * 60 * 60 * 1000;
   const sevenDaysAgo = nowMs - 7 * 24 * 60 * 60 * 1000;
 
-  const [usersSnap, postsSnap, vibesSnap, spacesSnap, reportsSnap, verifSnap] = await Promise.all([
-    getDocs(query(collection(db, 'users'), where('onboardingCompleted', 'in', [true, false]), limit(500))),
-    getDocs(query(collection(db, 'posts'), where('audience', 'in', ['public', 'followers', 'space']), limit(500))),
-    getDocs(query(collection(db, 'vibes'), where('viewsCount', '>=', 0), limit(500))),
-    getDocs(query(collection(db, 'spaces'), where('isPrivate', 'in', [false, true]), limit(300))),
+  const [
+    usersCountSnap,
+    postsCountSnap,
+    vibesCountSnap,
+    spacesCountSnap,
+    verifCountSnap,
+    usersSampleSnap,
+    postsSampleSnap,
+    vibesSampleSnap,
+    spacesSampleSnap,
+    reportsSampleSnap,
+  ] = await Promise.all([
+    getCountFromServer(query(collection(db, 'users'), where('onboardingCompleted', 'in', [true, false]))).catch(
+      () => null
+    ),
+    getCountFromServer(
+      query(collection(db, 'posts'), where('audience', 'in', ['public', 'followers', 'space']))
+    ).catch(() => null),
+    getCountFromServer(query(collection(db, 'vibes'), where('viewsCount', '>=', 0))).catch(() => null),
+    getCountFromServer(query(collection(db, 'spaces'), where('isPrivate', 'in', [false, true]))).catch(() => null),
+    getCountFromServer(query(collection(db, 'verification_requests'), where('status', '==', 'pending'))).catch(
+      () => null
+    ),
+    getDocs(
+      query(
+        collection(db, 'users'),
+        where('onboardingCompleted', 'in', [true, false]),
+        orderBy('createdAt', 'desc'),
+        limit(300)
+      )
+    ),
+    getDocs(
+      query(
+        collection(db, 'posts'),
+        where('audience', 'in', ['public', 'followers', 'space']),
+        orderBy('createdAt', 'desc'),
+        limit(200)
+      )
+    ),
+    getDocs(
+      query(collection(db, 'vibes'), where('viewsCount', '>=', 0), orderBy('createdAt', 'desc'), limit(200))
+    ),
+    getDocs(
+      query(collection(db, 'spaces'), where('isPrivate', 'in', [false, true]), orderBy('createdAt', 'desc'), limit(200))
+    ),
     getDocs(
       query(
         collection(db, 'reports'),
         where('targetType', 'in', ['post', 'user', 'space', 'vibe', 'gift', 'collab']),
-        limit(300)
+        limit(200)
       )
-    ),
-    getCountFromServer(query(collection(db, 'verification_requests'), where('status', '==', 'pending'))).catch(
-      () => null
     ),
   ]);
 
@@ -1349,7 +1388,7 @@ export async function fetchRealPlatformAnalytics(): Promise<PlatformAnalyticsSna
   let registrations24h = 0;
   let registrations7d = 0;
 
-  usersSnap.docs.forEach((d) => {
+  usersSampleSnap.docs.forEach((d) => {
     const u = d.data() as UserProfile;
     if (u.isOnline) onlineUsers++;
     if (u.suspended) suspendedUsers++;
@@ -1360,14 +1399,14 @@ export async function fetchRealPlatformAnalytics(): Promise<PlatformAnalyticsSna
   });
 
   let totalEngagement = 0;
-  postsSnap.docs.forEach((d) => {
+  postsSampleSnap.docs.forEach((d) => {
     const p = d.data();
     totalEngagement +=
       (p.likesCount || 0) + (p.commentsCount || 0) + (p.repostsCount || 0) + (p.savesCount || 0);
   });
 
   let totalVibeViews = 0;
-  vibesSnap.docs.forEach((d) => {
+  vibesSampleSnap.docs.forEach((d) => {
     const v = d.data();
     totalVibeViews += v.viewsCount || 0;
     totalEngagement +=
@@ -1377,35 +1416,35 @@ export async function fetchRealPlatformAnalytics(): Promise<PlatformAnalyticsSna
   let activeSpaces = 0;
   let pendingSpaces = 0;
   let suspendedSpaces = 0;
-  spacesSnap.docs.forEach((d) => {
+  spacesSampleSnap.docs.forEach((d) => {
     const s = d.data() as Space;
     if (s.status === 'suspended') suspendedSpaces++;
     else if (s.status === 'pending') pendingSpaces++;
     else activeSpaces++;
   });
 
-  const openReports = reportsSnap.docs.filter((d) => {
+  const openReports = reportsSampleSnap.docs.filter((d) => {
     const r = d.data() as ModerationReport;
     return !r.status || r.status === 'open';
   }).length;
 
   return {
-    totalUsers: usersSnap.size,
+    totalUsers: usersCountSnap?.data().count ?? usersSampleSnap.size,
     onlineUsers,
     suspendedUsers,
     verifiedUsers,
     registrations24h,
     registrations7d,
-    totalPosts: postsSnap.size,
+    totalPosts: postsCountSnap?.data().count ?? postsSampleSnap.size,
     totalEngagement,
-    totalVibes: vibesSnap.size,
+    totalVibes: vibesCountSnap?.data().count ?? vibesSampleSnap.size,
     totalVibeViews,
-    totalSpaces: spacesSnap.size,
+    totalSpaces: spacesCountSnap?.data().count ?? spacesSampleSnap.size,
     activeSpaces,
     pendingSpaces,
     suspendedSpaces,
     openReports,
-    pendingVerifications: verifSnap?.data().count ?? 0,
+    pendingVerifications: verifCountSnap?.data().count ?? 0,
     computedAt: new Date(),
   };
 }

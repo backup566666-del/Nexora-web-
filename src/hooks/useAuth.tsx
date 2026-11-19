@@ -3,6 +3,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '../services/firebase/config';
 import {
   ensureUserDocuments,
+  ensureVerifiedTokenClaims,
   getUserPrivate,
   getUserProfile,
 } from '../services/auth/authService';
@@ -13,6 +14,7 @@ import {
   subscribePlatformConfig,
   subscribeVerifiedBadges,
 } from '../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../services/firebase/errorHandler';
 import { seedInitialSpacesIfEmpty } from '../services/firebase/socialService';
 import {
   PlatformAnnouncement,
@@ -41,9 +43,12 @@ interface AuthContextValue {
   announcements: PlatformAnnouncement[];
   loading: boolean;
   authReady: boolean;
+  emailVerified: boolean;
+  profileError: string | null;
   getBadgeVariant: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType | null;
   getUserBadges: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType[];
   refreshUserAndProfile: () => Promise<void>;
+  retryProfileLoad: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -56,13 +61,17 @@ const AuthContext = createContext<AuthContextValue>({
   announcements: [],
   loading: true,
   authReady: false,
+  emailVerified: false,
+  profileError: null,
   getBadgeVariant: () => null,
   getUserBadges: () => [],
   refreshUserAndProfile: async () => {},
+  retryProfileLoad: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [emailVerified, setEmailVerified] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [privateInfo, setPrivateInfo] = useState<UserPrivate | null>(null);
   const [myRole, setMyRole] = useState<PlatformRole | null>(null);
@@ -71,14 +80,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [announcements, setAnnouncements] = useState<PlatformAnnouncement[]>([]);
   const [loading, setLoading] = useState(true);
   const [authReady, setAuthReady] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
 
-  const loadProfileForUser = useCallback(async (firebaseUser: User | null) => {
+  const loadProfileForUser = useCallback(async (firebaseUser: User | null, forceTokenRefresh = false) => {
+    setProfileError(null);
+
     if (!firebaseUser) {
+      setEmailVerified(false);
       setProfile(null);
       setPrivateInfo(null);
       setMyRole(null);
       return;
     }
+
+    setEmailVerified(Boolean(firebaseUser.emailVerified));
 
     if (!firebaseUser.emailVerified) {
       setProfile(null);
@@ -87,50 +102,75 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const ensured = await ensureUserDocuments(firebaseUser);
-    const [freshProfile, freshPrivate] = await Promise.all([
-      getUserProfile(firebaseUser.uid),
-      getUserPrivate(firebaseUser.uid),
-    ]);
-    let finalProfile = freshProfile || ensured;
+    try {
+      await ensureVerifiedTokenClaims(firebaseUser, forceTokenRefresh);
+      let finalProfile = await ensureUserDocuments(firebaseUser);
+      const freshPrivate = await getUserPrivate(firebaseUser.uid);
 
-    if ((firebaseUser.email || '').toLowerCase() === FOUNDER_OWNER_EMAIL.toLowerCase()) {
-      await bootstrapFounderGovernance(firebaseUser, finalProfile);
-      const updated = await getUserProfile(firebaseUser.uid);
-      if (updated) finalProfile = updated;
-    }
+      if ((firebaseUser.email || '').toLowerCase() === FOUNDER_OWNER_EMAIL.toLowerCase()) {
+        await bootstrapFounderGovernance(firebaseUser, finalProfile);
+        const updated = await getUserProfile(firebaseUser.uid);
+        if (updated) finalProfile = updated;
+      }
 
-    setProfile(finalProfile);
-    setPrivateInfo(
-      freshPrivate
-        ? {
-            ...freshPrivate,
-            privacySettings: withPrivacyDefaults(freshPrivate.privacySettings),
-          }
-        : null
-    );
-    if (finalProfile.onboardingCompleted && !finalProfile.suspended) {
-      void seedInitialSpacesIfEmpty(finalProfile);
+      setProfile(finalProfile);
+      setPrivateInfo(
+        freshPrivate
+          ? {
+              ...freshPrivate,
+              privacySettings: withPrivacyDefaults(freshPrivate.privacySettings),
+            }
+          : null
+      );
+      if (finalProfile.onboardingCompleted && !finalProfile.suspended) {
+        void seedInitialSpacesIfEmpty(finalProfile);
+      }
+    } catch (err) {
+      const readable = extractReadableErrorMessage(
+        err,
+        'Unable to synchronize your Nexora profile.'
+      );
+      setProfileError(readable);
+      throw err;
     }
   }, []);
 
   const refreshUserAndProfile = useCallback(async () => {
     if (!auth.currentUser) {
       setUser(null);
+      setEmailVerified(false);
       setProfile(null);
       setPrivateInfo(null);
       setMyRole(null);
+      setProfileError(null);
       return;
     }
     await auth.currentUser.reload();
+    if (auth.currentUser.emailVerified) {
+      await auth.currentUser.getIdToken(true);
+    }
     const updatedUser = auth.currentUser;
     setUser(updatedUser);
-    await loadProfileForUser(updatedUser);
+    setEmailVerified(Boolean(updatedUser.emailVerified));
+    await loadProfileForUser(updatedUser, Boolean(updatedUser.emailVerified));
   }, [loadProfileForUser]);
+
+  const retryProfileLoad = useCallback(async () => {
+    setLoading(true);
+    try {
+      await refreshUserAndProfile();
+    } catch {
+      // profileError state is populated by loadProfileForUser
+    } finally {
+      setLoading(false);
+      setAuthReady(true);
+    }
+  }, [refreshUserAndProfile]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
+      setEmailVerified(Boolean(firebaseUser?.emailVerified));
       try {
         await loadProfileForUser(firebaseUser);
       } catch (err) {
@@ -148,9 +188,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return subscribePlatformConfig(setPlatformConfig);
   }, []);
 
-  // Subscribe to RBAC role, trusted badges, and announcements when signed in & verified
+  // Subscribe to RBAC role, trusted badges, and announcements when signed in, verified, and profile synced
   useEffect(() => {
-    if (!authReady || !user || !user.emailVerified) {
+    if (!authReady || !user || !emailVerified || !profile?.uid) {
       setMyRole(null);
       setBadgesMap({});
       setAnnouncements([]);
@@ -164,7 +204,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       u2();
       u3();
     };
-  }, [authReady, user?.uid, user?.emailVerified]);
+  }, [authReady, user?.uid, emailVerified, profile?.uid]);
 
   const getUserBadges = useCallback(
     (uid?: string | null, fallbackVerified?: boolean): VerifiedBadgeType[] => {
@@ -176,7 +216,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       if (
         uid === user?.uid &&
-        user?.emailVerified &&
+        emailVerified &&
         (user.email || '').toLowerCase() === FOUNDER_OWNER_EMAIL.toLowerCase()
       ) {
         return ['founder', 'verified_identity'];
@@ -184,7 +224,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (fallbackVerified) return ['verified_identity'];
       return [];
     },
-    [badgesMap, user?.uid, user?.emailVerified, user?.email]
+    [badgesMap, user?.uid, emailVerified, user?.email]
   );
 
   const getBadgeVariant = useCallback(
@@ -207,9 +247,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         announcements,
         loading,
         authReady,
+        emailVerified,
+        profileError,
         getBadgeVariant,
         getUserBadges,
         refreshUserAndProfile,
+        retryProfileLoad,
       }}
     >
       {children}

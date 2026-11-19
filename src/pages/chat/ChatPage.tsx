@@ -34,6 +34,7 @@ import {
   editChatMessage,
   forwardChatMessage,
   markConversationRead,
+  searchDirectoryUsers,
   sendChatMessage,
   setConversationTyping,
   subscribeConversations,
@@ -93,6 +94,8 @@ export function ChatPage({ users, stories, initialConvId }: ChatPageProps) {
   const [showNewChat, setShowNewChat] = useState(false);
   const [groupMode, setGroupMode] = useState(false);
   const [groupTitle, setGroupTitle] = useState('');
+  const [memberSearch, setMemberSearch] = useState('');
+  const [remoteMemberUsers, setRemoteMemberUsers] = useState<UserProfile[]>([]);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
 
   const [callState, setCallState] = useState<'idle' | 'audio' | 'video'>('idle');
@@ -149,10 +152,41 @@ export function ChatPage({ users, stories, initialConvId }: ChatPageProps) {
     return () => clearInterval(interval);
   }, [callState]);
 
+  useEffect(() => {
+    const clean = memberSearch.trim();
+    if (!showNewChat || clean.length < 2) {
+      setRemoteMemberUsers([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const found = await searchDirectoryUsers(clean, 15).catch(() => []);
+      if (!cancelled) setRemoteMemberUsers(found);
+    }, 240);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [memberSearch, showNewChat]);
+
   if (!profile) return null;
 
   const activeConv = conversations.find((c) => c.id === selectedConvId) || null;
-  const otherUsers = users.filter((u) => u.uid !== profile.uid);
+  const allKnownUsersMap = new Map<string, UserProfile>();
+  users.forEach((u) => allKnownUsersMap.set(u.uid, u));
+  remoteMemberUsers.forEach((u) => {
+    if (!allKnownUsersMap.has(u.uid)) allKnownUsersMap.set(u.uid, u);
+  });
+  const memberTerm = memberSearch.trim().toLowerCase();
+  const otherUsers = Array.from(allKnownUsersMap.values())
+    .filter((u) => u.uid !== profile.uid && !u.suspended)
+    .filter(
+      (u) =>
+        !memberTerm ||
+        u.displayName.toLowerCase().includes(memberTerm) ||
+        u.username.toLowerCase().includes(memberTerm)
+    );
+  const allSelectableUsers = Array.from(allKnownUsersMap.values()).filter((u) => u.uid !== profile.uid);
 
   const getConvTitle = (c: Conversation) => {
     if (c.isGroup) return c.title || 'Group Conversation';
@@ -375,11 +409,11 @@ export function ChatPage({ users, stories, initialConvId }: ChatPageProps) {
     setChatError('');
     try {
       if (groupMode) {
-        const members = otherUsers.filter((u) => selectedMemberIds.includes(u.uid));
+        const members = allSelectableUsers.filter((u) => selectedMemberIds.includes(u.uid));
         const convId = await createGroupConversation(profile, groupTitle, members);
         setSelectedConvId(convId);
       } else if (selectedMemberIds[0]) {
-        const target = otherUsers.find((u) => u.uid === selectedMemberIds[0]);
+        const target = allSelectableUsers.find((u) => u.uid === selectedMemberIds[0]);
         if (target) {
           const convId = await createOrGetDirectConversation(profile, target);
           setSelectedConvId(convId);
@@ -388,6 +422,7 @@ export function ChatPage({ users, stories, initialConvId }: ChatPageProps) {
       setShowNewChat(false);
       setSelectedMemberIds([]);
       setGroupTitle('');
+      setMemberSearch('');
     } catch (err) {
       setChatError(err instanceof Error ? err.message : 'Could not start conversation.');
     }
@@ -1212,6 +1247,14 @@ export function ChatPage({ users, stories, initialConvId }: ChatPageProps) {
                 className="w-full px-3.5 py-2.5 rounded-xl bg-[#06060A] border border-white/10 text-xs text-white outline-none"
               />
             )}
+
+            <input
+              type="text"
+              value={memberSearch}
+              onChange={(e) => setMemberSearch(e.target.value)}
+              placeholder="Search members by name or @username..."
+              className="w-full px-3.5 py-2 rounded-xl bg-[#06060A] border border-white/10 focus:border-[#8B5CF6] text-xs text-white outline-none"
+            />
 
             <div className="max-h-56 overflow-y-auto space-y-1.5">
               {otherUsers.length === 0 ? (

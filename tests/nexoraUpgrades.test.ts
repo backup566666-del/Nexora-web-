@@ -6,14 +6,21 @@ import {
   BADGE_CATALOG,
   DEFAULT_BADGE_CONFIGS,
   FREE_GIFT_CATALOG,
+  isValidUsername,
   normalizeBadgeList,
   normalizeBadgeType,
+  normalizeUsername,
+  sanitizeString,
   withPrivacyDefaults,
 } from '../src/utils/validation';
 import {
   inferCategoryFromNotificationType,
   shouldAllowDedupeKey,
 } from '../src/services/notifications/notificationDispatcher';
+import { extractReadableErrorMessage } from '../src/services/firebase/errorHandler';
+import { resolveInlineCompressionLimits } from '../src/services/storage/mediaUploadService';
+import { mapAuthErrorMessage } from '../src/services/auth/authService';
+import firebaseConfig from '../firebase-applet-config.json';
 import { getEmailProviderConfig, buildNexoraEmailHtml, dispatchNexoraEmail } from '../server';
 
 test('20 canonical badges exist with complete metadata and legacy alias normalization', () => {
@@ -146,4 +153,77 @@ test('server email dispatch reports not_configured honestly when provider env va
     if (prevUser !== undefined) process.env.SMTP_USER = prevUser;
     if (prevPass !== undefined) process.env.SMTP_PASS = prevPass;
   }
+});
+
+test('extractReadableErrorMessage converts structured Firestore permission JSON into clear UI copy', () => {
+  const unverifiedJson = JSON.stringify({
+    error: '7 PERMISSION_DENIED: Missing or insufficient permissions.',
+    operationType: 'write',
+    path: 'users/test_uid',
+    authInfo: { userId: 'test_uid', emailVerified: false },
+  });
+  const readable = extractReadableErrorMessage(new Error(unverifiedJson));
+  assert.equal(readable.includes('{'), false);
+  assert.ok(readable.toLowerCase().includes('email verification'));
+
+  const genericPermission = extractReadableErrorMessage(
+    new Error(
+      JSON.stringify({
+        error: 'PERMISSION_DENIED: Missing or insufficient permissions.',
+        operationType: 'update',
+        path: 'users/test_uid',
+        authInfo: { userId: 'test_uid', emailVerified: true },
+      })
+    )
+  );
+  assert.equal(genericPermission.includes('{'), false);
+  assert.ok(genericPermission.toLowerCase().includes('permission denied'));
+});
+
+test('inline compression limits guarantee avatars, covers, posts, and stories fit Firestore rule caps', () => {
+  const avatarLimits = resolveInlineCompressionLimits('users/uid1/avatar');
+  assert.ok(avatarLimits.maxBytes <= 150_000);
+  assert.ok(avatarLimits.maxBytes < 200_000); // firestore.rules avatarUrl cap
+
+  const coverLimits = resolveInlineCompressionLimits('users/uid1/cover');
+  assert.ok(coverLimits.maxBytes <= 300_000);
+  assert.ok(coverLimits.maxBytes < 400_000); // firestore.rules coverUrl cap
+
+  const postLimits = resolveInlineCompressionLimits('posts/uid1');
+  assert.ok(postLimits.maxBytes * 4 <= 780_000); // 4-image post stays under 1 MiB doc limit
+
+  const storyLimits = resolveInlineCompressionLimits('stories/uid1');
+  assert.ok(storyLimits.maxBytes < 400_000); // firestore.rules story.mediaUrl cap
+});
+
+test('username normalization and display name sanitization satisfy Firestore rules regex and bounds', () => {
+  assert.equal(normalizeUsername('@Test.User-99 '), 'test_user_99');
+  assert.equal(isValidUsername(normalizeUsername('Elena_Vance01')), true);
+  assert.equal(isValidUsername('ab'), false);
+  assert.equal(sanitizeString('   ', 80), '');
+});
+
+test('mapAuthErrorMessage clearly surfaces Google OAuth, popup, and domain authorization errors', () => {
+  const unauthDomain = mapAuthErrorMessage({ code: 'auth/unauthorized-domain' });
+  assert.ok(unauthDomain.toLowerCase().includes('authorized domains'));
+
+  const popupBlocked = mapAuthErrorMessage({ code: 'auth/popup-blocked' });
+  assert.ok(popupBlocked.toLowerCase().includes('popup'));
+
+  const diffCred = mapAuthErrorMessage({ code: 'auth/account-exists-with-different-credential' });
+  assert.ok(diffCred.toLowerCase().includes('different sign-in method'));
+
+  const cancelled = mapAuthErrorMessage({ code: 'auth/cancelled-popup-request' });
+  assert.ok(cancelled.toLowerCase().includes('superseded'));
+});
+
+test('existing Firebase project configuration and OAuth client remain preserved verbatim', () => {
+  assert.equal(firebaseConfig.projectId, 'gen-lang-client-0024648348');
+  assert.equal(firebaseConfig.firestoreDatabaseId, 'ai-studio-bf321206-bfed-4f87-947f-b3aa40868ffd');
+  assert.equal(firebaseConfig.authDomain, 'gen-lang-client-0024648348.firebaseapp.com');
+  assert.equal(firebaseConfig.storageBucket, 'gen-lang-client-0024648348.firebasestorage.app');
+  assert.equal(
+    firebaseConfig.oAuthClientId,
+    '894494849299-hle9jspcklpl49ar5jbbln1uc5nlu522.apps.googleusercontent.com'
+  );
 });

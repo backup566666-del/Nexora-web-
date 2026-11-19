@@ -38,6 +38,7 @@ import {
   subscribeUserGifts,
   toggleFollowUser,
 } from '../../services/firebase/socialService';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
 import { GiftTransaction, Post, Space, UserProfile, Vibe } from '../../types/nexora';
 import { formatCompactCount, formatRelativeTime, isValidUsername, normalizeUsername } from '../../utils/validation';
@@ -276,7 +277,7 @@ export function ProfilePage({
       setAvatarLoadError(false);
       await refreshUserAndProfile();
     } catch (err) {
-      setShareToast(err instanceof Error ? err.message : 'Unable to upload profile photo.');
+      setShareToast(extractReadableErrorMessage(err, 'Unable to upload profile photo.'));
       setTimeout(() => setShareToast(''), 3000);
     } finally {
       setUploadingQuickAvatar(false);
@@ -291,7 +292,7 @@ export function ProfilePage({
       const res = await uploadMediaAsset(file, `users/${currentUser.uid}/avatar`, ['image']);
       setEditAvatar(res.url);
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Unable to upload profile photo.');
+      setEditError(extractReadableErrorMessage(err, 'Unable to upload profile photo.'));
     } finally {
       e.target.value = '';
     }
@@ -343,7 +344,7 @@ export function ProfilePage({
       await refreshUserAndProfile();
       setShowEditProfile(false);
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Unable to save profile updates.');
+      setEditError(extractReadableErrorMessage(err, 'Unable to save profile updates.'));
     } finally {
       setSavingEdit(false);
     }

@@ -1021,11 +1021,11 @@ service cloud.firestore {
 
       match /private/{docId} {
         allow get: if isValidId(userId) && isValidId(docId) && isOwner(userId);
-        allow create: if isValidId(userId) && isValidId(docId) && isOwner(userId)
+        allow create: if isValidId(userId) && isValidId(docId) && isVerified() && isOwner(userId)
           && isValidUserPrivate(incoming())
           && incoming().uid == userId
           && incoming().updatedAt == request.time;
-        allow update: if isValidId(userId) && isValidId(docId) && isOwner(userId)
+        allow update: if isValidId(userId) && isValidId(docId) && isVerified() && isOwner(userId)
           && isValidUserPrivate(incoming())
           && incoming().uid == existing().uid
           && incoming().updatedAt == request.time
@@ -1067,6 +1067,11 @@ service cloud.firestore {
       allow get: if isValidId(username);
       allow create: if isValidId(username) && isVerified()
         && isValidUsernameClaim(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(username) && isVerified()
+        && isValidUsernameClaim(incoming())
+        && existing().uid == request.auth.uid
         && incoming().uid == request.auth.uid
         && incoming().createdAt == request.time;
       allow delete: if isValidId(username) && isVerified() && existing().uid == request.auth.uid;

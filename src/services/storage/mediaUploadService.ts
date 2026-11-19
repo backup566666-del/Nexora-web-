@@ -1,5 +1,10 @@
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage';
 import { storage } from '../firebase/config';
+
+if (typeof storage === 'object' && storage !== null) {
+  storage.maxUploadRetryTime = 3500;
+  storage.maxOperationRetryTime = 3500;
+}
 
 export type MediaCategory = 'image' | 'video' | 'audio' | 'document';
 
@@ -39,33 +44,90 @@ export function validateMediaFile(file: File, expected?: MediaCategory[]): Media
   return category;
 }
 
+export interface InlineCompressionLimits {
+  maxWidth: number;
+  quality: number;
+  maxBytes: number;
+}
+
+const STORAGE_PROBE_BACKOFF_MS = 10 * 60 * 1000;
+const INLINE_BINARY_MAX_BYTES = 260_000; // <= ~350 KB base64, safely under 400 KB rule caps
+let storageProbeBlockedUntil = 0;
+
+export function resolveInlineCompressionLimits(folderPath: string): InlineCompressionLimits {
+  if (folderPath.includes('/avatar')) {
+    return { maxWidth: 512, quality: 0.8, maxBytes: 150_000 };
+  }
+  if (folderPath.includes('/cover')) {
+    return { maxWidth: 1280, quality: 0.78, maxBytes: 300_000 };
+  }
+  if (folderPath.startsWith('posts/')) {
+    return { maxWidth: 1080, quality: 0.76, maxBytes: 185_000 };
+  }
+  if (folderPath.startsWith('stories/')) {
+    return { maxWidth: 1080, quality: 0.78, maxBytes: 280_000 };
+  }
+  return { maxWidth: 1080, quality: 0.78, maxBytes: 200_000 };
+}
+
+function encodeCanvasBestFormat(canvas: HTMLCanvasElement, quality: number): string {
+  const webp = canvas.toDataURL('image/webp', quality);
+  if (webp.startsWith('data:image/webp')) {
+    return webp;
+  }
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
 export async function compressImageToDataUrl(
   file: Blob,
   maxWidth = 1080,
   quality = 0.78,
-  maxBytes = 240_000
+  maxBytes = 200_000
 ): Promise<string> {
   const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, maxWidth / Math.max(1, bitmap.width));
-  const width = Math.max(1, Math.round(bitmap.width * scale));
-  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const initialScale = Math.min(1, maxWidth / Math.max(1, bitmap.width));
+  let width = Math.max(1, Math.round(bitmap.width * initialScale));
+  let height = Math.max(1, Math.round(bitmap.height * initialScale));
 
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
   const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Canvas compression is unavailable.');
-  ctx.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-
-  let currentQuality = quality;
-  let dataUrl = canvas.toDataURL('image/webp', currentQuality);
-  if (!dataUrl.startsWith('data:image/webp')) {
-    dataUrl = canvas.toDataURL('image/jpeg', currentQuality);
+  if (!ctx) {
+    bitmap.close();
+    throw new Error('Canvas compression is unavailable.');
   }
-  while (dataUrl.length > maxBytes && currentQuality > 0.35) {
-    currentQuality -= 0.1;
-    dataUrl = canvas.toDataURL('image/jpeg', currentQuality);
+
+  let dataUrl = '';
+  try {
+    for (let pass = 0; pass < 5; pass++) {
+      canvas.width = width;
+      canvas.height = height;
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(bitmap, 0, 0, width, height);
+
+      let currentQuality = quality;
+      dataUrl = encodeCanvasBestFormat(canvas, currentQuality);
+      while (dataUrl.length > maxBytes && currentQuality > 0.42) {
+        currentQuality = Math.max(0.4, currentQuality - 0.1);
+        dataUrl = canvas.toDataURL('image/jpeg', currentQuality);
+      }
+
+      if (dataUrl.length <= maxBytes) {
+        return dataUrl;
+      }
+
+      // Downscale dimensions if quality reduction alone wasn't enough for complex/noisy images
+      const nextWidth = Math.max(160, Math.round(width * 0.74));
+      const nextHeight = Math.max(160, Math.round(height * 0.74));
+      if (nextWidth === width && nextHeight === height) break;
+      width = nextWidth;
+      height = nextHeight;
+    }
+  } finally {
+    bitmap.close();
+  }
+
+  if (dataUrl.length > maxBytes) {
+    throw new Error('Image remains too large after compression. Please select a smaller or simpler image.');
   }
   return dataUrl;
 }
@@ -114,17 +176,64 @@ async function tryFirebaseStorageUpload(
   file: Blob,
   contentType: string
 ): Promise<string | null> {
+  if (Date.now() < storageProbeBlockedUntil) {
+    return null;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let uploadTask: ReturnType<typeof uploadBytesResumable> | undefined;
   try {
     const storageRef = ref(storage, storagePath);
-    const uploadPromise = uploadBytes(storageRef, file, { contentType }).then((snap) =>
-      getDownloadURL(snap.ref)
-    );
-    const timeoutPromise = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), 5000)
-    );
-    return await Promise.race([uploadPromise, timeoutPromise]);
-  } catch {
+    uploadTask = uploadBytesResumable(storageRef, file, { contentType });
+    const uploadPromise = new Promise<string>((resolve, reject) => {
+      uploadTask!.on(
+        'state_changed',
+        undefined,
+        (error) => reject(error),
+        async () => {
+          try {
+            const url = await getDownloadURL(uploadTask!.snapshot.ref);
+            resolve(url);
+          } catch (err) {
+            reject(err);
+          }
+        }
+      );
+    });
+    const timeoutPromise = new Promise<'TIMEOUT'>((resolve) => {
+      timer = setTimeout(() => {
+        try {
+          uploadTask?.cancel();
+        } catch {
+          // Ignore cancellation errors on aborted upload
+        }
+        resolve('TIMEOUT');
+      }, 4000);
+    });
+    const result = await Promise.race([uploadPromise, timeoutPromise]);
+    if (result === 'TIMEOUT') {
+      storageProbeBlockedUntil = Date.now() + STORAGE_PROBE_BACKOFF_MS;
+      return null;
+    }
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+    const code = (err as { code?: string })?.code ?? '';
+    if (
+      code === 'storage/bucket-not-found' ||
+      code === 'storage/project-not-found' ||
+      code === 'storage/unauthorized' ||
+      code === 'storage/retry-limit-exceeded' ||
+      code === 'storage/canceled' ||
+      msg.includes('404') ||
+      msg.includes('not found') ||
+      msg.includes('cors')
+    ) {
+      storageProbeBlockedUntil = Date.now() + STORAGE_PROBE_BACKOFF_MS;
+    }
     return null;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -147,9 +256,15 @@ export async function uploadMediaAsset(
     };
   }
 
-  // Fallback when Firebase Storage bucket CORS/rules are not yet enabled in Console
+  // Bounded inline fallback when Firebase Storage bucket is not yet provisioned in Console
   if (category === 'image') {
-    const dataUrl = await compressImageToDataUrl(file);
+    const limits = resolveInlineCompressionLimits(folderPath);
+    const dataUrl = await compressImageToDataUrl(
+      file,
+      limits.maxWidth,
+      limits.quality,
+      limits.maxBytes
+    );
     return {
       url: dataUrl,
       category,
@@ -158,7 +273,7 @@ export async function uploadMediaAsset(
     };
   }
 
-  if (file.size <= 350_000) {
+  if (file.size <= INLINE_BINARY_MAX_BYTES) {
     const dataUrl = await blobToDataUrl(file);
     return {
       url: dataUrl,
@@ -195,7 +310,23 @@ export async function uploadBlobAsset(
     };
   }
 
-  if (blob.size <= 350_000) {
+  if (category === 'image') {
+    const limits = resolveInlineCompressionLimits(folderPath);
+    const dataUrl = await compressImageToDataUrl(
+      blob,
+      limits.maxWidth,
+      limits.quality,
+      limits.maxBytes
+    );
+    return {
+      url: dataUrl,
+      category,
+      fileName: safeName,
+      storageBacked: false,
+    };
+  }
+
+  if (blob.size <= INLINE_BINARY_MAX_BYTES) {
     const dataUrl = await blobToDataUrl(blob);
     return {
       url: dataUrl,
@@ -206,6 +337,6 @@ export async function uploadBlobAsset(
   }
 
   throw new Error(
-    'Recording exceeds 350 KB inline fallback limit. Enable Firebase Storage in your Firebase Console for multi-megabyte media.'
+    'Recording exceeds 260 KB inline fallback limit. Enable Firebase Storage in your Firebase Console for multi-megabyte media.'
   );
 }

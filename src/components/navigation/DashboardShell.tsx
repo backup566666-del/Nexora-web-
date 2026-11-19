@@ -29,6 +29,7 @@ import { logoutUser } from '../../services/auth/authService';
 import {
   markAllNotificationsRead,
   markNotificationRead,
+  searchDirectoryUsers,
   toggleFollowUser,
 } from '../../services/firebase/socialService';
 import {
@@ -132,12 +133,30 @@ export function DashboardShell({
   const phaseTimerRef = useRef<number | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [remoteSearchUsers, setRemoteSearchUsers] = useState<UserProfile[]>([]);
   const [searchFocused, setSearchFocused] = useState(false);
   const [showNotifs, setShowNotifs] = useState(false);
   const [notifFilter, setNotifFilter] = useState<'all' | 'unread' | NotificationCategory>('all');
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [followedUids, setFollowedUids] = useState<Record<string, boolean>>({});
   const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    const clean = searchQuery.trim();
+    if (clean.length < 2) {
+      setRemoteSearchUsers([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const results = await searchDirectoryUsers(clean, 8).catch(() => []);
+      if (!cancelled) setRemoteSearchUsers(results);
+    }, 240);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery]);
 
   useEffect(() => {
     if (activeSection === 'vibes' || activeSection === 'chat') {
@@ -213,14 +232,18 @@ export function DashboardShell({
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return { users: [], spaces: [], posts: [] };
+    const localMatches = users.filter(
+      (u) =>
+        u.displayName.toLowerCase().includes(q) ||
+        u.username.toLowerCase().includes(q)
+    );
+    const mergedUsersMap = new Map<string, UserProfile>();
+    localMatches.forEach((u) => mergedUsersMap.set(u.uid, u));
+    remoteSearchUsers.forEach((u) => {
+      if (!mergedUsersMap.has(u.uid)) mergedUsersMap.set(u.uid, u);
+    });
     return {
-      users: users
-        .filter(
-          (u) =>
-            u.displayName.toLowerCase().includes(q) ||
-            u.username.toLowerCase().includes(q)
-        )
-        .slice(0, 4),
+      users: Array.from(mergedUsersMap.values()).slice(0, 5),
       spaces: spaces
         .filter(
           (s) =>
@@ -232,7 +255,7 @@ export function DashboardShell({
         .filter((p) => p.text.toLowerCase().includes(q))
         .slice(0, 3),
     };
-  }, [searchQuery, users, spaces, posts]);
+  }, [searchQuery, users, remoteSearchUsers, spaces, posts]);
 
   const isActiveStaff = Boolean(myRole && myRole.active);
   const visibleNavItems = useMemo(() => {

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Ban, LogOut, Wrench } from 'lucide-react';
+import { AlertTriangle, Ban, LogOut, RefreshCw, Wrench } from 'lucide-react';
 import { BadgeModalProvider } from './components/badges/BadgeContext';
 import { BadgeInfoModal } from './components/badges/BadgeInfoModal';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -19,6 +19,7 @@ import { SpacesPage } from './pages/spaces/SpacesPage';
 import { VibesPage } from './pages/vibes/VibesPage';
 import { logoutUser } from './services/auth/authService';
 import {
+  getUserByUsername,
   subscribeDirectoryUsers,
   subscribeFeedPosts,
   subscribeNotifications,
@@ -40,7 +41,17 @@ import {
 type ProfileContentTab = 'posts' | 'videos' | 'photos' | 'tagged' | 'collabs' | 'gifts' | 'spaces' | 'saved';
 
 function NexoraAppContent() {
-  const { user, profile, myRole, platformConfig, loading, authReady } = useAuth();
+  const {
+    user,
+    profile,
+    myRole,
+    platformConfig,
+    loading,
+    authReady,
+    emailVerified,
+    profileError,
+    retryProfileLoad,
+  } = useAuth();
   const [authScreenMode, setAuthScreenMode] = useState<'landing' | 'login' | 'register'>('landing');
   const [activeSection, setActiveSection] = useState<NavSection>('home');
   const [openAdminSettings, setOpenAdminSettings] = useState(false);
@@ -49,7 +60,7 @@ function NexoraAppContent() {
   const [targetSpaceId, setTargetSpaceId] = useState<string | null>(null);
   const [targetConvId, setTargetConvId] = useState<string | null>(null);
 
-  // Real-time Firestore state (attached ONLY when auth is ready & user verified)
+  // Real-time Firestore state (attached ONLY when auth is ready, email verified & profile synced)
   const [posts, setPosts] = useState<Post[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [vibes, setVibes] = useState<Vibe[]>([]);
@@ -60,7 +71,7 @@ function NexoraAppContent() {
   const [deepLinkHandled, setDeepLinkHandled] = useState(false);
 
   useEffect(() => {
-    if (!authReady || !user || !user.emailVerified) return;
+    if (!authReady || !user || !emailVerified || !profile?.uid) return;
 
     const u1 = subscribeFeedPosts(setPosts);
     const u2 = subscribeStories(setStories);
@@ -79,24 +90,35 @@ function NexoraAppContent() {
       u6();
       u7();
     };
-  }, [authReady, user?.uid, user?.emailVerified]);
+  }, [authReady, user?.uid, emailVerified, profile?.uid]);
 
   useEffect(() => {
-    if (deepLinkHandled || !profile?.onboardingCompleted || users.length === 0) return;
+    if (deepLinkHandled || !profile?.onboardingCompleted) return;
     const params = new URLSearchParams(window.location.search);
     const sharedUsername = params.get('u')?.trim().toLowerCase();
     if (!sharedUsername) {
       setDeepLinkHandled(true);
       return;
     }
-    const matched = users.find((u) => u.username.toLowerCase() === sharedUsername);
-    if (matched) {
-      setTargetProfileUid(matched.uid === profile.uid ? null : matched.uid);
-      setTargetProfileTab(undefined);
-      setActiveSection('profile');
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-    setDeepLinkHandled(true);
+
+    let cancelled = false;
+    const resolveDeepLink = async () => {
+      const localMatch = users.find((u) => u.username.toLowerCase() === sharedUsername);
+      const matched = localMatch || (await getUserByUsername(sharedUsername));
+      if (cancelled) return;
+      if (matched) {
+        setTargetProfileUid(matched.uid === profile.uid ? null : matched.uid);
+        setTargetProfileTab(undefined);
+        setActiveSection('profile');
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+      setDeepLinkHandled(true);
+    };
+
+    void resolveDeepLink();
+    return () => {
+      cancelled = true;
+    };
   }, [deepLinkHandled, profile?.onboardingCompleted, profile?.uid, users]);
 
   const isActiveStaff = Boolean(myRole && myRole.active);
@@ -131,7 +153,7 @@ function NexoraAppContent() {
   }
 
   // Signed in, awaiting email verification
-  if (!user.emailVerified) {
+  if (!emailVerified) {
     return (
       <AuthView
         initialMode="verify-email"
@@ -140,8 +162,42 @@ function NexoraAppContent() {
     );
   }
 
-  // Verified user completing profile onboarding
+  // Verified user profile synchronization / error recovery
   if (!profile) {
+    if (profileError) {
+      return (
+        <div className="min-h-screen bg-[#06060A] text-white flex items-center justify-center p-6">
+          <div className="max-w-md w-full rounded-2xl bg-[#0D0B16] border border-amber-500/30 p-7 space-y-5 text-center">
+            <div className="flex justify-center">
+              <NexoraLogo />
+            </div>
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-300">
+              <AlertTriangle size={22} />
+            </div>
+            <div className="space-y-2">
+              <h1 className="font-display text-xl font-bold text-white">Profile Synchronization Delayed</h1>
+              <p className="text-xs text-[#CBD5E1] leading-relaxed">{profileError}</p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button
+                type="button"
+                onClick={() => void retryProfileLoad()}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] text-xs font-semibold text-white"
+              >
+                <RefreshCw size={14} /> Retry Sync
+              </button>
+              <button
+                type="button"
+                onClick={() => void logoutUser(user?.uid)}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-semibold text-white"
+              >
+                <LogOut size={14} /> Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return <LoadingScreen label="Synchronizing your Nexora profile" />;
   }
 

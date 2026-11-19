@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Camera, Check, Image as ImageIcon, SkipForward } from 'lucide-react';
 import { NexoraLogo } from '../../components/branding/NexoraLogo';
 import { ResilientImage } from '../../components/common/ResilientImage';
@@ -8,6 +8,7 @@ import {
   isUsernameAvailable,
   updateUserProfileFields,
 } from '../../services/auth/authService';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
 import { isValidUsername, normalizeUsername } from '../../utils/validation';
 
@@ -45,6 +46,15 @@ export function OnboardingFlow() {
   const [error, setError] = useState('');
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!profile) return;
+    setAvatarUrl((prev) => prev || profile.avatarUrl || '/src/assets/images/avatar_creator_one_1795066815825.jpg');
+    setUsername((prev) => prev || profile.username || '');
+    setBio((prev) => prev || profile.bio || '');
+    setInterests((prev) => (prev.length > 0 ? prev : profile.interests || []));
+    setCoverUrl((prev) => prev || profile.coverUrl || '/src/assets/images/space_cover_code_1795066815138.jpg');
+  }, [profile?.uid]);
+
   if (!profile) return null;
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -56,9 +66,10 @@ export function OnboardingFlow() {
       const res = await uploadMediaAsset(file, `users/${profile.uid}/avatar`, ['image']);
       setAvatarUrl(res.url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to upload avatar.');
+      setError(extractReadableErrorMessage(err, 'Unable to upload avatar.'));
     } finally {
       setUploadingAvatar(false);
+      e.target.value = '';
     }
   };
 
@@ -77,9 +88,14 @@ export function OnboardingFlow() {
         return;
       }
       if (clean !== profile.username) {
-        const available = await isUsernameAvailable(clean, profile.uid);
-        if (!available) {
-          setError(`@${clean} is already taken.`);
+        try {
+          const available = await isUsernameAvailable(clean, profile.uid);
+          if (!available) {
+            setError(`@${clean} is already taken.`);
+            return;
+          }
+        } catch (err) {
+          setError(extractReadableErrorMessage(err, 'Unable to check username availability right now.'));
           return;
         }
       }
@@ -96,11 +112,15 @@ export function OnboardingFlow() {
     setSaving(true);
     setError('');
     try {
+      const cleanUsername = normalizeUsername(username) || profile.username;
+      if (!isValidUsername(cleanUsername)) {
+        throw new Error('Username must be 3-30 characters using lowercase letters, numbers, or underscores.');
+      }
       await updateUserProfileFields(
         profile.uid,
         {
           avatarUrl,
-          username: normalizeUsername(username) || profile.username,
+          username: cleanUsername,
           bio,
           interests,
           coverUrl,
@@ -111,7 +131,7 @@ export function OnboardingFlow() {
       );
       await refreshUserAndProfile();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not complete onboarding.');
+      setError(extractReadableErrorMessage(err, 'Could not complete onboarding.'));
     } finally {
       setSaving(false);
     }
