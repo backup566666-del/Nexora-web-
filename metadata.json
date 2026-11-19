@@ -1,0 +1,6 @@
+{
+  "name": "NEXORA",
+  "description": "NEXORA — Next-Generation Social Network. Connect. Create. Share. Belong.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

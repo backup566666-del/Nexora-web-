@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="nxFavLeft" x1="14" y1="12" x2="26" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#9333EA" />
+      <stop offset="100%" stop-color="#4C1D95" />
+    </linearGradient>
+    <linearGradient id="nxFavDiag" x1="16" y1="12" x2="48" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E9D5FF" />
+      <stop offset="45%" stop-color="#A855F7" />
+      <stop offset="100%" stop-color="#6D28D9" />
+    </linearGradient>
+    <linearGradient id="nxFavRight" x1="38" y1="12" x2="50" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C084FC" />
+      <stop offset="100%" stop-color="#5B21B6" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#06050B" />
+  <rect x="1.5" y="1.5" width="61" height="61" rx="14.5" stroke="#8B5CF6" stroke-opacity="0.35" stroke-width="1.5" />
+  <path d="M15 50V14L24 18V50H15Z" fill="url(#nxFavLeft)" />
+  <path d="M40 46V14H49V50L40 46Z" fill="url(#nxFavRight)" />
+  <path d="M15 14H24.2L49 50H39.8L15 14Z" fill="url(#nxFavDiag)" />
+</svg>

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="nxAppLeft" x1="112" y1="96" x2="208" y2="416" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#9333EA" />
+      <stop offset="100%" stop-color="#3B0764" />
+    </linearGradient>
+    <linearGradient id="nxAppDiag" x1="128" y1="96" x2="384" y2="416" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F3E8FF" />
+      <stop offset="45%" stop-color="#A855F7" />
+      <stop offset="100%" stop-color="#6D28D9" />
+    </linearGradient>
+    <linearGradient id="nxAppRight" x1="304" y1="96" x2="400" y2="416" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C084FC" />
+      <stop offset="100%" stop-color="#4C1D95" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="120" fill="#06050B" />
+  <rect x="8" y="8" width="496" height="496" rx="112" stroke="#8B5CF6" stroke-opacity="0.32" stroke-width="8" />
+  <path d="M120 400V112L192 144V400H120Z" fill="url(#nxAppLeft)" />
+  <path d="M320 368V112H392V400L320 368Z" fill="url(#nxAppRight)" />
+  <path d="M120 112H194L392 400H318L120 112Z" fill="url(#nxAppDiag)" />
+</svg>
