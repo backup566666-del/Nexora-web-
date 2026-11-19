@@ -23,8 +23,15 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { handleFirestoreError, OperationType } from '../firebase/errorHandler';
+import { dispatchDualNotification } from '../notifications/notificationDispatcher';
 import { PrivacySettings, UserPrivate, UserProfile } from '../../types/nexora';
-import { BLUEPRINT_LIMITS, isValidUsername, normalizeUsername, sanitizeString } from '../../utils/validation';
+import {
+  BLUEPRINT_LIMITS,
+  isValidUsername,
+  normalizeUsername,
+  sanitizeString,
+  withPrivacyDefaults,
+} from '../../utils/validation';
 
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
@@ -109,8 +116,28 @@ export async function resendVerificationEmail(user: User): Promise<void> {
   await sendEmailVerification(user);
 }
 
-export async function sendPasswordReset(email: string): Promise<void> {
-  await sendPasswordResetEmail(auth, email.trim());
+export async function sendPasswordReset(email: string, actor?: UserProfile | null): Promise<void> {
+  const cleanEmail = email.trim();
+  await sendPasswordResetEmail(auth, cleanEmail);
+  if (actor) {
+    void dispatchDualNotification({
+      recipientUid: actor.uid,
+      recipientName: actor.displayName,
+      recipientEmail: cleanEmail,
+      actor,
+      type: 'security_alert',
+      category: 'security',
+      targetId: 'settings:privacy',
+      inAppPreview: 'Password reset link sent to your account email.',
+      emailSubject: 'Nexora Security Notice: Password Reset Requested',
+      emailBodyText:
+        'A password reset request was initiated for your Nexora account. If you did not initiate this request, review your account security immediately.',
+      ctaLabel: 'Review Security Settings',
+      ctaUrl: '/',
+      allowSelfInApp: true,
+      dedupeKey: `pw_reset:${actor.uid}`,
+    });
+  }
 }
 
 export async function logoutUser(uid?: string): Promise<void> {
@@ -219,12 +246,12 @@ export async function ensureUserDocuments(
     uid: user.uid,
     email: sanitizeString(user.email || '', 254),
     blockedUserIds: [] as string[],
-    privacySettings: {
+    privacySettings: withPrivacyDefaults({
       profileVisibility: 'public',
       storyPrivacy: 'public',
       allowDMs: 'everyone',
       showOnlineStatus: true,
-    } satisfies PrivacySettings,
+    }) satisfies PrivacySettings,
     updatedAt: now,
   };
 
@@ -320,10 +347,12 @@ export async function updateUserProfileFields(
 export async function updateUserPrivacySettings(
   uid: string,
   privacySettings: PrivacySettings,
-  blockedUserIds?: string[]
+  blockedUserIds?: string[],
+  actorContext?: { actor: UserProfile; email?: string }
 ): Promise<void> {
+  const normalized = withPrivacyDefaults(privacySettings);
   const payload: Record<string, unknown> = {
-    privacySettings,
+    privacySettings: normalized,
     updatedAt: serverTimestamp(),
   };
   if (blockedUserIds !== undefined) {
@@ -331,10 +360,30 @@ export async function updateUserPrivacySettings(
   }
   try {
     await updateDoc(doc(db, 'users', uid, 'private', 'account'), payload);
-    if (privacySettings.showOnlineStatus === false) {
+    if (normalized.showOnlineStatus === false) {
       await updateDoc(doc(db, 'users', uid), {
         isOnline: false,
         updatedAt: serverTimestamp(),
+      });
+    }
+    if (actorContext?.actor) {
+      void dispatchDualNotification({
+        recipientUid: uid,
+        recipientName: actorContext.actor.displayName,
+        recipientEmail: actorContext.email,
+        recipientPrivacy: normalized,
+        actor: actorContext.actor,
+        type: 'security_alert',
+        category: 'security',
+        targetId: 'settings:privacy',
+        inAppPreview: 'Your privacy, tagging, and notification preferences were updated.',
+        emailSubject: 'Nexora Security Notice: Privacy Preferences Updated',
+        emailBodyText:
+          'Your Nexora privacy, tagging, collaboration, and notification channel settings were updated.',
+        ctaLabel: 'Open Privacy Settings',
+        ctaUrl: '/',
+        allowSelfInApp: true,
+        dedupeKey: `privacy_update:${uid}:${Math.floor(Date.now() / 15000)}`,
       });
     }
   } catch (err) {

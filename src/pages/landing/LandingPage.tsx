@@ -21,6 +21,8 @@ import {
 import { NexoraLogo } from '../../components/branding/NexoraLogo';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { VerifiedBadge } from '../../components/common/VerifiedBadge';
+import { submitContactSubmission } from '../../services/firebase/socialService';
+import { ContactSubmission } from '../../types/nexora';
 
 interface LandingPageProps {
   onOpenAuth: (mode: 'login' | 'register') => void;
@@ -46,6 +48,13 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
   const [likedDemoPost, setLikedDemoPost] = useState(false);
   const [savedDemoPost, setSavedDemoPost] = useState(false);
   const [activeModal, setActiveModal] = useState<'demo' | 'plans' | 'support' | null>(null);
+  const [supportName, setSupportName] = useState('');
+  const [supportEmail, setSupportEmail] = useState('');
+  const [supportCategory, setSupportCategory] = useState<ContactSubmission['category']>('support');
+  const [supportSubject, setSupportSubject] = useState('');
+  const [supportMessage, setSupportMessage] = useState('');
+  const [supportSending, setSupportSending] = useState(false);
+  const [supportFeedback, setSupportFeedback] = useState('');
 
   const handleNavClick = (target: 'home' | 'features' | 'spaces' | 'creators' | 'plans' | 'support') => {
     if (target === 'home') {
@@ -649,15 +658,15 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
       )}
 
       {activeModal === 'support' && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-[#0D0B16] border border-white/15 rounded-2xl p-6 space-y-4">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="w-full max-w-lg bg-[#0D0B16] border border-white/15 rounded-2xl p-6 space-y-4 my-6">
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <h2 className="font-display text-lg font-bold text-white">Support &amp; Security</h2>
+              <h2 className="font-display text-lg font-bold text-white">Support, Contact &amp; Security</h2>
               <button type="button" onClick={() => setActiveModal(null)}>
                 <X size={18} className="text-[#94A3B8]" />
               </button>
             </div>
-            <div className="space-y-3 text-xs text-[#CBD5E1] leading-relaxed">
+            <div className="space-y-2.5 text-xs text-[#CBD5E1] leading-relaxed">
               <p>
                 <strong className="text-white">Account Access:</strong> Sign in with Google or
                 create an email account with Firebase verification. Use Forgot Password on the Sign
@@ -665,22 +674,115 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
               </p>
               <p>
                 <strong className="text-white">Privacy Controls:</strong> Manage profile
-                visibility, story audience, direct message permissions, and blocked accounts inside
+                visibility, story audience, direct message permissions, and notification channels inside
                 Settings once signed in.
               </p>
             </div>
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveModal(null);
-                  onOpenAuth('login');
-                }}
-                className="px-4 py-2 rounded-xl bg-[#7C3AED] text-xs font-semibold text-white"
-              >
-                Sign In
-              </button>
-            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!supportName.trim() || !supportEmail.trim() || !supportSubject.trim() || !supportMessage.trim()) {
+                  return;
+                }
+                setSupportSending(true);
+                setSupportFeedback('');
+                try {
+                  await submitContactSubmission({
+                    name: supportName,
+                    email: supportEmail,
+                    category: supportCategory,
+                    subject: supportSubject,
+                    message: supportMessage,
+                  });
+                  setSupportName('');
+                  setSupportEmail('');
+                  setSupportSubject('');
+                  setSupportMessage('');
+                  setSupportFeedback('Ticket submitted. Our Nexora Support team will respond shortly.');
+                } catch (err) {
+                  setSupportFeedback(
+                    err instanceof Error ? err.message : 'Unable to send support request.'
+                  );
+                } finally {
+                  setSupportSending(false);
+                }
+              }}
+              className="pt-3 border-t border-white/10 space-y-3"
+            >
+              <p className="text-xs font-semibold text-white">Contact Support or Appeal an Account Issue</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <input
+                  type="text"
+                  required
+                  maxLength={80}
+                  value={supportName}
+                  onChange={(e) => setSupportName(e.target.value)}
+                  placeholder="Your name"
+                  className="px-3 py-2 rounded-xl bg-[#07060C] border border-white/10 text-xs text-white outline-none focus:border-[#8B5CF6]"
+                />
+                <input
+                  type="email"
+                  required
+                  maxLength={120}
+                  value={supportEmail}
+                  onChange={(e) => setSupportEmail(e.target.value)}
+                  placeholder="Email address"
+                  className="px-3 py-2 rounded-xl bg-[#07060C] border border-white/10 text-xs text-white outline-none focus:border-[#8B5CF6]"
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <select
+                  value={supportCategory}
+                  onChange={(e) => setSupportCategory(e.target.value as ContactSubmission['category'])}
+                  className="px-3 py-2 rounded-xl bg-[#07060C] border border-white/10 text-xs text-white outline-none focus:border-[#8B5CF6]"
+                >
+                  <option value="support">General Support</option>
+                  <option value="appeal">Account Appeal</option>
+                  <option value="verification_help">Badge & Verification Help</option>
+                  <option value="bug">Report a Bug</option>
+                  <option value="partnership">Official Partnership</option>
+                </select>
+                <input
+                  type="text"
+                  required
+                  maxLength={120}
+                  value={supportSubject}
+                  onChange={(e) => setSupportSubject(e.target.value)}
+                  placeholder="Subject"
+                  className="px-3 py-2 rounded-xl bg-[#07060C] border border-white/10 text-xs text-white outline-none focus:border-[#8B5CF6]"
+                />
+              </div>
+              <textarea
+                rows={3}
+                required
+                maxLength={1500}
+                value={supportMessage}
+                onChange={(e) => setSupportMessage(e.target.value)}
+                placeholder="Describe your question, @username, or issue..."
+                className="w-full p-3 rounded-xl bg-[#07060C] border border-white/10 text-xs text-white outline-none focus:border-[#8B5CF6] resize-none"
+              />
+              {supportFeedback && <p className="text-xs text-[#C084FC]">{supportFeedback}</p>}
+              <div className="flex items-center justify-between gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveModal(null);
+                    onOpenAuth('login');
+                  }}
+                  className="px-4 py-2 rounded-xl border border-white/15 bg-white/5 hover:bg-white/10 text-xs font-semibold text-white"
+                >
+                  Sign In
+                </button>
+                <button
+                  type="submit"
+                  disabled={supportSending}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  {supportSending ? 'Sending...' : 'Send Support Message'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

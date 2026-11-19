@@ -7,6 +7,15 @@ export type PostType = 'text' | 'photo' | 'video' | 'poll' | 'repost';
 export type StoryType = 'image' | 'video' | 'text';
 export type StoryPrivacy = 'public' | 'followers' | 'close';
 export type MessageType = 'text' | 'image' | 'video' | 'voice' | 'document';
+
+export type NotificationCategory =
+  | 'account'
+  | 'social'
+  | 'badges'
+  | 'gifts'
+  | 'admin'
+  | 'security';
+
 export type NotificationType =
   | 'like'
   | 'comment'
@@ -16,7 +25,18 @@ export type NotificationType =
   | 'message'
   | 'announcement'
   | 'security_alert'
-  | 'admin_notice';
+  | 'admin_notice'
+  | 'badge_awarded'
+  | 'badge_revoked'
+  | 'identity_decision'
+  | 'staff_role_change'
+  | 'community_status'
+  | 'verification_decision'
+  | 'collab_invite'
+  | 'collab_response'
+  | 'post_tag'
+  | 'gift_received'
+  | 'support_ticket';
 
 // --- Governance & 5-Tier RBAC ---
 export type InternalRole =
@@ -37,7 +57,48 @@ export type AdminPermission =
   | 'manage_notifications'
   | 'view_audit_logs';
 
-export type VerifiedBadgeType = 'owner' | 'verified' | 'partner' | 'creator' | 'founder_circle';
+// Complete 20 Canonical Nexora Badges
+export type VerifiedBadgeType =
+  | 'verified_identity'
+  | 'founder'
+  | 'official_organization'
+  | 'official_media'
+  | 'creator'
+  | 'influencer'
+  | 'artist'
+  | 'professional'
+  | 'educator'
+  | 'journalist'
+  | 'community_founder'
+  | 'community_leader'
+  | 'moderator'
+  | 'community_champion'
+  | 'early_member'
+  | 'pioneer'
+  | 'top_contributor'
+  | 'trendsetter'
+  | 'supporter'
+  | 'legend';
+
+// Legacy aliases preserved for backward compatibility with existing Firestore documents
+export type LegacyBadgeType = 'owner' | 'verified' | 'partner' | 'founder_circle';
+export type AnyVerifiedBadgeType = VerifiedBadgeType | LegacyBadgeType;
+
+export type BadgeCategory = 'identity' | 'official' | 'creator' | 'community' | 'achievement';
+
+export interface BadgeDefinition {
+  id: VerifiedBadgeType;
+  name: string;
+  shortLabel: string;
+  category: BadgeCategory;
+  description: string;
+  eligibility: string;
+  accentColor: string;
+  bgTint: string;
+  borderTint: string;
+  applicationEligible: boolean;
+  achievementAutoEligible: boolean;
+}
 
 export interface PlatformRole {
   uid: string;
@@ -56,10 +117,25 @@ export interface PlatformRole {
 
 export interface VerifiedBadgeRecord {
   uid: string;
-  badgeType: VerifiedBadgeType;
+  badgeType: AnyVerifiedBadgeType;
   label: string;
+  badges?: AnyVerifiedBadgeType[];
+  labels?: string[];
   updatedBy: string;
   updatedAt: Timestamp;
+}
+
+export interface BadgeConfig {
+  badgeId: VerifiedBadgeType;
+  enabled: boolean;
+  autoAward: boolean;
+  minFollowers: number;
+  minPosts: number;
+  minLikes: number;
+  accountAgeDays: number;
+  customCriteriaNote: string;
+  updatedBy: string;
+  updatedAt?: Timestamp;
 }
 
 export interface VerificationRequest {
@@ -68,7 +144,7 @@ export interface VerificationRequest {
   displayName: string;
   username: string;
   avatarUrl?: string;
-  requestedBadge: 'verified' | 'creator' | 'partner';
+  requestedBadge: AnyVerifiedBadgeType;
   category: string;
   rationale: string;
   referenceLink?: string;
@@ -136,7 +212,7 @@ export interface PlatformAnnouncement {
 export interface ModerationReport {
   id: string;
   reporterId: string;
-  targetType: 'post' | 'user' | 'space' | 'vibe';
+  targetType: 'post' | 'user' | 'space' | 'vibe' | 'gift' | 'collab';
   targetId: string;
   reason: string;
   status?: 'open' | 'resolved' | 'dismissed';
@@ -222,6 +298,10 @@ export interface PrivacySettings {
   storyPrivacy: StoryPrivacy;
   allowDMs: 'everyone' | 'followers';
   showOnlineStatus: boolean;
+  allowTags?: 'everyone' | 'followers' | 'nobody';
+  allowCollaborations?: 'everyone' | 'followers' | 'nobody';
+  emailNotifications?: Record<NotificationCategory, boolean>;
+  inAppNotifications?: Record<NotificationCategory, boolean>;
 }
 
 export interface UserPrivate {
@@ -230,6 +310,13 @@ export interface UserPrivate {
   blockedUserIds: string[];
   privacySettings: PrivacySettings;
   updatedAt: Timestamp;
+}
+
+export interface CollaboratorProfileSummary {
+  uid: string;
+  displayName: string;
+  username: string;
+  avatarUrl?: string;
 }
 
 export interface Post {
@@ -247,6 +334,13 @@ export interface Post {
   mediaTypes: string[];
   hashtags: string[];
   mentions: string[];
+  taggedUids?: string[];
+  taggedUsernames?: string[];
+  collaboratorInviteUids?: string[];
+  collaboratorUids?: string[];
+  declinedCollaboratorUids?: string[];
+  collaboratorProfiles?: Record<string, CollaboratorProfileSummary>;
+  giftsCount?: number;
   location: string;
   audience: AudienceType;
   pollOptions: string[];
@@ -415,8 +509,75 @@ export interface NotificationItem {
   actorName: string;
   actorAvatar: string;
   type: NotificationType;
+  category?: NotificationCategory;
   targetId: string;
   preview: string;
   read: boolean;
   createdAt: Timestamp;
+}
+
+// --- Free Virtual Gifting ---
+export interface VirtualGiftCatalogItem {
+  id: string;
+  name: string;
+  description: string;
+  emoji: string;
+  category: 'celebration' | 'creator' | 'community' | 'appreciation';
+  accentColor: string;
+  tier: 'free' | 'future_premium';
+  enabled: boolean;
+  sortOrder: number;
+  createdBy?: string;
+  updatedAt?: Timestamp;
+}
+
+export interface GiftTransaction {
+  id: string;
+  giftId: string;
+  giftName: string;
+  giftEmoji: string;
+  giftAccent: string;
+  senderUid: string;
+  senderName: string;
+  senderUsername: string;
+  senderAvatar?: string;
+  recipientUid: string;
+  recipientName: string;
+  recipientUsername: string;
+  targetType: 'profile' | 'post';
+  targetId: string;
+  message?: string;
+  anonymous: boolean;
+  createdAt: Timestamp;
+}
+
+// --- Email Logs & Support Submissions ---
+export interface EmailLogEntry {
+  id: string;
+  recipientUid?: string;
+  recipientEmailMasked: string;
+  eventType: string;
+  category: NotificationCategory;
+  subject: string;
+  provider: 'resend' | 'smtp' | 'none';
+  status: 'sent' | 'not_configured' | 'skipped' | 'failed';
+  error?: string;
+  actorUid: string;
+  createdAt: Timestamp;
+}
+
+export interface ContactSubmission {
+  id: string;
+  uid?: string;
+  name: string;
+  email: string;
+  category: 'support' | 'appeal' | 'verification_help' | 'bug' | 'partnership';
+  subject: string;
+  message: string;
+  status: 'open' | 'in_review' | 'resolved';
+  adminNote?: string;
+  handledBy?: string;
+  handledAt?: Timestamp;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
 }

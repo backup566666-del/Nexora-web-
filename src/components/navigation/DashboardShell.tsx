@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Award,
   Bell,
   Compass,
   Film,
+  Gift,
+  Heart,
   Home,
   LogOut,
   Megaphone,
@@ -12,13 +15,15 @@ import {
   Search,
   Settings,
   Shield,
+  ShieldAlert,
+  Tag,
   User as UserIcon,
   UserPlus,
   X,
 } from 'lucide-react';
 import { NexoraLogo } from '../branding/NexoraLogo';
 import { ResilientImage } from '../common/ResilientImage';
-import { VerifiedBadge } from '../common/VerifiedBadge';
+import { BadgeStrip } from '../common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
 import { logoutUser } from '../../services/auth/authService';
 import {
@@ -28,16 +33,23 @@ import {
 } from '../../services/firebase/socialService';
 import {
   NavSection,
+  NotificationCategory,
   NotificationItem,
   Post,
   Space,
   UserProfile,
 } from '../../types/nexora';
-import { formatCompactCount, formatRelativeTime } from '../../utils/validation';
+import { inferCategoryFromNotificationType } from '../../services/notifications/notificationDispatcher';
+import {
+  formatCompactCount,
+  formatRelativeTime,
+} from '../../utils/validation';
+
+type ProfileTab = 'posts' | 'videos' | 'photos' | 'tagged' | 'collabs' | 'gifts' | 'spaces' | 'saved';
 
 interface DashboardShellProps {
   activeSection: NavSection;
-  onNavigate: (section: NavSection, targetId?: string) => void;
+  onNavigate: (section: NavSection, targetId?: string, profileTab?: ProfileTab) => void;
   onOpenAdminSettings?: () => void;
   onOpenUserProfile: (uid: string) => void;
   notifications: NotificationItem[];
@@ -70,6 +82,39 @@ const SECTION_LABELS: Record<NavSection, string> = {
   settings: 'Settings',
 };
 
+const NOTIF_FILTERS: { id: 'all' | 'unread' | NotificationCategory; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'unread', label: 'Unread' },
+  { id: 'social', label: 'Social' },
+  { id: 'badges', label: 'Badges' },
+  { id: 'gifts', label: 'Gifts' },
+  { id: 'admin', label: 'Admin' },
+  { id: 'security', label: 'Security' },
+];
+
+function NotificationGlyph({ type }: { type: NotificationItem['type'] }) {
+  switch (type) {
+    case 'gift_received':
+      return <Gift size={12} className="text-pink-400" />;
+    case 'badge_awarded':
+    case 'verification_decision':
+    case 'identity_decision':
+      return <Award size={12} className="text-sky-400" />;
+    case 'collab_invite':
+    case 'collab_response':
+    case 'post_tag':
+      return <Tag size={12} className="text-[#C084FC]" />;
+    case 'security_alert':
+      return <ShieldAlert size={12} className="text-rose-400" />;
+    case 'staff_role_change':
+    case 'admin_notice':
+    case 'announcement':
+      return <Megaphone size={12} className="text-amber-300" />;
+    default:
+      return <Heart size={12} className="text-[#A855F7]" />;
+  }
+}
+
 export function DashboardShell({
   activeSection,
   onNavigate,
@@ -81,7 +126,7 @@ export function DashboardShell({
   users,
   children,
 }: DashboardShellProps) {
-  const { profile, myRole, announcements, platformConfig, getBadgeVariant } = useAuth();
+  const { profile, myRole, announcements, platformConfig, getUserBadges } = useAuth();
   const [navPhase, setNavPhase] = useState<'expanded' | 'logo-only' | 'hidden'>('expanded');
   const lastScrollY = useRef(0);
   const phaseTimerRef = useRef<number | null>(null);
@@ -89,13 +134,11 @@ export function DashboardShell({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
   const [showNotifs, setShowNotifs] = useState(false);
+  const [notifFilter, setNotifFilter] = useState<'all' | 'unread' | NotificationCategory>('all');
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [followedUids, setFollowedUids] = useState<Record<string, boolean>>({});
   const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState<string[]>([]);
 
-  // Adaptive Navigation Scroll Behavior:
-  // Scrolling upwards contracts into Nexora logo and eventually hides.
-  // Scrolling downwards brings back the logo and expands the full navigation.
   useEffect(() => {
     if (activeSection === 'vibes' || activeSection === 'chat') {
       setNavPhase('expanded');
@@ -138,6 +181,14 @@ export function DashboardShell({
     () => notifications.filter((n) => !n.read).length,
     [notifications]
   );
+
+  const filteredNotifications = useMemo(() => {
+    if (notifFilter === 'all') return notifications;
+    if (notifFilter === 'unread') return notifications.filter((n) => !n.read);
+    return notifications.filter(
+      (n) => (n.category || inferCategoryFromNotificationType(n.type)) === notifFilter
+    );
+  }, [notifications, notifFilter]);
 
   const trendingHashtags = useMemo(() => {
     const counts = new Map<string, number>();
@@ -204,7 +255,7 @@ export function DashboardShell({
 
   if (!profile) return null;
 
-  const selfBadgeVariant = getBadgeVariant(profile.uid, profile.verified);
+  const selfBadges = getUserBadges(profile.uid, profile.verified);
 
   const handleNotificationClick = async (n: NotificationItem) => {
     if (!n.read) {
@@ -217,6 +268,25 @@ export function DashboardShell({
       onNavigate('chat', n.targetId);
     } else if (n.type === 'follow' && n.actorId) {
       onOpenUserProfile(n.actorId);
+    } else if (n.type === 'gift_received') {
+      onNavigate('profile', profile.uid, 'gifts');
+    } else if (n.type === 'collab_invite') {
+      onNavigate('profile', profile.uid, 'collabs');
+    } else if (n.type === 'post_tag') {
+      onNavigate('profile', profile.uid, 'tagged');
+    } else if (
+      n.type === 'badge_awarded' ||
+      n.type === 'verification_decision' ||
+      n.type === 'identity_decision'
+    ) {
+      onNavigate('profile', profile.uid, 'posts');
+    } else if (
+      n.type === 'staff_role_change' ||
+      n.type === 'security_alert' ||
+      n.type === 'admin_notice' ||
+      n.type === 'announcement'
+    ) {
+      onNavigate('settings');
     } else {
       onNavigate('home');
     }
@@ -369,13 +439,13 @@ export function DashboardShell({
                               />
                               <div className="min-w-0">
                                 <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
-                                  {u.displayName}
-                                  {getBadgeVariant(u.uid, u.verified) && (
-                                    <VerifiedBadge
-                                      size={12}
-                                      variant={getBadgeVariant(u.uid, u.verified)}
-                                    />
-                                  )}
+                                  <span className="truncate">{u.displayName}</span>
+                                  <BadgeStrip
+                                    badges={getUserBadges(u.uid, u.verified)}
+                                    size={12}
+                                    max={2}
+                                    interactive={false}
+                                  />
                                 </p>
                                 <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
                               </div>
@@ -433,7 +503,7 @@ export function DashboardShell({
               )}
             </div>
 
-            {/* Notifications */}
+            {/* Notifications Center */}
             <div className="relative">
               <button
                 type="button"
@@ -453,28 +523,59 @@ export function DashboardShell({
               </button>
 
               {showNotifs && (
-                <div className="absolute right-0 mt-2 w-80 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl overflow-hidden z-50">
+                <div className="absolute right-0 mt-2 w-96 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl overflow-hidden z-50">
                   <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
                     <span className="font-display text-sm font-semibold text-white">
-                      Notifications
+                      Notifications {unreadCount > 0 ? `(${unreadCount})` : ''}
                     </span>
-                    {unreadCount > 0 && (
+                    <div className="flex items-center gap-3">
+                      {unreadCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => void markAllNotificationsRead(notifications)}
+                          className="text-xs text-[#C084FC] hover:underline"
+                        >
+                          Mark all read
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => void markAllNotificationsRead(notifications)}
-                        className="text-xs text-[#C084FC] hover:underline"
+                        onClick={() => {
+                          setShowNotifs(false);
+                          onNavigate('settings');
+                        }}
+                        className="text-xs text-[#94A3B8] hover:text-white"
                       >
-                        Mark all read
+                        Preferences
                       </button>
-                    )}
+                    </div>
                   </div>
+
+                  {/* Category filter tabs */}
+                  <div className="flex items-center gap-1 px-3 py-2 border-b border-white/[0.06] overflow-x-auto">
+                    {NOTIF_FILTERS.map((flt) => (
+                      <button
+                        key={flt.id}
+                        type="button"
+                        onClick={() => setNotifFilter(flt.id)}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold whitespace-nowrap transition-colors ${
+                          notifFilter === flt.id
+                            ? 'bg-[#7C3AED] text-white'
+                            : 'bg-white/[0.04] text-[#94A3B8] hover:text-white'
+                        }`}
+                      >
+                        {flt.label}
+                      </button>
+                    ))}
+                  </div>
+
                   <div className="max-h-80 overflow-y-auto divide-y divide-white/[0.06]">
-                    {notifications.length === 0 ? (
+                    {filteredNotifications.length === 0 ? (
                       <p className="text-xs text-[#64748B] py-8 text-center">
-                        No notifications yet.
+                        No notifications in this filter.
                       </p>
                     ) : (
-                      notifications.map((n) => (
+                      filteredNotifications.map((n) => (
                         <button
                           key={n.id}
                           type="button"
@@ -483,13 +584,18 @@ export function DashboardShell({
                             n.read ? 'opacity-70' : 'bg-[#7C3AED]/10'
                           }`}
                         >
-                          <ResilientImage
-                            src={n.actorAvatar}
-                            alt={n.actorName}
-                            className="w-8 h-8 rounded-full object-cover shrink-0"
-                          />
+                          <div className="relative shrink-0">
+                            <ResilientImage
+                              src={n.actorAvatar}
+                              alt={n.actorName}
+                              className="w-8 h-8 rounded-full object-cover"
+                            />
+                            <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-[#0D0B16] border border-white/15 flex items-center justify-center">
+                              <NotificationGlyph type={n.type} />
+                            </span>
+                          </div>
                           <div className="min-w-0 flex-1 space-y-0.5">
-                            <p className="text-white">
+                            <p className="text-white leading-snug">
                               <span className="font-semibold">{n.actorName}</span>{' '}
                               <span className="text-[#CBD5E1]">{n.preview}</span>
                             </p>
@@ -540,11 +646,11 @@ export function DashboardShell({
               </button>
 
               {showAccountMenu && (
-                <div className="absolute right-0 mt-2 w-60 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-2 space-y-1 z-50">
+                <div className="absolute right-0 mt-2 w-64 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-2 space-y-1 z-50">
                   <div className="px-3 py-2.5 border-b border-white/10">
-                    <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
-                      {profile.displayName}
-                      {selfBadgeVariant && <VerifiedBadge size={13} variant={selfBadgeVariant} />}
+                    <p className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
+                      <span className="truncate">{profile.displayName}</span>
+                      <BadgeStrip badges={selfBadges} size={13} max={3} />
                     </p>
                     <p className="text-[11px] text-[#94A3B8] truncate">@{profile.username}</p>
                   </div>
@@ -566,7 +672,7 @@ export function DashboardShell({
                     }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
                   >
-                    <Settings size={14} /> Account & Privacy Settings
+                    <Settings size={14} /> Account, Privacy & Notifications
                   </button>
                   {isActiveStaff && (
                     <button
@@ -707,14 +813,16 @@ export function DashboardShell({
                     className="w-12 h-12 rounded-full object-cover shrink-0 ring-2 ring-[#7C3AED]/50"
                   />
                   <div className="min-w-0">
-                    <button
-                      type="button"
-                      onClick={() => onNavigate('profile')}
-                      className="font-display text-sm font-semibold text-white hover:text-[#C084FC] truncate inline-flex items-center gap-1.5 text-left"
-                    >
-                      <span className="truncate">{profile.displayName}</span>
-                      {selfBadgeVariant && <VerifiedBadge size={13} variant={selfBadgeVariant} />}
-                    </button>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('profile')}
+                        className="font-display text-sm font-semibold text-white hover:text-[#C084FC] truncate text-left"
+                      >
+                        {profile.displayName}
+                      </button>
+                      <BadgeStrip badges={selfBadges} size={13} max={3} />
+                    </div>
                     <p className="text-xs text-[#94A3B8] truncate">@{profile.username}</p>
                   </div>
                 </div>
@@ -816,13 +924,13 @@ export function DashboardShell({
                             />
                             <div className="min-w-0">
                               <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
-                                {u.displayName}
-                                {getBadgeVariant(u.uid, u.verified) && (
-                                  <VerifiedBadge
-                                    size={12}
-                                    variant={getBadgeVariant(u.uid, u.verified)}
-                                  />
-                                )}
+                                <span className="truncate">{u.displayName}</span>
+                                <BadgeStrip
+                                  badges={getUserBadges(u.uid, u.verified)}
+                                  size={12}
+                                  max={2}
+                                  interactive={false}
+                                />
                               </p>
                               <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
                             </div>

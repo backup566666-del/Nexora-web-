@@ -3,21 +3,27 @@ import {
   Ban,
   CheckCircle2,
   Flag,
+  LifeBuoy,
   RotateCcw,
   ShieldAlert,
   Trash2,
+  Users,
   XCircle,
 } from 'lucide-react';
 import {
   adminRemoveContent,
+  adminResetPostCollabAndTags,
   resolveReport,
+  subscribeAllContactSubmissions,
   subscribeAuditLogs,
   subscribePlatformRoles,
   subscribeReports,
   suspendOrRestoreUser,
+  updateContactSubmission,
 } from '../../../services/firebase/adminService';
 import {
   AuditLogEntry,
+  ContactSubmission,
   ModerationReport,
   PlatformRole,
   Post,
@@ -45,10 +51,15 @@ export function ModerationReportsPanel({
   users,
 }: ModerationReportsPanelProps) {
   const [reports, setReports] = useState<ModerationReport[]>([]);
+  const [tickets, setTickets] = useState<ContactSubmission[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [staffRoles, setStaffRoles] = useState<PlatformRole[]>([]);
+
+  const [panelView, setPanelView] = useState<'reports' | 'tickets'>('reports');
   const [statusTab, setStatusTab] = useState<'open' | 'resolved' | 'dismissed'>('open');
+  const [ticketFilter, setTicketFilter] = useState<'open' | 'in_review' | 'resolved'>('open');
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [ticketNotes, setTicketNotes] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
@@ -56,10 +67,12 @@ export function ModerationReportsPanel({
     const u1 = subscribeReports(setReports);
     const u2 = subscribeAuditLogs(setAuditLogs);
     const u3 = subscribePlatformRoles(setStaffRoles);
+    const u4 = subscribeAllContactSubmissions(setTickets);
     return () => {
       u1();
       u2();
       u3();
+      u4();
     };
   }, []);
 
@@ -72,18 +85,25 @@ export function ModerationReportsPanel({
     return reports.filter((r) => (r.status || 'open') === statusTab);
   }, [reports, statusTab]);
 
+  const filteredTickets = useMemo(() => {
+    return tickets.filter((t) => t.status === ticketFilter);
+  }, [tickets, ticketFilter]);
+
   const moderationAudit = useMemo(
     () => auditLogs.filter((l) => l.category === 'moderation').slice(0, 15),
     [auditLogs]
   );
 
   const resolveTargetContext = (report: ModerationReport) => {
-    if (report.targetType === 'post') {
+    if (report.targetType === 'post' || report.targetType === 'collab') {
       const p = posts.find((x) => x.id === report.targetId);
       const author = p ? users.find((u) => u.uid === p.authorId) : undefined;
       return {
         exists: Boolean(p),
-        title: p ? `Post by @${p.authorUsername}` : `Post (${report.targetId})`,
+        isPostEntity: true,
+        title: p
+          ? `${report.targetType === 'collab' ? 'Collab/Tag Report' : 'Post'} by @${p.authorUsername}`
+          : `${report.targetType === 'collab' ? 'Collab Post' : 'Post'} (${report.targetId})`,
         preview: p?.text || (p ? 'Media post' : 'Content already removed.'),
         author,
       };
@@ -93,6 +113,7 @@ export function ModerationReportsPanel({
       const author = v ? users.find((u) => u.uid === v.authorId) : undefined;
       return {
         exists: Boolean(v),
+        isPostEntity: false,
         title: v ? `Vibe by @${v.authorUsername}` : `Vibe (${report.targetId})`,
         preview: v?.caption || (v ? 'Video Vibe' : 'Vibe already removed.'),
         author,
@@ -103,14 +124,25 @@ export function ModerationReportsPanel({
       const author = s ? users.find((u) => u.uid === s.ownerId) : undefined;
       return {
         exists: Boolean(s),
+        isPostEntity: false,
         title: s ? `Space: ${s.name}` : `Space (${report.targetId})`,
         preview: s?.description || 'Space already removed.',
         author,
       };
     }
+    if (report.targetType === 'gift') {
+      return {
+        exists: false,
+        isPostEntity: false,
+        title: `Virtual Gift (${report.targetId})`,
+        preview: 'Reported gift message or transaction. Manage gift removal under Free Virtual Gifts.',
+        author: undefined,
+      };
+    }
     const targetUser = users.find((u) => u.uid === report.targetId);
     return {
       exists: Boolean(targetUser),
+      isPostEntity: false,
       title: targetUser ? `User @${targetUser.username}` : `User (${report.targetId})`,
       preview: targetUser?.bio || targetUser?.displayName || 'User profile',
       author: targetUser,
@@ -143,14 +175,22 @@ export function ModerationReportsPanel({
   };
 
   const handleDeleteContent = async (report: ModerationReport) => {
-    if (report.targetType === 'user') return;
+    if (
+      report.targetType !== 'post' &&
+      report.targetType !== 'vibe' &&
+      report.targetType !== 'space' &&
+      report.targetType !== 'collab'
+    ) {
+      return;
+    }
     setBusy(true);
     setFeedback(null);
     try {
+      const mappedType = report.targetType === 'collab' ? 'post' : report.targetType;
       await adminRemoveContent({
         actor,
         actorRole: myRole.role,
-        targetType: report.targetType,
+        targetType: mappedType,
         targetId: report.targetId,
       });
       await resolveReport({
@@ -158,13 +198,40 @@ export function ModerationReportsPanel({
         actorRole: myRole.role,
         report,
         status: 'resolved',
-        resolutionNote: notes[report.id] || `Violating ${report.targetType} deleted`,
+        resolutionNote: notes[report.id] || `Violating ${mappedType} deleted`,
       });
-      setFeedback({ type: 'ok', text: `Removed violating ${report.targetType} & resolved report.` });
+      setFeedback({ type: 'ok', text: `Removed violating ${mappedType} & resolved report.` });
     } catch (err) {
       setFeedback({
         type: 'err',
         text: err instanceof Error ? err.message : 'Unable to delete reported content.',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResetCollabTags = async (report: ModerationReport) => {
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await adminResetPostCollabAndTags({
+        actor,
+        actorRole: myRole.role,
+        postId: report.targetId,
+      });
+      await resolveReport({
+        actor,
+        actorRole: myRole.role,
+        report,
+        status: 'resolved',
+        resolutionNote: notes[report.id] || 'Cleared post tags and collaboration invites',
+      });
+      setFeedback({ type: 'ok', text: 'Cleared tags & collaborator attributions and resolved report.' });
+    } catch (err) {
+      setFeedback({
+        type: 'err',
+        text: err instanceof Error ? err.message : 'Unable to clear post tags/collaborations.',
       });
     } finally {
       setBusy(false);
@@ -199,35 +266,75 @@ export function ModerationReportsPanel({
     }
   };
 
+  const handleUpdateTicket = async (
+    ticket: ContactSubmission,
+    nextStatus: ContactSubmission['status']
+  ) => {
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await updateContactSubmission({
+        actor,
+        actorRole: myRole.role,
+        submission: ticket,
+        status: nextStatus,
+        adminNote: ticketNotes[ticket.id] || ticket.adminNote || '',
+      });
+      setFeedback({
+        type: 'ok',
+        text: `Ticket "${ticket.subject}" updated to ${nextStatus.replace(/_/g, ' ')}.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'err',
+        text: err instanceof Error ? err.message : 'Unable to update support ticket.',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openReportsCount = reports.filter((r) => !r.status || r.status === 'open').length;
+  const openTicketsCount = tickets.filter((t) => t.status === 'open').length;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-lg font-bold text-white flex items-center gap-2">
-            <Flag size={18} className="text-amber-300" /> Moderation & Safety Queue
+            {panelView === 'reports' ? (
+              <Flag size={18} className="text-amber-300" />
+            ) : (
+              <LifeBuoy size={18} className="text-sky-300" />
+            )}
+            {panelView === 'reports'
+              ? 'Moderation & Safety Queue'
+              : 'Support Tickets & Ban Appeals'}
           </h2>
           <p className="text-xs text-[#94A3B8] mt-0.5">
-            Inspect reported posts, Vibes, Spaces, and accounts. Remove violating media, suspend policy-violating users, and track moderation history.
+            Inspect reported content/collaborations/gifts, manage suspended accounts, and reply to support &amp; ban appeals.
           </p>
         </div>
-        <div className="flex items-center gap-1.5">
-          {(['open', 'resolved', 'dismissed'] as const).map((tab) => {
-            const count = reports.filter((r) => (r.status || 'open') === tab).length;
-            return (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setStatusTab(tab)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-medium capitalize ${
-                  statusTab === tab
-                    ? 'bg-[#7C3AED] text-white'
-                    : 'bg-[#08070F] border border-white/10 text-[#94A3B8] hover:text-white'
-                }`}
-              >
-                {tab} ({count})
-              </button>
-            );
-          })}
+
+        <div className="inline-flex items-center p-1 rounded-xl bg-[#08070F] border border-white/10 self-start">
+          <button
+            type="button"
+            onClick={() => setPanelView('reports')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+              panelView === 'reports' ? 'bg-[#7C3AED] text-white' : 'text-[#94A3B8] hover:text-white'
+            }`}
+          >
+            Reports ({openReportsCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setPanelView('tickets')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+              panelView === 'tickets' ? 'bg-[#7C3AED] text-white' : 'text-[#94A3B8] hover:text-white'
+            }`}
+          >
+            Support &amp; Appeals ({openTicketsCount})
+          </button>
         </div>
       </div>
 
@@ -246,113 +353,240 @@ export function ModerationReportsPanel({
         </div>
       )}
 
-      {/* Reports Feed */}
-      <div className="space-y-3">
-        {filteredReports.length === 0 ? (
-          <div className="p-8 rounded-2xl bg-[#08070F] border border-white/[0.06] text-center text-xs text-[#64748B]">
-            No {statusTab} reports in queue.
+      {panelView === 'reports' ? (
+        <>
+          <div className="flex items-center gap-1.5">
+            {(['open', 'resolved', 'dismissed'] as const).map((tab) => {
+              const count = reports.filter((r) => (r.status || 'open') === tab).length;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setStatusTab(tab)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-medium capitalize ${
+                    statusTab === tab
+                      ? 'bg-[#7C3AED] text-white'
+                      : 'bg-[#08070F] border border-white/10 text-[#94A3B8] hover:text-white'
+                  }`}
+                >
+                  {tab} ({count})
+                </button>
+              );
+            })}
           </div>
-        ) : (
-          filteredReports.map((rep) => {
-            const ctx = resolveTargetContext(rep);
-            const reporter = users.find((u) => u.uid === rep.reporterId);
-            const isProtectedOwner = ctx.author ? ownerUidSet.has(ctx.author.uid) : false;
 
-            return (
-              <div
-                key={rep.id}
-                className="p-5 rounded-2xl bg-[#08070F] border border-[#8B5CF6]/20 space-y-3"
-              >
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="px-2 py-0.5 rounded-md bg-[#7C3AED]/20 text-[#E9D5FF] text-[10px] font-semibold uppercase">
-                        {rep.targetType}
-                      </span>
-                      <span className="text-sm font-semibold text-white">{ctx.title}</span>
-                      <span className="text-[11px] text-[#64748B]">
-                        Reported by {reporter ? `@${reporter.username}` : rep.reporterId} •{' '}
-                        {formatRelativeTime(rep.createdAt)}
-                      </span>
+          <div className="space-y-3">
+            {filteredReports.length === 0 ? (
+              <div className="p-8 rounded-2xl bg-[#08070F] border border-white/[0.06] text-center text-xs text-[#64748B]">
+                No {statusTab} reports in queue.
+              </div>
+            ) : (
+              filteredReports.map((rep) => {
+                const ctx = resolveTargetContext(rep);
+                const reporter = users.find((u) => u.uid === rep.reporterId);
+                const isProtectedOwner = ctx.author ? ownerUidSet.has(ctx.author.uid) : false;
+
+                return (
+                  <div
+                    key={rep.id}
+                    className="p-5 rounded-2xl bg-[#08070F] border border-[#8B5CF6]/20 space-y-3"
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-2 py-0.5 rounded-md bg-[#7C3AED]/20 text-[#E9D5FF] text-[10px] font-semibold uppercase">
+                            {rep.targetType}
+                          </span>
+                          <span className="text-sm font-semibold text-white">{ctx.title}</span>
+                          <span className="text-[11px] text-[#64748B]">
+                            Reported by {reporter ? `@${reporter.username}` : rep.reporterId} •{' '}
+                            {formatRelativeTime(rep.createdAt)}
+                          </span>
+                        </div>
+                        <p className="text-xs text-amber-200 mt-1">Reason: {rep.reason}</p>
+                      </div>
+
+                      {(!rep.status || rep.status === 'open') && (
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {ctx.isPostEntity && ctx.exists && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void handleResetCollabTags(rep)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#7C3AED]/20 hover:bg-[#7C3AED]/30 border border-[#8B5CF6]/30 text-xs text-[#E9D5FF]"
+                            >
+                              <Users size={13} /> Clear Collabs &amp; Tags
+                            </button>
+                          )}
+                          {rep.targetType !== 'user' && rep.targetType !== 'gift' && ctx.exists && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void handleDeleteContent(rep)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-xs font-semibold text-white"
+                            >
+                              <Trash2 size={13} /> Delete {rep.targetType === 'collab' ? 'Post' : rep.targetType}
+                            </button>
+                          )}
+                          {ctx.author && !isProtectedOwner && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void handleToggleSuspend(ctx.author!, rep.reason)}
+                              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border text-xs ${
+                                ctx.author.suspended
+                                  ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-200'
+                                  : 'bg-amber-500/15 border-amber-500/30 text-amber-200'
+                              }`}
+                            >
+                              {ctx.author.suspended ? <RotateCcw size={13} /> : <Ban size={13} />}
+                              {ctx.author.suspended ? 'Restore Account' : 'Suspend Account'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handleResolve(rep, 'resolved')}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white"
+                          >
+                            <CheckCircle2 size={13} /> Resolve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handleResolve(rep, 'dismissed')}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-[#CBD5E1]"
+                          >
+                            <XCircle size={13} /> Dismiss
+                          </button>
+                        </div>
+                      )}
                     </div>
-                    <p className="text-xs text-amber-200 mt-1">Reason: {rep.reason}</p>
+
+                    <p className="text-xs text-[#CBD5E1] bg-[#0D0B16] p-3 rounded-xl border border-white/[0.06] line-clamp-3">
+                      {ctx.preview}
+                    </p>
+
+                    {!rep.status || rep.status === 'open' ? (
+                      <input
+                        type="text"
+                        value={notes[rep.id] || ''}
+                        onChange={(e) =>
+                          setNotes((prev) => ({ ...prev, [rep.id]: e.target.value }))
+                        }
+                        placeholder="Resolution note for audit log..."
+                        className="w-full px-3 py-2 rounded-xl bg-[#0D0B16] border border-[#8B5CF6]/15 text-xs text-white outline-none"
+                      />
+                    ) : (
+                      rep.resolutionNote && (
+                        <p className="text-[11px] text-[#94A3B8]">
+                          Resolution note: {rep.resolutionNote}
+                        </p>
+                      )
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="space-y-4">
+          <div className="flex items-center gap-1.5">
+            {(['open', 'in_review', 'resolved'] as const).map((tab) => {
+              const count = tickets.filter((t) => t.status === tab).length;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setTicketFilter(tab)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-medium capitalize ${
+                    ticketFilter === tab
+                      ? 'bg-[#7C3AED] text-white'
+                      : 'bg-[#08070F] border border-white/10 text-[#94A3B8] hover:text-white'
+                  }`}
+                >
+                  {tab.replace('_', ' ')} ({count})
+                </button>
+              );
+            })}
+          </div>
+
+          {filteredTickets.length === 0 ? (
+            <div className="p-8 rounded-2xl bg-[#08070F] border border-white/[0.06] text-center text-xs text-[#64748B]">
+              No {ticketFilter.replace('_', ' ')} support tickets or appeals.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredTickets.map((ticket) => (
+                <div
+                  key={ticket.id}
+                  className="p-5 rounded-2xl bg-[#08070F] border border-[#8B5CF6]/20 space-y-3"
+                >
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 text-[10px] font-semibold uppercase">
+                          {ticket.category.replace(/_/g, ' ')}
+                        </span>
+                        <span className="text-sm font-semibold text-white">{ticket.subject}</span>
+                        <span className="text-[11px] text-[#94A3B8]">
+                          by {ticket.name} ({ticket.email}) • {formatRelativeTime(ticket.createdAt)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {ticket.status === 'open' && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleUpdateTicket(ticket, 'in_review')}
+                          className="px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-xs text-amber-200"
+                        >
+                          Mark In Review
+                        </button>
+                      )}
+                      {ticket.status !== 'resolved' && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleUpdateTicket(ticket, 'resolved')}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white"
+                        >
+                          <CheckCircle2 size={13} /> Resolve &amp; Notify
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  {(!rep.status || rep.status === 'open') && (
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
-                      {rep.targetType !== 'user' && ctx.exists && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void handleDeleteContent(rep)}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-xs font-semibold text-white"
-                        >
-                          <Trash2 size={13} /> Delete {rep.targetType}
-                        </button>
-                      )}
-                      {ctx.author && !isProtectedOwner && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            void handleToggleSuspend(ctx.author!, rep.reason)
-                          }
-                          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border text-xs ${
-                            ctx.author.suspended
-                              ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-200'
-                              : 'bg-amber-500/15 border-amber-500/30 text-amber-200'
-                          }`}
-                        >
-                          {ctx.author.suspended ? <RotateCcw size={13} /> : <Ban size={13} />}
-                          {ctx.author.suspended ? 'Restore Account' : 'Suspend Account'}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void handleResolve(rep, 'resolved')}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white"
-                      >
-                        <CheckCircle2 size={13} /> Resolve
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void handleResolve(rep, 'dismissed')}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-[#CBD5E1]"
-                      >
-                        <XCircle size={13} /> Dismiss
-                      </button>
-                    </div>
+                  <p className="text-xs text-[#CBD5E1] bg-[#0D0B16] p-3 rounded-xl border border-white/[0.06] whitespace-pre-wrap">
+                    {ticket.message}
+                  </p>
+
+                  {ticket.status !== 'resolved' ? (
+                    <input
+                      type="text"
+                      value={ticketNotes[ticket.id] ?? ticket.adminNote ?? ''}
+                      onChange={(e) =>
+                        setTicketNotes((prev) => ({ ...prev, [ticket.id]: e.target.value }))
+                      }
+                      placeholder="Response note sent via in-app notification & email when updated..."
+                      className="w-full px-3 py-2 rounded-xl bg-[#0D0B16] border border-[#8B5CF6]/15 text-xs text-white outline-none"
+                    />
+                  ) : (
+                    ticket.adminNote && (
+                      <p className="text-[11px] text-[#94A3B8]">
+                        Admin response: {ticket.adminNote}
+                      </p>
+                    )
                   )}
                 </div>
-
-                <p className="text-xs text-[#CBD5E1] bg-[#0D0B16] p-3 rounded-xl border border-white/[0.06] line-clamp-3">
-                  {ctx.preview}
-                </p>
-
-                {(!rep.status || rep.status === 'open') ? (
-                  <input
-                    type="text"
-                    value={notes[rep.id] || ''}
-                    onChange={(e) =>
-                      setNotes((prev) => ({ ...prev, [rep.id]: e.target.value }))
-                    }
-                    placeholder="Resolution note for audit log..."
-                    className="w-full px-3 py-2 rounded-xl bg-[#0D0B16] border border-[#8B5CF6]/15 text-xs text-white outline-none"
-                  />
-                ) : (
-                  rep.resolutionNote && (
-                    <p className="text-[11px] text-[#94A3B8]">
-                      Resolution note: {rep.resolutionNote}
-                    </p>
-                  )
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Quick User Suspension Roster */}
       <div className="rounded-2xl bg-[#08070F] border border-[#8B5CF6]/20 overflow-hidden">

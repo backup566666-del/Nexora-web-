@@ -23,7 +23,13 @@ import {
   VerifiedBadgeRecord,
   VerifiedBadgeType,
 } from '../types/nexora';
-import { DEFAULT_PLATFORM_CONFIG, FOUNDER_OWNER_EMAIL } from '../utils/validation';
+import {
+  DEFAULT_PLATFORM_CONFIG,
+  FOUNDER_OWNER_EMAIL,
+  normalizeBadgeList,
+  normalizeBadgeType,
+  withPrivacyDefaults,
+} from '../utils/validation';
 
 interface AuthContextValue {
   user: User | null;
@@ -36,6 +42,7 @@ interface AuthContextValue {
   loading: boolean;
   authReady: boolean;
   getBadgeVariant: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType | null;
+  getUserBadges: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType[];
   refreshUserAndProfile: () => Promise<void>;
 }
 
@@ -50,6 +57,7 @@ const AuthContext = createContext<AuthContextValue>({
   loading: true,
   authReady: false,
   getBadgeVariant: () => null,
+  getUserBadges: () => [],
   refreshUserAndProfile: async () => {},
 });
 
@@ -93,7 +101,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     setProfile(finalProfile);
-    setPrivateInfo(freshPrivate);
+    setPrivateInfo(
+      freshPrivate
+        ? {
+            ...freshPrivate,
+            privacySettings: withPrivacyDefaults(freshPrivate.privacySettings),
+          }
+        : null
+    );
     if (finalProfile.onboardingCompleted && !finalProfile.suspended) {
       void seedInitialSpacesIfEmpty(finalProfile);
     }
@@ -151,22 +166,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [authReady, user?.uid, user?.emailVerified]);
 
-  const getBadgeVariant = useCallback(
-    (uid?: string | null, fallbackVerified?: boolean): VerifiedBadgeType | null => {
-      if (!uid) return fallbackVerified ? 'verified' : null;
-      const trusted = badgesMap[uid]?.badgeType;
-      if (trusted) return trusted;
+  const getUserBadges = useCallback(
+    (uid?: string | null, fallbackVerified?: boolean): VerifiedBadgeType[] => {
+      if (!uid) return fallbackVerified ? ['verified_identity'] : [];
+      const record = badgesMap[uid];
+      if (record) {
+        const list = normalizeBadgeList(record.badges, record.badgeType);
+        if (list.length > 0) return list;
+      }
       if (
         uid === user?.uid &&
         user?.emailVerified &&
         (user.email || '').toLowerCase() === FOUNDER_OWNER_EMAIL.toLowerCase()
       ) {
-        return 'owner';
+        return ['founder', 'verified_identity'];
       }
-      if (fallbackVerified) return 'verified';
-      return null;
+      if (fallbackVerified) return ['verified_identity'];
+      return [];
     },
     [badgesMap, user?.uid, user?.emailVerified, user?.email]
+  );
+
+  const getBadgeVariant = useCallback(
+    (uid?: string | null, fallbackVerified?: boolean): VerifiedBadgeType | null => {
+      const list = getUserBadges(uid, fallbackVerified);
+      return list.length > 0 ? normalizeBadgeType(list[0]) : null;
+    },
+    [getUserBadges]
   );
 
   return (
@@ -182,6 +208,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         authReady,
         getBadgeVariant,
+        getUserBadges,
         refreshUserAndProfile,
       }}
     >

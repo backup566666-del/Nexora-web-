@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { ResilientImage } from '../../components/common/ResilientImage';
-import { VerifiedBadge } from '../../components/common/VerifiedBadge';
+import { BadgeStrip, VerifiedBadge } from '../../components/common/VerifiedBadge';
 import { CoverEditorModal } from '../../components/media/CoverEditorModal';
 import { PostComposer } from '../../features/posts/PostComposer';
 import { PostCard } from '../../features/posts/PostCard';
@@ -89,7 +89,7 @@ export function SpacesPage({
   initialSpaceId,
   onOpenProfile,
 }: SpacesPageProps) {
-  const { profile, myRole, platformConfig } = useAuth();
+  const { profile, myRole, platformConfig, getUserBadges } = useAuth();
   const [sidebarTab, setSidebarTab] = useState<'discover' | 'mine' | 'invites' | 'joined' | 'create'>('discover');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showMoreCategories, setShowMoreCategories] = useState(false);
@@ -403,7 +403,10 @@ export function SpacesPage({
                         />
                         <div className="space-y-0.5">
                           <div className="flex items-center gap-2 text-xs">
-                            <span className="font-semibold text-white">{d.authorName}</span>
+                            <span className="font-semibold text-white inline-flex items-center gap-1">
+                              {d.authorName}
+                              <BadgeStrip badges={getUserBadges(d.authorId)} size={12} max={2} />
+                            </span>
                             <span className="text-[#64748B]">
                               {formatRelativeTime(d.createdAt)}
                             </span>
@@ -466,7 +469,10 @@ export function SpacesPage({
                     className="w-11 h-11 rounded-full object-cover shrink-0"
                   />
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold text-white truncate">{m.displayName}</p>
+                    <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
+                      <span className="truncate">{m.displayName}</span>
+                      <BadgeStrip badges={getUserBadges(m.uid)} size={12} max={2} interactive={false} />
+                    </p>
                     <p className="text-[11px] text-[#94A3B8] truncate">
                       @{m.username} · {m.role}
                     </p>

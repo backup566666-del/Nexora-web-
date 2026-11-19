@@ -33,7 +33,7 @@
     },
     "UserPrivate": {
       "title": "UserPrivate",
-      "description": "Private PII and user privacy settings restricted to owner.",
+      "description": "Private PII and user privacy/notification settings restricted to owner.",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -76,16 +76,45 @@
     },
     "VerifiedBadgeRecord": {
       "title": "VerifiedBadgeRecord",
-      "description": "Public zero-PII trusted badge registry controlled exclusively by platform administration.",
+      "description": "Public zero-PII trusted 20-badge registry controlled exclusively by platform administration.",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "badgeType": { "type": "string", "enum": ["owner", "verified", "partner", "creator", "founder_circle"] },
+        "badgeType": {
+          "type": "string",
+          "enum": [
+            "verified_identity", "founder", "official_organization", "official_media",
+            "creator", "influencer", "artist", "professional", "educator", "journalist",
+            "community_founder", "community_leader", "moderator", "community_champion",
+            "early_member", "pioneer", "top_contributor", "trendsetter", "supporter", "legend",
+            "owner", "verified", "partner", "founder_circle"
+          ]
+        },
         "label": { "type": "string", "maxLength": 60 },
+        "badges": { "type": "array" },
+        "labels": { "type": "array" },
         "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "badgeType", "label", "updatedBy", "updatedAt"]
+    },
+    "BadgeConfig": {
+      "title": "BadgeConfig",
+      "description": "Administrative badge rules and automated achievement criteria configuration.",
+      "type": "object",
+      "properties": {
+        "badgeId": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "enabled": { "type": "boolean" },
+        "autoAward": { "type": "boolean" },
+        "minFollowers": { "type": "number" },
+        "minPosts": { "type": "number" },
+        "minLikes": { "type": "number" },
+        "accountAgeDays": { "type": "number" },
+        "customCriteriaNote": { "type": "string", "maxLength": 300 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["badgeId", "enabled", "autoAward", "minFollowers", "minPosts", "minLikes", "accountAgeDays", "customCriteriaNote", "updatedBy", "updatedAt"]
     },
     "VerificationRequest": {
       "title": "VerificationRequest",
@@ -96,7 +125,14 @@
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "username": { "type": "string", "minLength": 3, "maxLength": 30 },
         "avatarUrl": { "type": "string", "maxLength": 200000 },
-        "requestedBadge": { "type": "string", "enum": ["verified", "creator", "partner"] },
+        "requestedBadge": {
+          "type": "string",
+          "enum": [
+            "verified_identity", "official_organization", "official_media", "creator", "influencer",
+            "artist", "professional", "educator", "journalist", "community_founder",
+            "community_leader", "community_champion", "supporter", "verified", "partner"
+          ]
+        },
         "category": { "type": "string", "minLength": 1, "maxLength": 60 },
         "rationale": { "type": "string", "minLength": 1, "maxLength": 600 },
         "referenceLink": { "type": "string", "maxLength": 200 },
@@ -187,7 +223,7 @@
     },
     "Post": {
       "title": "Post",
-      "description": "Social timeline post, media, or poll.",
+      "description": "Social timeline post, media, poll, tagging, collaborations, and free gifts counter.",
       "type": "object",
       "properties": {
         "authorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -203,6 +239,13 @@
         "mediaTypes": { "type": "array" },
         "hashtags": { "type": "array" },
         "mentions": { "type": "array" },
+        "taggedUids": { "type": "array" },
+        "taggedUsernames": { "type": "array" },
+        "collaboratorInviteUids": { "type": "array" },
+        "collaboratorUids": { "type": "array" },
+        "declinedCollaboratorUids": { "type": "array" },
+        "collaboratorProfiles": { "type": "object" },
+        "giftsCount": { "type": "number" },
         "location": { "type": "string", "maxLength": 100 },
         "audience": { "type": "string", "enum": ["public", "followers", "space"] },
         "pollOptions": { "type": "array" },
@@ -454,7 +497,17 @@
         "actorId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "actorName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "actorAvatar": { "type": "string", "maxLength": 200000 },
-        "type": { "type": "string", "enum": ["like", "comment", "follow", "repost", "space_invite", "message", "announcement", "security_alert", "admin_notice"] },
+        "type": {
+          "type": "string",
+          "enum": [
+            "like", "comment", "follow", "repost", "space_invite", "message",
+            "announcement", "security_alert", "admin_notice",
+            "badge_awarded", "badge_revoked", "identity_decision", "staff_role_change",
+            "community_status", "verification_decision", "collab_invite", "collab_response",
+            "post_tag", "gift_received", "support_ticket"
+          ]
+        },
+        "category": { "type": "string", "enum": ["account", "social", "badges", "gifts", "admin", "security"] },
         "targetId": { "type": "string", "maxLength": 128 },
         "preview": { "type": "string", "maxLength": 200 },
         "read": { "type": "boolean" },
@@ -464,11 +517,11 @@
     },
     "Report": {
       "title": "Report",
-      "description": "Content or user moderation report.",
+      "description": "Content, user, collab, or gift moderation report.",
       "type": "object",
       "properties": {
         "reporterId": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "targetType": { "type": "string", "enum": ["post", "user", "space", "vibe"] },
+        "targetType": { "type": "string", "enum": ["post", "user", "space", "vibe", "gift", "collab"] },
         "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "reason": { "type": "string", "minLength": 1, "maxLength": 300 },
         "status": { "type": "string", "enum": ["open", "resolved", "dismissed"] },
@@ -478,6 +531,86 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["reporterId", "targetType", "targetId", "reason", "createdAt"]
+    },
+    "VirtualGiftCatalogItem": {
+      "title": "VirtualGiftCatalogItem",
+      "description": "Curated strictly free Nexora virtual gift item.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "description": { "type": "string", "maxLength": 200 },
+        "emoji": { "type": "string", "minLength": 1, "maxLength": 16 },
+        "category": { "type": "string", "enum": ["celebration", "creator", "community", "appreciation"] },
+        "accentColor": { "type": "string", "maxLength": 24 },
+        "tier": { "type": "string", "enum": ["free", "future_premium"] },
+        "enabled": { "type": "boolean" },
+        "sortOrder": { "type": "number" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "description", "emoji", "category", "accentColor", "tier", "enabled", "sortOrder", "updatedAt"]
+    },
+    "GiftTransaction": {
+      "title": "GiftTransaction",
+      "description": "Free virtual gift sent to a profile or post.",
+      "type": "object",
+      "properties": {
+        "giftId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "giftName": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "giftEmoji": { "type": "string", "minLength": 1, "maxLength": 16 },
+        "giftAccent": { "type": "string", "maxLength": 24 },
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "senderUsername": { "type": "string", "minLength": 3, "maxLength": 30 },
+        "senderAvatar": { "type": "string", "maxLength": 200000 },
+        "recipientUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "recipientName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "recipientUsername": { "type": "string", "minLength": 3, "maxLength": 30 },
+        "targetType": { "type": "string", "enum": ["profile", "post"] },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "message": { "type": "string", "maxLength": 240 },
+        "anonymous": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["giftId", "giftName", "giftEmoji", "giftAccent", "senderUid", "senderName", "senderUsername", "recipientUid", "recipientName", "recipientUsername", "targetType", "targetId", "anonymous", "createdAt"]
+    },
+    "EmailLogEntry": {
+      "title": "EmailLogEntry",
+      "description": "Privacy-masked email dispatch log.",
+      "type": "object",
+      "properties": {
+        "recipientUid": { "type": "string", "maxLength": 128 },
+        "recipientEmailMasked": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "eventType": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "category": { "type": "string", "enum": ["account", "social", "badges", "gifts", "admin", "security"] },
+        "subject": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "provider": { "type": "string", "enum": ["resend", "smtp", "none"] },
+        "status": { "type": "string", "enum": ["sent", "not_configured", "skipped", "failed"] },
+        "error": { "type": "string", "maxLength": 240 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["recipientEmailMasked", "eventType", "category", "subject", "provider", "status", "actorUid", "createdAt"]
+    },
+    "ContactSubmission": {
+      "title": "ContactSubmission",
+      "description": "Support ticket, verification inquiry, or moderation appeal.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 254 },
+        "category": { "type": "string", "enum": ["support", "appeal", "verification_help", "bug", "partnership"] },
+        "subject": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "message": { "type": "string", "minLength": 4, "maxLength": 1500 },
+        "status": { "type": "string", "enum": ["open", "in_review", "resolved"] },
+        "adminNote": { "type": "string", "maxLength": 300 },
+        "handledBy": { "type": "string", "maxLength": 128 },
+        "handledAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "category", "subject", "message", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -487,7 +620,7 @@
     },
     "/users/{userId}/private/{docId}": {
       "schema": { "$ref": "#/entities/UserPrivate" },
-      "description": "Owner-only PII and privacy settings."
+      "description": "Owner-only PII, privacy, and notification settings."
     },
     "/users/{userId}/saved/{postId}": {
       "schema": { "$ref": "#/entities/SavedPost" },
@@ -511,7 +644,11 @@
     },
     "/verified_badges/{userId}": {
       "schema": { "$ref": "#/entities/VerifiedBadgeRecord" },
-      "description": "Zero-PII trusted badge registry."
+      "description": "Zero-PII trusted 20-badge registry."
+    },
+    "/badge_configs/{badgeId}": {
+      "schema": { "$ref": "#/entities/BadgeConfig" },
+      "description": "Administrative badge eligibility and automation thresholds."
     },
     "/verification_requests/{requestId}": {
       "schema": { "$ref": "#/entities/VerificationRequest" },
@@ -600,6 +737,22 @@
     "/reports/{reportId}": {
       "schema": { "$ref": "#/entities/Report" },
       "description": "Moderation reports."
+    },
+    "/gift_catalog/{giftId}": {
+      "schema": { "$ref": "#/entities/VirtualGiftCatalogItem" },
+      "description": "Curated free virtual gifts catalog."
+    },
+    "/virtual_gifts/{giftTxId}": {
+      "schema": { "$ref": "#/entities/GiftTransaction" },
+      "description": "Free virtual gift transactions sent to profiles or posts."
+    },
+    "/email_logs/{logId}": {
+      "schema": { "$ref": "#/entities/EmailLogEntry" },
+      "description": "Privacy-masked email delivery status records."
+    },
+    "/contact_submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/ContactSubmission" },
+      "description": "Support tickets, verification questions, and moderation appeals."
     }
   }
 }

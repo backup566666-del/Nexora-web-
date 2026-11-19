@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart2,
   Globe,
@@ -7,18 +7,23 @@ import {
   MapPin,
   Plus,
   Send,
+  Tag,
   Trash2,
+  UserPlus,
   Video,
   X,
 } from 'lucide-react';
 import { ResilientImage } from '../../components/common/ResilientImage';
+import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
-import { createPost } from '../../services/firebase/socialService';
+import { createPost, subscribeDirectoryUsers } from '../../services/firebase/socialService';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
-import { AudienceType, PostType, Space } from '../../types/nexora';
+import { AudienceType, PostType, Space, UserProfile } from '../../types/nexora';
+import { BLUEPRINT_LIMITS } from '../../utils/validation';
 
 interface PostComposerProps {
   spaces?: Space[];
+  users?: UserProfile[];
   defaultSpaceId?: string;
   initialMediaUrl?: string;
   initialMediaType?: 'image' | 'video';
@@ -27,12 +32,14 @@ interface PostComposerProps {
 
 export function PostComposer({
   spaces = [],
+  users: propUsers,
   defaultSpaceId = '',
   initialMediaUrl = '',
   initialMediaType = 'image',
   onCreated,
 }: PostComposerProps) {
-  const { profile } = useAuth();
+  const { profile, privateInfo, getUserBadges } = useAuth();
+  const [directoryUsers, setDirectoryUsers] = useState<UserProfile[]>(propUsers || []);
   const [text, setText] = useState('');
   const [mediaUrls, setMediaUrls] = useState<string[]>(initialMediaUrl ? [initialMediaUrl] : []);
   const [mediaTypes, setMediaTypes] = useState<string[]>(initialMediaUrl ? [initialMediaType] : []);
@@ -42,12 +49,24 @@ export function PostComposer({
   const [showLocation, setShowLocation] = useState(false);
   const [audience, setAudience] = useState<AudienceType>(defaultSpaceId ? 'space' : 'public');
   const [selectedSpaceId, setSelectedSpaceId] = useState(defaultSpaceId);
+  const [taggedUsers, setTaggedUsers] = useState<UserProfile[]>([]);
+  const [collaboratorUsers, setCollaboratorUsers] = useState<UserProfile[]>([]);
+  const [pickerMode, setPickerMode] = useState<'none' | 'tag' | 'collab'>('none');
+  const [pickerSearch, setPickerSearch] = useState('');
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   const photoRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (propUsers) {
+      setDirectoryUsers(propUsers);
+      return;
+    }
+    return subscribeDirectoryUsers(setDirectoryUsers);
+  }, [propUsers]);
 
   useEffect(() => {
     if (initialMediaUrl) {
@@ -57,6 +76,26 @@ export function PostComposer({
       );
     }
   }, [initialMediaUrl, initialMediaType]);
+
+  const blockedSet = useMemo(
+    () => new Set(privateInfo?.blockedUserIds || []),
+    [privateInfo?.blockedUserIds]
+  );
+
+  const filteredCandidates = useMemo(() => {
+    if (!profile) return [];
+    const term = pickerSearch.trim().toLowerCase();
+    return directoryUsers
+      .filter((u) => u.uid !== profile.uid && !u.suspended && !blockedSet.has(u.uid))
+      .filter((u) => {
+        if (!term) return true;
+        return (
+          u.displayName.toLowerCase().includes(term) ||
+          u.username.toLowerCase().includes(term)
+        );
+      })
+      .slice(0, 12);
+  }, [directoryUsers, profile, blockedSet, pickerSearch]);
 
   if (!profile) return null;
 
@@ -83,6 +122,32 @@ export function PostComposer({
   const removeMediaAt = (idx: number) => {
     setMediaUrls((prev) => prev.filter((_, i) => i !== idx));
     setMediaTypes((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const toggleTaggedUser = (candidate: UserProfile) => {
+    setTaggedUsers((prev) => {
+      if (prev.some((u) => u.uid === candidate.uid)) {
+        return prev.filter((u) => u.uid !== candidate.uid);
+      }
+      if (prev.length >= BLUEPRINT_LIMITS.MAX_TAGGED_USERS) {
+        setError(`You can tag up to ${BLUEPRINT_LIMITS.MAX_TAGGED_USERS} people per post.`);
+        return prev;
+      }
+      return [...prev, candidate];
+    });
+  };
+
+  const toggleCollaboratorUser = (candidate: UserProfile) => {
+    setCollaboratorUsers((prev) => {
+      if (prev.some((u) => u.uid === candidate.uid)) {
+        return prev.filter((u) => u.uid !== candidate.uid);
+      }
+      if (prev.length >= BLUEPRINT_LIMITS.MAX_COLLABORATORS) {
+        setError(`You can invite up to ${BLUEPRINT_LIMITS.MAX_COLLABORATORS} collaborators per post.`);
+        return prev;
+      }
+      return [...prev, candidate];
+    });
   };
 
   const handlePublish = async (e: React.FormEvent) => {
@@ -114,6 +179,9 @@ export function PostComposer({
         spaceId: selectedSpaceId,
         spaceName: targetSpace?.name || '',
         pollOptions: validPollOptions,
+        taggedUsers,
+        collaboratorUsers,
+        blockedUserIds: privateInfo?.blockedUserIds,
       });
       setText('');
       setMediaUrls([]);
@@ -122,6 +190,10 @@ export function PostComposer({
       setPollOptions(['', '']);
       setLocation('');
       setShowLocation(false);
+      setTaggedUsers([]);
+      setCollaboratorUsers([]);
+      setPickerMode('none');
+      setPickerSearch('');
       onCreated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not publish post.');
@@ -150,6 +222,131 @@ export function PostComposer({
             placeholder="What's on your mind?"
             className="w-full bg-transparent text-sm text-white placeholder:text-[#7C6E9B] outline-none resize-none leading-relaxed"
           />
+
+          {/* Selected Collaborators & Tagged People */}
+          {(collaboratorUsers.length > 0 || taggedUsers.length > 0) && (
+            <div className="flex flex-wrap gap-2">
+              {collaboratorUsers.map((u) => (
+                <span
+                  key={`collab-${u.uid}`}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#7C3AED]/20 border border-[#8B5CF6]/40 text-[11px] text-[#E9D5FF]"
+                >
+                  <UserPlus size={11} className="text-[#C084FC]" />
+                  <span>Collab: @{u.username}</span>
+                  <button
+                    type="button"
+                    onClick={() => toggleCollaboratorUser(u)}
+                    className="hover:text-white"
+                    aria-label={`Remove collaborator ${u.username}`}
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+              {taggedUsers.map((u) => (
+                <span
+                  key={`tag-${u.uid}`}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-500/15 border border-sky-400/35 text-[11px] text-sky-200"
+                >
+                  <Tag size={11} className="text-sky-300" />
+                  <span>Tagged: @{u.username}</span>
+                  <button
+                    type="button"
+                    onClick={() => toggleTaggedUser(u)}
+                    className="hover:text-white"
+                    aria-label={`Remove tag ${u.username}`}
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* People Tag / Collab Picker */}
+          {pickerMode !== 'none' && (
+            <div className="p-3.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/25 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <span className="text-xs font-semibold text-white">
+                    {pickerMode === 'collab'
+                      ? `Invite Co-Author Collaborators (${collaboratorUsers.length}/${BLUEPRINT_LIMITS.MAX_COLLABORATORS})`
+                      : `Tag People in Post (${taggedUsers.length}/${BLUEPRINT_LIMITS.MAX_TAGGED_USERS})`}
+                  </span>
+                  <p className="text-[10px] text-[#94A3B8]">
+                    {pickerMode === 'collab'
+                      ? 'Collaborators receive an invite and appear as co-authors after accepting.'
+                      : 'Tagged people are notified and see this post in their Profile Tagged tab.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPickerMode('none')}
+                  className="text-xs text-[#94A3B8] hover:text-white"
+                >
+                  Done
+                </button>
+              </div>
+              <input
+                type="text"
+                value={pickerSearch}
+                onChange={(e) => setPickerSearch(e.target.value)}
+                placeholder="Search Nexora members by name or @username..."
+                className="w-full px-3 py-2 rounded-xl bg-[#0D0B16] border border-[#8B5CF6]/20 text-xs text-white outline-none focus:border-[#8B5CF6]"
+              />
+              <div className="max-h-40 overflow-y-auto space-y-1">
+                {filteredCandidates.length === 0 ? (
+                  <p className="text-[11px] text-[#64748B] py-2">No matching members found.</p>
+                ) : (
+                  filteredCandidates.map((cand) => {
+                    const active =
+                      pickerMode === 'collab'
+                        ? collaboratorUsers.some((u) => u.uid === cand.uid)
+                        : taggedUsers.some((u) => u.uid === cand.uid);
+                    return (
+                      <button
+                        key={cand.uid}
+                        type="button"
+                        onClick={() =>
+                          pickerMode === 'collab'
+                            ? toggleCollaboratorUser(cand)
+                            : toggleTaggedUser(cand)
+                        }
+                        className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-left transition-colors ${
+                          active
+                            ? 'bg-[#7C3AED]/20 border border-[#8B5CF6]/45'
+                            : 'hover:bg-white/[0.04] border border-transparent'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <ResilientImage
+                            src={cand.avatarUrl}
+                            alt={cand.displayName}
+                            className="w-7 h-7 rounded-full object-cover shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-white truncate flex items-center gap-1">
+                              <span>{cand.displayName}</span>
+                              <BadgeStrip
+                                badges={getUserBadges(cand.uid, cand.verified)}
+                                size={12}
+                                max={2}
+                                interactive={false}
+                              />
+                            </p>
+                            <p className="text-[10px] text-[#94A3B8] truncate">@{cand.username}</p>
+                          </div>
+                        </div>
+                        <span className="text-[11px] font-semibold text-[#C084FC] shrink-0">
+                          {active ? 'Selected' : pickerMode === 'collab' ? 'Invite' : 'Tag'}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Media Previews */}
           {mediaUrls.length > 0 && (
@@ -290,6 +487,28 @@ export function PostComposer({
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl hover:bg-[#7C3AED]/10 text-xs text-[#CBD5E1] transition-colors"
           >
             <MapPin size={15} className="text-[#A855F7]" /> Location
+          </button>
+          <button
+            type="button"
+            onClick={() => setPickerMode((m) => (m === 'tag' ? 'none' : 'tag'))}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs transition-colors ${
+              pickerMode === 'tag' || taggedUsers.length > 0
+                ? 'bg-sky-500/15 text-sky-300'
+                : 'hover:bg-[#7C3AED]/10 text-[#CBD5E1]'
+            }`}
+          >
+            <Tag size={14} className="text-sky-400" /> Tag
+          </button>
+          <button
+            type="button"
+            onClick={() => setPickerMode((m) => (m === 'collab' ? 'none' : 'collab'))}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs transition-colors ${
+              pickerMode === 'collab' || collaboratorUsers.length > 0
+                ? 'bg-[#7C3AED]/20 text-[#C084FC]'
+                : 'hover:bg-[#7C3AED]/10 text-[#CBD5E1]'
+            }`}
+          >
+            <UserPlus size={14} className="text-[#A855F7]" /> Collab
           </button>
           <button
             type="button"

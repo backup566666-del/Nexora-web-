@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Eye, Image as ImageIcon, Plus, Send, Type, Video, X } from 'lucide-react';
 import { ResilientImage } from '../../components/common/ResilientImage';
-import { VerifiedBadge } from '../../components/common/VerifiedBadge';
+import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
 import {
   createOrGetDirectConversation,
@@ -28,7 +28,7 @@ const STORY_GRADIENTS = [
 ];
 
 export function StoriesBar({ stories, users, onOpenChatThread }: StoriesBarProps) {
-  const { profile, getBadgeVariant } = useAuth();
+  const { profile, getUserBadges } = useAuth();
   const [showCreate, setShowCreate] = useState(false);
   const [activeStory, setActiveStory] = useState<Story | null>(null);
   const [viewers, setViewers] = useState<StoryView[]>([]);
@@ -364,12 +364,11 @@ export function StoriesBar({ stories, users, onOpenChatThread }: StoriesBarProps
                 <div>
                   <p className="text-xs font-semibold text-white inline-flex items-center gap-1">
                     {activeStory.authorName}
-                    {getBadgeVariant(activeStory.authorId, activeStory.authorVerified) && (
-                      <VerifiedBadge
-                        size={12}
-                        variant={getBadgeVariant(activeStory.authorId, activeStory.authorVerified)}
-                      />
-                    )}
+                    <BadgeStrip
+                      badges={getUserBadges(activeStory.authorId, activeStory.authorVerified)}
+                      size={12}
+                      max={3}
+                    />
                   </p>
                   <p className="text-[11px] text-white/70">
                     {formatRelativeTime(activeStory.createdAt)} · {activeStory.privacy}

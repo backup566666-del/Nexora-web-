@@ -87,6 +87,16 @@ service cloud.firestore {
       return arr is list && arr.size() <= maxItems && (arr.size() == 0 || (arr[0] is string && arr[0].size() <= maxItemLen));
     }
 
+    function isAllValidBadgeValue(val) {
+      return val in [
+        'verified_identity', 'founder', 'official_organization', 'official_media',
+        'creator', 'influencer', 'artist', 'professional', 'educator', 'journalist',
+        'community_founder', 'community_leader', 'moderator', 'community_champion',
+        'early_member', 'pioneer', 'top_contributor', 'trendsetter', 'supporter', 'legend',
+        'owner', 'verified', 'partner', 'founder_circle'
+      ];
+    }
+
     // --- Validation Blueprints ---
     function isValidUserProfile(data) {
       return data.keys().hasAll([
@@ -134,11 +144,18 @@ service cloud.firestore {
         && isBoundedStringList(data.blockedUserIds, 100, 128)
         && data.privacySettings is map
         && data.privacySettings.keys().hasAll(['profileVisibility', 'storyPrivacy', 'allowDMs', 'showOnlineStatus'])
-        && data.privacySettings.keys().hasOnly(['profileVisibility', 'storyPrivacy', 'allowDMs', 'showOnlineStatus'])
+        && data.privacySettings.keys().hasOnly([
+          'profileVisibility', 'storyPrivacy', 'allowDMs', 'showOnlineStatus',
+          'allowTags', 'allowCollaborations', 'emailNotifications', 'inAppNotifications'
+        ])
         && data.privacySettings.profileVisibility in ['public', 'followers']
         && data.privacySettings.storyPrivacy in ['public', 'followers', 'close']
         && data.privacySettings.allowDMs in ['everyone', 'followers']
         && data.privacySettings.showOnlineStatus is bool
+        && (!('allowTags' in data.privacySettings) || data.privacySettings.allowTags in ['everyone', 'followers', 'nobody'])
+        && (!('allowCollaborations' in data.privacySettings) || data.privacySettings.allowCollaborations in ['everyone', 'followers', 'nobody'])
+        && (!('emailNotifications' in data.privacySettings) || data.privacySettings.emailNotifications is map)
+        && (!('inAppNotifications' in data.privacySettings) || data.privacySettings.inAppNotifications is map)
         && data.updatedAt is timestamp;
     }
 
@@ -174,10 +191,33 @@ service cloud.firestore {
 
     function isValidVerifiedBadgeRecord(data) {
       return data.keys().hasAll(['uid', 'badgeType', 'label', 'updatedBy', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'badgeType', 'label', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'badgeType', 'label', 'badges', 'labels', 'updatedBy', 'updatedAt'])
         && isValidId(data.uid)
-        && data.badgeType in ['owner', 'verified', 'partner', 'creator', 'founder_circle']
+        && isAllValidBadgeValue(data.badgeType)
         && data.label is string && data.label.size() >= 1 && data.label.size() <= 60
+        && (!('badges' in data) || isBoundedStringList(data.badges, 20, 40))
+        && (!('labels' in data) || isBoundedStringList(data.labels, 20, 60))
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBadgeConfig(data) {
+      return data.keys().hasAll([
+          'badgeId', 'enabled', 'autoAward', 'minFollowers', 'minPosts',
+          'minLikes', 'accountAgeDays', 'customCriteriaNote', 'updatedBy', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'badgeId', 'enabled', 'autoAward', 'minFollowers', 'minPosts',
+          'minLikes', 'accountAgeDays', 'customCriteriaNote', 'updatedBy', 'updatedAt'
+        ])
+        && isAllValidBadgeValue(data.badgeId)
+        && data.enabled is bool
+        && data.autoAward is bool
+        && data.minFollowers is int && data.minFollowers >= 0
+        && data.minPosts is int && data.minPosts >= 0
+        && data.minLikes is int && data.minLikes >= 0
+        && data.accountAgeDays is int && data.accountAgeDays >= 0
+        && data.customCriteriaNote is string && data.customCriteriaNote.size() <= 300
         && isValidId(data.updatedBy)
         && data.updatedAt is timestamp;
     }
@@ -196,7 +236,11 @@ service cloud.firestore {
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
         && data.username is string && data.username.size() >= 3 && data.username.size() <= 30
         && isOptionalString(data, 'avatarUrl', 200000)
-        && data.requestedBadge in ['verified', 'creator', 'partner']
+        && data.requestedBadge in [
+          'verified', 'creator', 'partner', 'official_organization', 'official_media',
+          'influencer', 'artist', 'professional', 'educator', 'journalist',
+          'community_founder', 'community_leader', 'community_champion', 'supporter', 'verified_identity'
+        ]
         && data.category is string && data.category.size() >= 1 && data.category.size() <= 60
         && data.rationale is string && data.rationale.size() >= 1 && data.rationale.size() <= 600
         && isOptionalString(data, 'referenceLink', 200)
@@ -308,7 +352,10 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'authorId', 'authorName', 'authorUsername', 'authorAvatar', 'authorVerified',
           'spaceId', 'spaceName', 'type', 'text', 'mediaUrls', 'mediaTypes',
-          'hashtags', 'mentions', 'location', 'audience', 'pollOptions',
+          'hashtags', 'mentions', 'taggedUids', 'taggedUsernames',
+          'collaboratorInviteUids', 'collaboratorUids', 'declinedCollaboratorUids',
+          'collaboratorProfiles', 'giftsCount',
+          'location', 'audience', 'pollOptions',
           'pollCounts', 'repostOfId', 'likesCount', 'commentsCount',
           'repostsCount', 'savesCount', 'createdAt', 'updatedAt'
         ])
@@ -325,6 +372,13 @@ service cloud.firestore {
         && (!('mediaTypes' in data) || isBoundedStringList(data.mediaTypes, 4, 20))
         && (!('hashtags' in data) || isBoundedStringList(data.hashtags, 10, 40))
         && (!('mentions' in data) || isBoundedStringList(data.mentions, 10, 40))
+        && (!('taggedUids' in data) || isBoundedStringList(data.taggedUids, 10, 128))
+        && (!('taggedUsernames' in data) || isBoundedStringList(data.taggedUsernames, 10, 40))
+        && (!('collaboratorInviteUids' in data) || isBoundedStringList(data.collaboratorInviteUids, 5, 128))
+        && (!('collaboratorUids' in data) || isBoundedStringList(data.collaboratorUids, 5, 128))
+        && (!('declinedCollaboratorUids' in data) || isBoundedStringList(data.declinedCollaboratorUids, 5, 128))
+        && (!('collaboratorProfiles' in data) || data.collaboratorProfiles is map)
+        && (!('giftsCount' in data) || (data.giftsCount is int && data.giftsCount >= 0))
         && isOptionalString(data, 'location', 100)
         && data.audience in ['public', 'followers', 'space']
         && (!('pollOptions' in data) || isBoundedStringList(data.pollOptions, 4, 100))
@@ -546,12 +600,19 @@ service cloud.firestore {
 
     function isValidNotification(data) {
       return data.keys().hasAll(['recipientId', 'actorId', 'actorName', 'type', 'read', 'createdAt'])
-        && data.keys().hasOnly(['recipientId', 'actorId', 'actorName', 'actorAvatar', 'type', 'targetId', 'preview', 'read', 'createdAt'])
+        && data.keys().hasOnly(['recipientId', 'actorId', 'actorName', 'actorAvatar', 'type', 'category', 'targetId', 'preview', 'read', 'createdAt'])
         && isValidId(data.recipientId)
         && isValidId(data.actorId)
         && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80
         && isOptionalString(data, 'actorAvatar', 200000)
-        && data.type in ['like', 'comment', 'follow', 'repost', 'space_invite', 'message', 'announcement', 'security_alert', 'admin_notice']
+        && data.type in [
+          'like', 'comment', 'follow', 'repost', 'space_invite', 'message',
+          'announcement', 'security_alert', 'admin_notice',
+          'badge_awarded', 'badge_revoked', 'identity_decision', 'staff_role_change',
+          'community_status', 'verification_decision', 'collab_invite', 'collab_response',
+          'post_tag', 'gift_received', 'support_ticket'
+        ]
+        && (!('category' in data) || data.category in ['account', 'social', 'badges', 'gifts', 'admin', 'security'])
         && isOptionalString(data, 'targetId', 128)
         && isOptionalString(data, 'preview', 200)
         && data.read is bool
@@ -562,7 +623,7 @@ service cloud.firestore {
       return data.keys().hasAll(['reporterId', 'targetType', 'targetId', 'reason', 'createdAt'])
         && data.keys().hasOnly(['reporterId', 'targetType', 'targetId', 'reason', 'status', 'resolutionNote', 'resolvedBy', 'resolvedAt', 'createdAt'])
         && isValidId(data.reporterId)
-        && data.targetType in ['post', 'user', 'space', 'vibe']
+        && data.targetType in ['post', 'user', 'space', 'vibe', 'gift', 'collab']
         && isValidId(data.targetId)
         && data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 300
         && (!('status' in data) || data.status in ['open', 'resolved', 'dismissed'])
@@ -570,6 +631,101 @@ service cloud.firestore {
         && isOptionalString(data, 'resolvedBy', 128)
         && (!('resolvedAt' in data) || data.resolvedAt is timestamp)
         && data.createdAt is timestamp;
+    }
+
+    function isValidGiftCatalogItem(data) {
+      return data.keys().hasAll([
+          'name', 'description', 'emoji', 'category', 'accentColor',
+          'tier', 'enabled', 'sortOrder', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'name', 'description', 'emoji', 'category', 'accentColor',
+          'tier', 'enabled', 'sortOrder', 'createdBy', 'updatedAt'
+        ])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 60
+        && data.description is string && data.description.size() <= 200
+        && data.emoji is string && data.emoji.size() >= 1 && data.emoji.size() <= 16
+        && data.category in ['celebration', 'creator', 'community', 'appreciation']
+        && data.accentColor is string && data.accentColor.size() >= 3 && data.accentColor.size() <= 24
+        && data.tier in ['free', 'future_premium']
+        && data.enabled is bool
+        && data.sortOrder is int && data.sortOrder >= 0
+        && isOptionalString(data, 'createdBy', 128)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidGiftTransaction(data) {
+      return data.keys().hasAll([
+          'giftId', 'giftName', 'giftEmoji', 'giftAccent', 'senderUid',
+          'senderName', 'senderUsername', 'recipientUid', 'recipientName',
+          'recipientUsername', 'targetType', 'targetId', 'anonymous', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'giftId', 'giftName', 'giftEmoji', 'giftAccent', 'senderUid',
+          'senderName', 'senderUsername', 'senderAvatar', 'recipientUid',
+          'recipientName', 'recipientUsername', 'targetType', 'targetId',
+          'message', 'anonymous', 'createdAt'
+        ])
+        && isValidId(data.giftId)
+        && data.giftName is string && data.giftName.size() >= 1 && data.giftName.size() <= 60
+        && data.giftEmoji is string && data.giftEmoji.size() >= 1 && data.giftEmoji.size() <= 16
+        && data.giftAccent is string && data.giftAccent.size() >= 3 && data.giftAccent.size() <= 24
+        && isValidId(data.senderUid)
+        && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80
+        && data.senderUsername is string && data.senderUsername.size() >= 3 && data.senderUsername.size() <= 30
+        && isOptionalString(data, 'senderAvatar', 200000)
+        && isValidId(data.recipientUid)
+        && data.recipientName is string && data.recipientName.size() >= 1 && data.recipientName.size() <= 80
+        && data.recipientUsername is string && data.recipientUsername.size() >= 3 && data.recipientUsername.size() <= 30
+        && data.targetType in ['profile', 'post']
+        && isValidId(data.targetId)
+        && isOptionalString(data, 'message', 240)
+        && data.anonymous is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidEmailLog(data) {
+      return data.keys().hasAll([
+          'recipientEmailMasked', 'eventType', 'category', 'subject',
+          'provider', 'status', 'actorUid', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'recipientUid', 'recipientEmailMasked', 'eventType', 'category',
+          'subject', 'provider', 'status', 'error', 'actorUid', 'createdAt'
+        ])
+        && isOptionalString(data, 'recipientUid', 128)
+        && data.recipientEmailMasked is string && data.recipientEmailMasked.size() >= 1 && data.recipientEmailMasked.size() <= 120
+        && data.eventType is string && data.eventType.size() >= 1 && data.eventType.size() <= 60
+        && data.category in ['account', 'social', 'badges', 'gifts', 'admin', 'security']
+        && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 160
+        && data.provider in ['resend', 'smtp', 'none']
+        && data.status in ['sent', 'not_configured', 'skipped', 'failed']
+        && isOptionalString(data, 'error', 240)
+        && isValidId(data.actorUid)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidContactSubmission(data) {
+      return data.keys().hasAll([
+          'name', 'email', 'category', 'subject', 'message',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'name', 'email', 'category', 'subject', 'message',
+          'status', 'adminNote', 'handledBy', 'handledAt', 'createdAt', 'updatedAt'
+        ])
+        && isOptionalString(data, 'uid', 128)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 80
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.category in ['support', 'appeal', 'verification_help', 'bug', 'partnership']
+        && data.subject is string && data.subject.size() >= 2 && data.subject.size() <= 120
+        && data.message is string && data.message.size() >= 4 && data.message.size() <= 1500
+        && data.status in ['open', 'in_review', 'resolved']
+        && isOptionalString(data, 'adminNote', 300)
+        && isOptionalString(data, 'handledBy', 128)
+        && (!('handledAt' in data) || data.handledAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
 
     // --- Collection Rules ---
@@ -626,10 +782,16 @@ service cloud.firestore {
         );
     }
 
-    // Public Zero-PII Trusted Badge Registry
+    // Public Zero-PII Trusted 20-Badge Registry
     match /verified_badges/{userId} {
       allow get: if isValidId(userId);
-      allow list: if isSignedIn() && existing().badgeType in ['owner', 'verified', 'partner', 'creator', 'founder_circle'];
+      allow list: if isSignedIn() && existing().badgeType in [
+        'verified_identity', 'founder', 'official_organization', 'official_media',
+        'creator', 'influencer', 'artist', 'professional', 'educator', 'journalist',
+        'community_founder', 'community_leader', 'moderator', 'community_champion',
+        'early_member', 'pioneer', 'top_contributor', 'trendsetter', 'supporter', 'legend',
+        'owner', 'verified', 'partner', 'founder_circle'
+      ];
 
       allow create, update: if isValidId(userId)
         && isVerified()
@@ -638,18 +800,36 @@ service cloud.firestore {
         && incoming().updatedBy == request.auth.uid
         && incoming().updatedAt == request.time
         && (
-          (isFounderOwner() && isOwner(userId) && incoming().badgeType == 'owner') ||
+          (isFounderOwner() && isOwner(userId) && incoming().badgeType in ['owner', 'founder']) ||
           (
-            incoming().badgeType in ['verified', 'partner', 'creator', 'founder_circle']
+            !(incoming().badgeType in ['owner', 'founder'])
             && !isTargetPlatformOwner(userId)
-            && (isPlatformOwner() || hasPerm('manage_verification'))
+            && (
+              isPlatformOwner() ||
+              hasPerm('manage_verification') ||
+              (hasPerm('review_identity_docs') && incoming().badgeType == 'verified_identity')
+            )
           )
         );
 
       allow delete: if isValidId(userId)
         && isVerified()
-        && existing().badgeType != 'owner'
+        && !(existing().badgeType in ['owner', 'founder'])
         && !isTargetPlatformOwner(userId)
+        && (isPlatformOwner() || hasPerm('manage_verification'));
+    }
+
+    // Administrative Badge Rules & Achievement Thresholds
+    match /badge_configs/{badgeId} {
+      allow get: if isValidId(badgeId) && isSignedIn();
+      allow list: if isSignedIn() && existing().enabled in [true, false];
+
+      allow create, update: if isValidId(badgeId)
+        && isVerified()
+        && isValidBadgeConfig(incoming())
+        && incoming().badgeId == badgeId
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time
         && (isPlatformOwner() || hasPerm('manage_verification'));
     }
 
@@ -809,7 +989,7 @@ service cloud.firestore {
           ) ||
           (
             !isTargetPlatformOwner(userId)
-            && hasPerm('manage_verification')
+            && (hasPerm('manage_verification') || hasPerm('review_identity_docs'))
             && incoming().diff(existing()).affectedKeys().hasOnly(['verified', 'updatedAt'])
           ) ||
           (
@@ -905,6 +1085,8 @@ service cloud.firestore {
         && incoming().commentsCount == 0
         && incoming().repostsCount == 0
         && incoming().savesCount == 0
+        && (!('giftsCount' in incoming()) || incoming().giftsCount == 0)
+        && (!('collaboratorUids' in incoming()) || incoming().collaboratorUids.size() == 0)
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
@@ -919,10 +1101,29 @@ service cloud.firestore {
           (
             isOwner(existing().authorId)
             && isNotSuspended()
-            && incoming().diff(existing()).affectedKeys().hasOnly(['text', 'location', 'audience', 'hashtags', 'mentions', 'updatedAt'])
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'text', 'location', 'audience', 'hashtags', 'mentions',
+              'taggedUids', 'taggedUsernames', 'collaboratorInviteUids', 'collaboratorProfiles', 'updatedAt'
+            ])
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'commentsCount', 'repostsCount', 'savesCount', 'pollCounts', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'likesCount', 'commentsCount', 'repostsCount', 'savesCount', 'pollCounts', 'giftsCount', 'updatedAt'
+            ])
+          ) ||
+          (
+            isNotSuspended()
+            && 'collaboratorInviteUids' in existing()
+            && (request.auth.uid in existing().collaboratorInviteUids || ('collaboratorUids' in existing() && request.auth.uid in existing().collaboratorUids))
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'collaboratorUids', 'declinedCollaboratorUids', 'collaboratorProfiles', 'updatedAt'
+            ])
+          ) ||
+          (
+            'taggedUids' in existing()
+            && request.auth.uid in existing().taggedUids
+            && incoming().diff(existing()).affectedKeys().hasOnly(['taggedUids', 'taggedUsernames', 'updatedAt'])
+            && !(request.auth.uid in incoming().taggedUids)
           )
         );
 
@@ -1243,9 +1444,17 @@ service cloud.firestore {
         && incoming().read == false
         && incoming().createdAt == request.time
         && (
-          incoming().type in ['like', 'comment', 'follow', 'repost', 'space_invite', 'message'] ||
+          incoming().type in [
+            'like', 'comment', 'follow', 'repost', 'space_invite', 'message',
+            'collab_invite', 'collab_response', 'post_tag', 'gift_received', 'support_ticket'
+          ] ||
+          (incoming().type == 'security_alert' && incoming().recipientId == request.auth.uid) ||
           isPlatformOwner() ||
-          hasPerm('manage_notifications')
+          hasPerm('manage_notifications') ||
+          hasPerm('manage_verification') ||
+          hasPerm('review_identity_docs') ||
+          hasPerm('manage_communities') ||
+          hasPerm('manage_admins')
         );
 
       allow update: if isValidId(notifId)
@@ -1265,7 +1474,7 @@ service cloud.firestore {
         isOwner(existing().reporterId) || isPlatformOwner() || hasPerm('moderate_content') || hasPerm('manage_communities')
       );
       allow list: if isVerified() && (isPlatformOwner() || hasPerm('moderate_content') || hasPerm('manage_communities'))
-        && existing().targetType in ['post', 'user', 'space', 'vibe'];
+        && existing().targetType in ['post', 'user', 'space', 'vibe', 'gift', 'collab'];
 
       allow create: if isValidId(reportId) && isVerified()
         && isNotSuspended()
@@ -1284,6 +1493,98 @@ service cloud.firestore {
         && incoming().resolvedBy == request.auth.uid
         && incoming().resolvedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'resolutionNote', 'resolvedBy', 'resolvedAt']);
+    }
+
+    // Strictly Free Virtual Gifts Catalog
+    match /gift_catalog/{giftId} {
+      allow get: if isValidId(giftId) && isSignedIn();
+      allow list: if isSignedIn() && existing().tier in ['free', 'future_premium'];
+
+      allow create, update: if isValidId(giftId)
+        && isVerified()
+        && isValidGiftCatalogItem(incoming())
+        && incoming().tier == 'free'
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_platform') || hasPerm('moderate_content'));
+
+      allow delete: if isValidId(giftId)
+        && isVerified()
+        && (isPlatformOwner() || hasPerm('manage_platform') || hasPerm('moderate_content'));
+    }
+
+    // Free Virtual Gift Transactions
+    match /virtual_gifts/{giftTxId} {
+      allow get: if isValidId(giftTxId) && isSignedIn();
+      allow list: if isSignedIn() && existing().targetType in ['profile', 'post'];
+
+      allow create: if isValidId(giftTxId)
+        && isVerified()
+        && isNotSuspended()
+        && isValidGiftTransaction(incoming())
+        && incoming().senderUid == request.auth.uid
+        && incoming().senderUid != incoming().recipientUid
+        && incoming().createdAt == request.time;
+
+      allow delete: if isValidId(giftTxId) && isVerified() && (
+        isOwner(existing().senderUid) ||
+        isOwner(existing().recipientUid) ||
+        isPlatformOwner() ||
+        hasPerm('moderate_content')
+      );
+    }
+
+    // Privacy-Masked Email Dispatch Logs
+    match /email_logs/{logId} {
+      allow get: if isValidId(logId) && isVerified() && (
+        isOwner(existing().actorUid) || isPlatformOwner() || hasPerm('manage_notifications') || hasPerm('manage_platform')
+      );
+      allow list: if isVerified()
+        && (isPlatformOwner() || hasPerm('manage_notifications') || hasPerm('manage_platform'))
+        && existing().status in ['sent', 'not_configured', 'skipped', 'failed'];
+
+      allow create: if isValidId(logId)
+        && isVerified()
+        && isValidEmailLog(incoming())
+        && incoming().actorUid == request.auth.uid
+        && incoming().createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+
+    // Support Tickets, Verification Help & Moderation Appeals
+    match /contact_submissions/{submissionId} {
+      allow get: if isValidId(submissionId) && isVerified() && (
+        ('uid' in existing() && isOwner(existing().uid)) ||
+        isPlatformOwner() ||
+        hasPerm('moderate_content') ||
+        hasPerm('manage_notifications')
+      );
+      allow list: if isVerified()
+        && (
+          ('uid' in existing() && isOwner(existing().uid)) ||
+          ((isPlatformOwner() || hasPerm('moderate_content') || hasPerm('manage_notifications')) && existing().status in ['open', 'in_review', 'resolved'])
+        );
+
+      allow create: if isValidId(submissionId)
+        && isValidContactSubmission(incoming())
+        && incoming().status == 'open'
+        && (!('uid' in incoming()) || (isSignedIn() && incoming().uid == request.auth.uid))
+        && !('handledBy' in incoming())
+        && !('handledAt' in incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(submissionId)
+        && isVerified()
+        && isValidContactSubmission(incoming())
+        && (isPlatformOwner() || hasPerm('moderate_content') || hasPerm('manage_notifications'))
+        && incoming().createdAt == existing().createdAt
+        && incoming().handledBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(submissionId) && isVerified() && (
+        isPlatformOwner() || hasPerm('moderate_content')
+      );
     }
   }
 }

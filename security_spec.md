@@ -8,8 +8,10 @@
    - Account email, blocked users, and privacy settings live in `users/{userId}/private/{docId}` (`isOwner(userId)` only).
    - Submitted government/identity documents live exclusively in `/identity_verifications/{requestId}`, readable ONLY by the submitting owner (`isOwner(existing().uid)`), the platform `owner`, or explicitly authorized reviewers holding `review_identity_docs` permission.
    - Public verified badge lookups use zero-PII `/verified_badges/{uid}` documents containing only `uid`, `badgeType`, `label`, `updatedBy`, `updatedAt`.
-5. **Immutable Audit Trail**: Every administrative write logs to `/audit_logs/{logId}` (`allow update, delete: if false`).
+5. **Immutable Audit Trail**: Every administrative write logs to `/audit_logs/{logId}` (`allow update, delete: if false`), and email dispatches log with masked emails to `/email_logs/{logId}` (`allow update, delete: if false`).
 6. **Master Gate Subcollections & Strict List Queries**: Space discussions/events require Space membership; conversations require `request.auth.uid in participantIds`; notifications require `recipientId == request.auth.uid`.
+7. **Collaboration & Tag Consent**: Invited collaborators only join `collaboratorUids` when accepting; tagged users can remove themselves (`!(request.auth.uid in incoming().taggedUids)`); privacy controls govern tagging/collab eligibility.
+8. **Strictly Free Virtual Gifts**: `/gift_catalog` rules enforce `tier == 'free'` on write; `/virtual_gifts` prohibits self-gifting (`senderUid != recipientUid`) and contains zero financial/coin fields.
 
 ## 2. The "Dirty Dozen+" Attack Payloads (All Must Return PERMISSION_DENIED)
 1. **Unverified Write**: Write to `/posts/{postId}` with `email_verified: false` -> DENIED.

@@ -1,23 +1,31 @@
 import React, { useEffect, useState } from 'react';
 import {
   Bookmark,
+  Check,
   Flag,
+  Gift,
   Heart,
   MapPin,
   MessageCircle,
   MoreHorizontal,
   Repeat2,
   Share2,
+  Tag,
   Trash2,
+  UserPlus,
+  X,
 } from 'lucide-react';
 import { ResilientImage } from '../../components/common/ResilientImage';
-import { VerifiedBadge } from '../../components/common/VerifiedBadge';
+import { BadgeStrip } from '../../components/common/VerifiedBadge';
+import { GiftPickerModal } from '../../components/gifts/GiftPickerModal';
 import { useAuth } from '../../hooks/useAuth';
 import {
   addPostComment,
   checkPostLiked,
   deletePost,
+  removeSelfTagFromPost,
   repostPost,
+  respondToCollaborationInvite,
   submitModerationReport,
   subscribePostComments,
   togglePostLike,
@@ -34,8 +42,8 @@ interface PostCardProps {
 }
 
 export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
-  const { profile, getBadgeVariant } = useAuth();
-  const postBadge = getBadgeVariant(post.authorId, post.authorVerified);
+  const { profile, getUserBadges } = useAuth();
+  const postBadges = getUserBadges(post.authorId, post.authorVerified);
   const [liked, setLiked] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [comments, setComments] = useState<PostComment[]>([]);
@@ -44,7 +52,10 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
   const [showMenu, setShowMenu] = useState(false);
   const [shareToast, setShareToast] = useState('');
   const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportTargetType, setReportTargetType] = useState<'post' | 'collab'>('post');
   const [reportReason, setReportReason] = useState('');
+  const [giftModalOpen, setGiftModalOpen] = useState(false);
+  const [collabBusy, setCollabBusy] = useState(false);
 
   useEffect(() => {
     if (!profile) return;
@@ -57,6 +68,18 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
   }, [post.id, showComments]);
 
   if (!profile) return null;
+
+  const acceptedCollabUids = post.collaboratorUids || [];
+  const invitedCollabUids = post.collaboratorInviteUids || [];
+  const declinedCollabUids = post.declinedCollaboratorUids || [];
+  const isPendingCollabInvitee =
+    invitedCollabUids.includes(profile.uid) &&
+    !acceptedCollabUids.includes(profile.uid) &&
+    !declinedCollabUids.includes(profile.uid);
+
+  const taggedUids = post.taggedUids || [];
+  const taggedUsernames = post.taggedUsernames || [];
+  const isTaggedUser = taggedUids.includes(profile.uid);
 
   const handleLike = async () => {
     const next = await togglePostLike(post, profile);
@@ -92,7 +115,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
     if (!reportReason.trim()) return;
     await submitModerationReport({
       reporterId: profile.uid,
-      targetType: 'post',
+      targetType: reportTargetType,
       targetId: post.id,
       reason: reportReason,
     });
@@ -100,6 +123,27 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
     setReportModalOpen(false);
     setShareToast('Report submitted');
     setTimeout(() => setShareToast(''), 2000);
+  };
+
+  const handleCollabResponse = async (decision: 'accept' | 'decline') => {
+    setCollabBusy(true);
+    try {
+      await respondToCollaborationInvite({
+        post,
+        responder: profile,
+        decision,
+      });
+      setShareToast(decision === 'accept' ? 'Collaboration accepted' : 'Invite declined');
+      setTimeout(() => setShareToast(''), 2000);
+    } finally {
+      setCollabBusy(false);
+    }
+  };
+
+  const handleSelfUntag = async () => {
+    await removeSelfTagFromPost({ post, user: profile });
+    setShareToast('Tag removed');
+    setTimeout(() => setShareToast(''), 1800);
   };
 
   const totalVotes = (post.pollCounts || []).reduce((acc, n) => acc + n, 0);
@@ -129,8 +173,32 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
               >
                 {post.authorName}
               </button>
-              {postBadge && <VerifiedBadge size={14} variant={postBadge} />}
+              <BadgeStrip badges={postBadges} size={14} max={3} />
               <span className="text-xs text-[#64748B] truncate">@{post.authorUsername}</span>
+              {acceptedCollabUids.length > 0 && (
+                <span className="inline-flex items-center gap-1 text-xs text-[#CBD5E1] flex-wrap">
+                  <span className="text-[#64748B]">with</span>
+                  {acceptedCollabUids.map((collabUid, idx) => {
+                    const summary = post.collaboratorProfiles?.[collabUid];
+                    const collabBadges = getUserBadges(collabUid, false);
+                    return (
+                      <React.Fragment key={collabUid}>
+                        <span className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => onOpenProfile(collabUid)}
+                            className="font-semibold text-[#C084FC] hover:underline"
+                          >
+                            @{summary?.username || 'collaborator'}
+                          </button>
+                          <BadgeStrip badges={collabBadges} size={12} max={2} />
+                        </span>
+                        {idx < acceptedCollabUids.length - 1 && <span className="text-[#64748B]">,</span>}
+                      </React.Fragment>
+                    );
+                  })}
+                </span>
+              )}
               <span aria-hidden="true" className="text-xs text-[#64748B]">·</span>
               <span className="text-xs text-[#64748B]">{formatRelativeTime(post.createdAt)}</span>
             </div>
@@ -158,7 +226,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
             <MoreHorizontal size={16} />
           </button>
           {showMenu && (
-            <div className="absolute right-0 mt-1 w-44 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-xl shadow-2xl p-1.5 z-20">
+            <div className="absolute right-0 mt-1 w-48 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-xl shadow-2xl p-1.5 z-20">
               {post.authorId === profile.uid ? (
                 <button
                   type="button"
@@ -171,21 +239,67 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
                   <Trash2 size={14} /> Delete Post
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowMenu(false);
-                    setReportModalOpen(true);
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-[#E2E8F0] hover:bg-white/5 text-left"
-                >
-                  <Flag size={14} /> Report Post
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowMenu(false);
+                      setReportTargetType('post');
+                      setReportModalOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-[#E2E8F0] hover:bg-white/5 text-left"
+                  >
+                    <Flag size={14} /> Report Post
+                  </button>
+                  {(acceptedCollabUids.length > 0 || taggedUids.length > 0) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        setReportTargetType('collab');
+                        setReportModalOpen(true);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-amber-300 hover:bg-white/5 text-left"
+                    >
+                      <Flag size={14} /> Report Tag / Collab
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}
         </div>
       </div>
+
+      {/* Pending Collaboration Invitation Banner */}
+      {isPendingCollabInvitee && (
+        <div className="ml-[52px] px-3.5 py-2.5 rounded-xl bg-[#161029] border border-[#8B5CF6]/40 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2 text-xs text-[#E9D5FF]">
+            <UserPlus size={14} className="text-[#C084FC] shrink-0" />
+            <span>
+              <strong>@{post.authorUsername}</strong> invited you to co-author this post.
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={collabBusy}
+              onClick={() => void handleCollabResponse('accept')}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-[11px] font-semibold text-white"
+            >
+              <Check size={12} /> Accept
+            </button>
+            <button
+              type="button"
+              disabled={collabBusy}
+              onClick={() => void handleCollabResponse('decline')}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-semibold text-[#CBD5E1]"
+            >
+              <X size={12} /> Decline
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Text Content */}
       {post.text && (
@@ -201,6 +315,34 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
             return token;
           })}
         </p>
+      )}
+
+      {/* Tagged Users Chip Strip (Distinct from @mentions) */}
+      {taggedUids.length > 0 && (
+        <div className="pl-[52px] flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="inline-flex items-center gap-1 text-[#94A3B8]">
+            <Tag size={11} className="text-sky-400" /> Tagged:
+          </span>
+          {taggedUids.map((tUid, idx) => (
+            <button
+              key={tUid}
+              type="button"
+              onClick={() => onOpenProfile(tUid)}
+              className="px-2 py-0.5 rounded-md bg-sky-500/10 border border-sky-400/25 text-sky-300 hover:bg-sky-500/20"
+            >
+              @{taggedUsernames[idx] || 'member'}
+            </button>
+          ))}
+          {isTaggedUser && (
+            <button
+              type="button"
+              onClick={() => void handleSelfUntag()}
+              className="px-2 py-0.5 rounded-md bg-white/[0.06] text-[#CBD5E1] hover:text-rose-300"
+            >
+              Remove my tag
+            </button>
+          )}
+        </div>
       )}
 
       {/* Media Gallery */}
@@ -261,7 +403,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
 
       {/* Action Bar */}
       <div className="pl-[52px] flex items-center justify-between pt-2 text-xs text-[#94A3B8]">
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-5 sm:gap-6 flex-wrap">
           <button
             type="button"
             onClick={handleLike}
@@ -290,6 +432,25 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
             <Repeat2 size={16} />
             <span className="font-mono-tabular">{formatCompactCount(post.repostsCount)}</span>
           </button>
+
+          {post.authorId !== profile.uid ? (
+            <button
+              type="button"
+              onClick={() => setGiftModalOpen(true)}
+              className="inline-flex items-center gap-1.5 hover:text-[#C084FC] transition-colors"
+              title="Send a free virtual gift"
+            >
+              <Gift size={16} className="text-[#C084FC]" />
+              <span className="font-mono-tabular">{formatCompactCount(post.giftsCount || 0)}</span>
+            </button>
+          ) : (
+            (post.giftsCount || 0) > 0 && (
+              <span className="inline-flex items-center gap-1.5 text-[#C084FC]">
+                <Gift size={15} />
+                <span className="font-mono-tabular">{formatCompactCount(post.giftsCount || 0)}</span>
+              </span>
+            )
+          )}
 
           <button
             type="button"
@@ -363,12 +524,11 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
                       />
                       <span className="text-xs font-semibold text-white inline-flex items-center gap-1">
                         {c.authorName}
-                        {getBadgeVariant(c.authorId, c.authorVerified) && (
-                          <VerifiedBadge
-                            size={12}
-                            variant={getBadgeVariant(c.authorId, c.authorVerified)}
-                          />
-                        )}
+                        <BadgeStrip
+                          badges={getUserBadges(c.authorId, c.authorVerified)}
+                          size={12}
+                          max={2}
+                        />
                       </span>
                       <span className="text-[11px] text-[#64748B]">
                         {formatRelativeTime(c.createdAt)}
@@ -397,14 +557,16 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
             onSubmit={handleReport}
             className="w-full max-w-md bg-[#0D0B16] border border-[#8B5CF6]/25 rounded-2xl p-6 space-y-4"
           >
-            <h3 className="font-display text-base font-semibold text-white">Report Content</h3>
+            <h3 className="font-display text-base font-semibold text-white">
+              {reportTargetType === 'collab' ? 'Report Collaboration or Tag Abuse' : 'Report Content'}
+            </h3>
             <textarea
               rows={3}
               required
               maxLength={300}
               value={reportReason}
               onChange={(e) => setReportReason(e.target.value)}
-              placeholder="Describe the issue (spam, harassment, misleading media)..."
+              placeholder="Describe the issue (spam, unwanted tag, impersonation, harassment)..."
               className="w-full p-3 rounded-xl bg-[#08070F] border border-[#8B5CF6]/20 text-xs text-white outline-none resize-none"
             />
             <div className="flex justify-end gap-2">
@@ -425,6 +587,22 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
           </form>
         </div>
       )}
+
+      <GiftPickerModal
+        open={giftModalOpen}
+        onClose={() => setGiftModalOpen(false)}
+        recipient={{
+          uid: post.authorId,
+          displayName: post.authorName,
+          username: post.authorUsername,
+        }}
+        targetType="post"
+        targetId={post.id}
+        onSent={(giftName) => {
+          setShareToast(`Sent ${giftName}`);
+          setTimeout(() => setShareToast(''), 2200);
+        }}
+      />
     </article>
   );
 }

@@ -4,6 +4,7 @@ import {
   Check,
   Edit3,
   Film,
+  Gift,
   Globe,
   Heart,
   Image as ImageIcon,
@@ -13,10 +14,14 @@ import {
   Plus,
   Share2,
   ShieldBan,
+  Sparkles,
+  Tag,
+  UserPlus,
   X,
 } from 'lucide-react';
 import { ResilientImage } from '../../components/common/ResilientImage';
-import { VerifiedBadge } from '../../components/common/VerifiedBadge';
+import { BadgeStrip, VerifiedBadge } from '../../components/common/VerifiedBadge';
+import { GiftPickerModal } from '../../components/gifts/GiftPickerModal';
 import { CoverEditorModal } from '../../components/media/CoverEditorModal';
 import { PostCard } from '../../features/posts/PostCard';
 import { useAuth } from '../../hooks/useAuth';
@@ -29,14 +34,27 @@ import {
 import {
   checkIsFollowing,
   createOrGetDirectConversation,
+  respondToCollaborationInvite,
+  subscribeUserGifts,
   toggleFollowUser,
 } from '../../services/firebase/socialService';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
-import { Post, Space, UserProfile, Vibe } from '../../types/nexora';
-import { formatCompactCount, isValidUsername, normalizeUsername } from '../../utils/validation';
+import { GiftTransaction, Post, Space, UserProfile, Vibe } from '../../types/nexora';
+import { formatCompactCount, formatRelativeTime, isValidUsername, normalizeUsername } from '../../utils/validation';
+
+type ProfileContentTab =
+  | 'posts'
+  | 'videos'
+  | 'photos'
+  | 'tagged'
+  | 'collabs'
+  | 'gifts'
+  | 'spaces'
+  | 'saved';
 
 interface ProfilePageProps {
   targetUid: string | null;
+  initialTab?: ProfileContentTab;
   posts: Post[];
   vibes: Vibe[];
   spaces: Space[];
@@ -48,6 +66,7 @@ interface ProfilePageProps {
 
 export function ProfilePage({
   targetUid,
+  initialTab,
   posts,
   vibes,
   spaces,
@@ -60,12 +79,17 @@ export function ProfilePage({
     user: firebaseUser,
     profile: currentUser,
     privateInfo,
-    getBadgeVariant,
+    getUserBadges,
     refreshUserAndProfile,
   } = useAuth();
   const [viewedProfile, setViewedProfile] = useState<UserProfile | null>(null);
   const [isFollowing, setIsFollowing] = useState(false);
-  const [contentTab, setContentTab] = useState<'posts' | 'videos' | 'photos' | 'spaces' | 'saved'>('posts');
+  const [contentTab, setContentTab] = useState<ProfileContentTab>(initialTab || 'posts');
+  const [userGifts, setUserGifts] = useState<{
+    received: GiftTransaction[];
+    sent: GiftTransaction[];
+  }>({ received: [], sent: [] });
+  const [showGiftModal, setShowGiftModal] = useState(false);
 
   const [showCoverEditor, setShowCoverEditor] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
@@ -96,6 +120,10 @@ export function ProfilePage({
   const isOwnProfile = !targetUid || targetUid === currentUser?.uid;
 
   useEffect(() => {
+    if (initialTab) setContentTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
     if (!currentUser) return;
     if (isOwnProfile) {
       setViewedProfile(currentUser);
@@ -106,6 +134,11 @@ export function ProfilePage({
   }, [targetUid, currentUser, isOwnProfile]);
 
   const activeProfile = isOwnProfile ? currentUser : viewedProfile;
+
+  useEffect(() => {
+    if (!activeProfile?.uid) return;
+    return subscribeUserGifts(activeProfile.uid, setUserGifts);
+  }, [activeProfile?.uid]);
 
   // Resolve real uploaded or authenticated profile picture without premature fallback
   const primaryAvatarUrl = useMemo(() => {
@@ -139,6 +172,39 @@ export function ProfilePage({
     () => (activeProfile ? posts.filter((p) => p.authorId === activeProfile.uid) : []),
     [posts, activeProfile]
   );
+
+  const taggedPosts = useMemo(
+    () => (activeProfile ? posts.filter((p) => (p.taggedUids || []).includes(activeProfile.uid)) : []),
+    [posts, activeProfile]
+  );
+
+  const pendingCollabInvites = useMemo(
+    () =>
+      activeProfile && isOwnProfile
+        ? posts.filter(
+            (p) =>
+              (p.collaboratorInviteUids || []).includes(activeProfile.uid) &&
+              !(p.collaboratorUids || []).includes(activeProfile.uid) &&
+              !(p.declinedCollaboratorUids || []).includes(activeProfile.uid)
+          )
+        : [],
+    [posts, activeProfile, isOwnProfile]
+  );
+
+  const collabPosts = useMemo(
+    () =>
+      activeProfile
+        ? posts.filter(
+            (p) =>
+              (p.collaboratorUids || []).includes(activeProfile.uid) ||
+              (isOwnProfile && pendingCollabInvites.some((inv) => inv.id === p.id))
+          )
+        : [],
+    [posts, activeProfile, isOwnProfile, pendingCollabInvites]
+  );
+
+  const receivedGifts = userGifts.received;
+  const sentGifts = isOwnProfile ? userGifts.sent : [];
 
   const userVibes = useMemo(
     () => (activeProfile ? vibes.filter((v) => v.authorId === activeProfile.uid) : []),
@@ -180,6 +246,8 @@ export function ProfilePage({
   );
 
   if (!currentUser || !activeProfile) return null;
+
+  const activeBadges = getUserBadges(activeProfile.uid, activeProfile.verified);
 
   const isBlocked = (privateInfo?.blockedUserIds || []).includes(activeProfile.uid);
   const avatarInitial = (activeProfile.displayName || activeProfile.username || 'N')
@@ -375,12 +443,7 @@ export function ProfilePage({
                   <h1 className="font-display text-2xl lg:text-3xl font-bold text-white tracking-tight">
                     {activeProfile.displayName}
                   </h1>
-                  {getBadgeVariant(activeProfile.uid, activeProfile.verified) && (
-                    <VerifiedBadge
-                      size={20}
-                      variant={getBadgeVariant(activeProfile.uid, activeProfile.verified)}
-                    />
-                  )}
+                  <BadgeStrip badges={activeBadges} size={20} max={6} />
                 </div>
 
                 <p className="text-sm font-medium text-[#A855F7]">@{activeProfile.username}</p>
@@ -502,6 +565,13 @@ export function ProfilePage({
                     </button>
                     <button
                       type="button"
+                      onClick={() => setShowGiftModal(true)}
+                      className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#7C3AED]/20 to-[#EC4899]/20 border border-[#8B5CF6]/40 hover:border-[#A855F7] text-xs font-semibold text-white"
+                    >
+                      <Gift size={14} className="text-pink-300" /> Send Gift
+                    </button>
+                    <button
+                      type="button"
                       onClick={handleShareProfile}
                       className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-[#8B5CF6]/25 bg-[#0D0B16] hover:border-[#8B5CF6]/60 text-xs font-semibold text-white"
                     >
@@ -528,12 +598,15 @@ export function ProfilePage({
         </div>
       </section>
 
-      {/* 6. PROFILE CONTENT TABS: Posts | Videos | Photos | Spaces | Saved */}
+      {/* 6. PROFILE CONTENT TABS: Posts | Videos | Photos | Tagged | Collabs | Gifts | Spaces | Saved */}
       <div className="flex flex-wrap items-center gap-2 border-b border-white/[0.08] pb-3.5">
         {[
           { id: 'posts', label: 'Posts', count: userPosts.length },
           { id: 'videos', label: 'Videos', count: videoPosts.length + userVibes.length },
           { id: 'photos', label: 'Photos', count: photoPosts.length },
+          { id: 'tagged', label: 'Tagged', count: taggedPosts.length },
+          { id: 'collabs', label: 'Collabs', count: collabPosts.length },
+          { id: 'gifts', label: 'Gifts', count: receivedGifts.length },
           { id: 'spaces', label: 'Spaces', count: userSpaces.length },
           ...(isOwnProfile
             ? [{ id: 'saved', label: 'Saved', count: savedPosts.length + savedVibes.length }]
@@ -542,8 +615,8 @@ export function ProfilePage({
           <button
             key={tab.id}
             type="button"
-            onClick={() => setContentTab(tab.id as typeof contentTab)}
-            className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
+            onClick={() => setContentTab(tab.id as ProfileContentTab)}
+            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
               contentTab === tab.id
                 ? 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white shadow-[0_4px_16px_rgba(124,58,237,0.35)]'
                 : 'text-[#94A3B8] hover:text-white hover:bg-white/[0.05]'
@@ -704,6 +777,178 @@ export function ProfilePage({
         </div>
       )}
 
+      {contentTab === 'tagged' && (
+        taggedPosts.length === 0 ? (
+          <div className="p-12 rounded-2xl bg-[#0D0B16] border border-white/[0.08] text-center space-y-2">
+            <Tag size={24} className="mx-auto text-[#8B5CF6]" />
+            <p className="text-sm font-medium text-white">No tagged posts yet</p>
+            <p className="text-xs text-[#94A3B8]">
+              Posts where @{activeProfile.username} is formally tagged will appear here.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+            {taggedPosts.map((post) => (
+              <PostCard
+                key={post.id}
+                post={post}
+                isSaved={savedPostIds.includes(post.id)}
+                onOpenProfile={onOpenProfile}
+              />
+            ))}
+          </div>
+        )
+      )}
+
+      {contentTab === 'collabs' && (
+        <div className="space-y-5">
+          {isOwnProfile && pendingCollabInvites.length > 0 && (
+            <div className="p-4 rounded-2xl bg-[#150F29] border border-[#8B5CF6]/35 space-y-3">
+              <p className="text-xs font-semibold text-[#E9D5FF] flex items-center gap-2">
+                <UserPlus size={14} className="text-[#C084FC]" /> Pending Collaboration Invitations ({pendingCollabInvites.length})
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {pendingCollabInvites.map((inv) => (
+                  <div key={inv.id} className="p-3.5 rounded-xl bg-[#0D0B16] border border-white/10 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-white truncate">@{inv.authorUsername} invited you</p>
+                      <p className="text-[11px] text-[#94A3B8] truncate">{inv.text || 'Media post'}</p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void respondToCollaborationInvite({
+                            post: inv,
+                            responder: currentUser,
+                            decision: 'accept',
+                          })
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-[#7C3AED] hover:bg-[#6D28D9] text-[11px] font-semibold text-white"
+                      >
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void respondToCollaborationInvite({
+                            post: inv,
+                            responder: currentUser,
+                            decision: 'decline',
+                          })
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] text-[#94A3B8]"
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {collabPosts.length === 0 ? (
+            <div className="p-12 rounded-2xl bg-[#0D0B16] border border-white/[0.08] text-center space-y-2">
+              <UserPlus size={24} className="mx-auto text-[#8B5CF6]" />
+              <p className="text-sm font-medium text-white">No collaborative posts yet</p>
+              <p className="text-xs text-[#94A3B8]">
+                Accepted post collaborations featuring @{activeProfile.username} appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+              {collabPosts.map((post) => (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  isSaved={savedPostIds.includes(post.id)}
+                  onOpenProfile={onOpenProfile}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {contentTab === 'gifts' && (
+        <div className="space-y-6">
+          <div className="p-5 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h3 className="font-display text-base font-semibold text-white flex items-center gap-2">
+                <Gift size={17} className="text-pink-300" /> Free Virtual Gifts Showcase
+              </h3>
+              <p className="text-xs text-[#94A3B8]">
+                Community appreciation tokens are 100% free on Nexora — no purchases or currency required.
+              </p>
+            </div>
+            <div className="flex items-center gap-4 text-xs font-mono-tabular">
+              <span className="px-3.5 py-2 rounded-xl bg-[#08070F] border border-white/10 text-white">
+                Received: <strong>{receivedGifts.length}</strong>
+              </span>
+              {isOwnProfile && (
+                <span className="px-3.5 py-2 rounded-xl bg-[#08070F] border border-white/10 text-[#C084FC]">
+                  Sent: <strong>{sentGifts.length}</strong>
+                </span>
+              )}
+              {!isOwnProfile && (
+                <button
+                  type="button"
+                  onClick={() => setShowGiftModal(true)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white"
+                >
+                  <Sparkles size={13} /> Send Free Gift
+                </button>
+              )}
+            </div>
+          </div>
+
+          {receivedGifts.length === 0 ? (
+            <div className="p-12 rounded-2xl bg-[#0D0B16] border border-white/[0.08] text-center space-y-2">
+              <Gift size={24} className="mx-auto text-[#8B5CF6]" />
+              <p className="text-sm font-medium text-white">No gifts received yet</p>
+              <p className="text-xs text-[#94A3B8]">
+                Free appreciation tokens sent by the community appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {receivedGifts.map((g) => (
+                <div
+                  key={g.id}
+                  className="p-4 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-2xl leading-none">{g.giftEmoji}</span>
+                      <div>
+                        <p className="text-xs font-semibold text-white">{g.giftName}</p>
+                        <p className="text-[11px] text-[#94A3B8]">
+                          From{' '}
+                          {g.anonymous
+                            ? 'Anonymous Supporter'
+                            : g.senderUsername
+                            ? `@${g.senderUsername}`
+                            : g.senderName}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-[#64748B] font-mono-tabular">
+                      {formatRelativeTime(g.createdAt)}
+                    </span>
+                  </div>
+                  {g.message && (
+                    <p className="text-xs text-[#E2E8F0] bg-[#08070F] p-2.5 rounded-xl border border-white/[0.06]">
+                      &ldquo;{g.message}&rdquo;
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {contentTab === 'saved' && (
         savedPosts.length === 0 && savedVibes.length === 0 ? (
           <div className="p-12 rounded-2xl bg-[#0D0B16] border border-white/[0.08] text-center text-xs text-[#64748B]">
@@ -750,6 +995,24 @@ export function ProfilePage({
             )}
           </div>
         )
+      )}
+
+      {!isOwnProfile && (
+        <GiftPickerModal
+          open={showGiftModal}
+          onClose={() => setShowGiftModal(false)}
+          recipient={{
+            uid: activeProfile.uid,
+            displayName: activeProfile.displayName,
+            username: activeProfile.username,
+          }}
+          targetType="profile"
+          targetId={activeProfile.uid}
+          onSent={(giftName) => {
+            setShareToast(`Sent free ${giftName} to @${activeProfile.username}`);
+            setTimeout(() => setShareToast(''), 2800);
+          }}
+        />
       )}
 
       {/* Media Lightbox Modal */}

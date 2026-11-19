@@ -21,9 +21,15 @@ import {
 import { db } from './config';
 import { handleFirestoreError, OperationType } from './errorHandler';
 import {
+  dispatchDualNotification,
+  inferCategoryFromNotificationType,
+} from '../notifications/notificationDispatcher';
+import {
   AudienceType,
   ChatMessage,
+  CollaboratorProfileSummary,
   Conversation,
+  GiftTransaction,
   MessageType,
   NotificationItem,
   NotificationType,
@@ -40,6 +46,7 @@ import {
   StoryView,
   UserProfile,
   Vibe,
+  VirtualGiftCatalogItem,
 } from '../../types/nexora';
 import {
   BLUEPRINT_LIMITS,
@@ -64,6 +71,7 @@ export async function createNotification(params: {
       actorName: sanitizeString(params.actor.displayName, 80),
       actorAvatar: sanitizeString(params.actor.avatarUrl || '', 200000),
       type: params.type,
+      category: inferCategoryFromNotificationType(params.type),
       targetId: sanitizeString(params.targetId || '', 128),
       preview: sanitizeString(params.preview || '', 200),
       read: false,
@@ -244,12 +252,43 @@ export async function createPost(params: {
   spaceName?: string;
   pollOptions?: string[];
   repostOfId?: string;
+  taggedUsers?: UserProfile[];
+  collaboratorUsers?: UserProfile[];
+  blockedUserIds?: string[];
 }): Promise<string> {
   const cleanText = sanitizeString(params.text, BLUEPRINT_LIMITS.POST_TEXT_MAX);
   const pollOpts = (params.pollOptions || [])
     .map((o) => sanitizeString(o, 100))
     .filter(Boolean)
     .slice(0, 4);
+
+  const blockedSet = new Set(params.blockedUserIds || []);
+
+  const uniqueTagged = Array.from(
+    new Map(
+      (params.taggedUsers || [])
+        .filter((u) => u.uid !== params.author.uid && !blockedSet.has(u.uid) && !u.suspended)
+        .map((u) => [u.uid, u])
+    ).values()
+  ).slice(0, BLUEPRINT_LIMITS.MAX_TAGGED_USERS);
+
+  const uniqueCollabs = Array.from(
+    new Map(
+      (params.collaboratorUsers || [])
+        .filter((u) => u.uid !== params.author.uid && !blockedSet.has(u.uid) && !u.suspended)
+        .map((u) => [u.uid, u])
+    ).values()
+  ).slice(0, BLUEPRINT_LIMITS.MAX_COLLABORATORS);
+
+  const collaboratorProfiles: Record<string, CollaboratorProfileSummary> = {};
+  uniqueCollabs.forEach((u) => {
+    collaboratorProfiles[u.uid] = {
+      uid: u.uid,
+      displayName: sanitizeString(u.displayName, 80),
+      username: u.username,
+      avatarUrl: sanitizeString(u.avatarUrl || '', 200000),
+    };
+  });
 
   const payload = {
     authorId: params.author.uid,
@@ -265,6 +304,13 @@ export async function createPost(params: {
     mediaTypes: (params.mediaTypes || []).slice(0, 4),
     hashtags: extractHashtags(cleanText),
     mentions: extractMentions(cleanText),
+    taggedUids: uniqueTagged.map((u) => u.uid),
+    taggedUsernames: uniqueTagged.map((u) => u.username),
+    collaboratorInviteUids: uniqueCollabs.map((u) => u.uid),
+    collaboratorUids: [] as string[],
+    declinedCollaboratorUids: [] as string[],
+    collaboratorProfiles,
+    giftsCount: 0,
     location: sanitizeString(params.location || '', 100),
     audience: params.audience,
     pollOptions: pollOpts,
@@ -284,9 +330,125 @@ export async function createPost(params: {
       postsCount: increment(1),
       updatedAt: serverTimestamp(),
     });
+
+    for (const tagged of uniqueTagged) {
+      void dispatchDualNotification({
+        recipientUid: tagged.uid,
+        recipientName: tagged.displayName,
+        actor: params.author,
+        type: 'post_tag',
+        category: 'social',
+        targetId: docRef.id,
+        inAppPreview: `@${params.author.username} tagged you in a post: "${cleanText.slice(0, 80)}"`,
+        emailSubject: `${params.author.displayName} tagged you on Nexora`,
+        emailBodyText: `${params.author.displayName} (@${params.author.username}) tagged you in a post on Nexora.`,
+        dedupeKey: `post_tag:${docRef.id}:${tagged.uid}`,
+        skipEmailLog: true,
+      });
+    }
+
+    for (const collab of uniqueCollabs) {
+      void dispatchDualNotification({
+        recipientUid: collab.uid,
+        recipientName: collab.displayName,
+        actor: params.author,
+        type: 'collab_invite',
+        category: 'social',
+        targetId: docRef.id,
+        inAppPreview: `@${params.author.username} invited you to collaborate on a post`,
+        emailSubject: `Collaboration Invitation from @${params.author.username}`,
+        emailBodyText: `${params.author.displayName} (@${params.author.username}) invited you to co-author a Nexora post. Open Nexora to Accept or Decline.`,
+        dedupeKey: `collab_invite:${docRef.id}:${collab.uid}`,
+        skipEmailLog: true,
+      });
+    }
+
     return docRef.id;
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, 'posts');
+  }
+}
+
+export async function respondToCollaborationInvite(params: {
+  post: Post;
+  responder: UserProfile;
+  decision: 'accept' | 'decline';
+}): Promise<void> {
+  const invited = params.post.collaboratorInviteUids || [];
+  if (!invited.includes(params.responder.uid)) {
+    throw new Error('You do not have an active collaboration invite on this post.');
+  }
+
+  const currentAccepted = new Set(params.post.collaboratorUids || []);
+  const currentDeclined = new Set(params.post.declinedCollaboratorUids || []);
+
+  if (params.decision === 'accept') {
+    currentAccepted.add(params.responder.uid);
+    currentDeclined.delete(params.responder.uid);
+  } else {
+    currentAccepted.delete(params.responder.uid);
+    currentDeclined.add(params.responder.uid);
+  }
+
+  const nextProfiles = {
+    ...(params.post.collaboratorProfiles || {}),
+    [params.responder.uid]: {
+      uid: params.responder.uid,
+      displayName: sanitizeString(params.responder.displayName, 80),
+      username: params.responder.username,
+      avatarUrl: sanitizeString(params.responder.avatarUrl || '', 200000),
+    },
+  };
+
+  try {
+    await updateDoc(doc(db, 'posts', params.post.id), {
+      collaboratorUids: Array.from(currentAccepted).slice(0, BLUEPRINT_LIMITS.MAX_COLLABORATORS),
+      declinedCollaboratorUids: Array.from(currentDeclined).slice(0, BLUEPRINT_LIMITS.MAX_COLLABORATORS),
+      collaboratorProfiles: nextProfiles,
+      updatedAt: serverTimestamp(),
+    });
+
+    void dispatchDualNotification({
+      recipientUid: params.post.authorId,
+      recipientName: params.post.authorName,
+      actor: params.responder,
+      type: 'collab_response',
+      category: 'social',
+      targetId: params.post.id,
+      inAppPreview:
+        params.decision === 'accept'
+          ? `@${params.responder.username} accepted your post collaboration invite!`
+          : `@${params.responder.username} declined your post collaboration invite.`,
+      emailSubject: `Collaboration ${params.decision === 'accept' ? 'Accepted' : 'Declined'} by @${params.responder.username}`,
+      emailBodyText: `@${params.responder.username} ${params.decision === 'accept' ? 'accepted' : 'declined'} your collaboration invite on Nexora.`,
+      dedupeKey: `collab_resp:${params.post.id}:${params.responder.uid}:${params.decision}`,
+      skipEmailLog: true,
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `posts/${params.post.id}`);
+  }
+}
+
+export async function removeSelfTagFromPost(params: {
+  post: Post;
+  user: UserProfile;
+}): Promise<void> {
+  const currentUids = params.post.taggedUids || [];
+  if (!currentUids.includes(params.user.uid)) return;
+
+  const nextUids = currentUids.filter((id) => id !== params.user.uid);
+  const nextUsernames = (params.post.taggedUsernames || []).filter(
+    (handle) => handle.toLowerCase() !== params.user.username.toLowerCase()
+  );
+
+  try {
+    await updateDoc(doc(db, 'posts', params.post.id), {
+      taggedUids: nextUids,
+      taggedUsernames: nextUsernames,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `posts/${params.post.id}`);
   }
 }
 
@@ -1327,10 +1489,172 @@ export async function forwardChatMessage(params: {
   });
 }
 
+// --- Free Virtual Gifting ---
+export async function sendFreeVirtualGift(params: {
+  sender: UserProfile;
+  recipient: { uid: string; displayName: string; username: string };
+  gift: VirtualGiftCatalogItem;
+  targetType: 'profile' | 'post';
+  targetId: string;
+  message?: string;
+  anonymous?: boolean;
+}): Promise<string> {
+  if (params.sender.uid === params.recipient.uid) {
+    throw new Error('You cannot send a virtual gift to your own account.');
+  }
+  const cleanMsg = sanitizeString(params.message || '', BLUEPRINT_LIMITS.GIFT_MESSAGE_MAX);
+  const isAnon = Boolean(params.anonymous);
+
+  try {
+    const giftRef = doc(collection(db, 'virtual_gifts'));
+    const batch = writeBatch(db);
+    batch.set(giftRef, {
+      giftId: params.gift.id,
+      giftName: sanitizeString(params.gift.name, 60),
+      giftEmoji: sanitizeString(params.gift.emoji, 16),
+      giftAccent: sanitizeString(params.gift.accentColor, 24),
+      senderUid: params.sender.uid,
+      senderName: sanitizeString(params.sender.displayName, 80),
+      senderUsername: params.sender.username,
+      senderAvatar: sanitizeString(params.sender.avatarUrl || '', 200000),
+      recipientUid: params.recipient.uid,
+      recipientName: sanitizeString(params.recipient.displayName, 80),
+      recipientUsername: params.recipient.username,
+      targetType: params.targetType,
+      targetId: sanitizeString(params.targetId, 128),
+      message: cleanMsg,
+      anonymous: isAnon,
+      createdAt: serverTimestamp(),
+    });
+
+    if (params.targetType === 'post') {
+      batch.update(doc(db, 'posts', params.targetId), {
+        giftsCount: increment(1),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    await batch.commit();
+
+    const senderLabel = isAnon ? 'An anonymous supporter' : `@${params.sender.username}`;
+    void dispatchDualNotification({
+      recipientUid: params.recipient.uid,
+      recipientName: params.recipient.displayName,
+      actor: params.sender,
+      type: 'gift_received',
+      category: 'gifts',
+      targetId: params.targetType === 'post' ? params.targetId : params.recipient.uid,
+      inAppPreview: `${senderLabel} sent you a free ${params.gift.emoji} ${params.gift.name}${cleanMsg ? `: "${cleanMsg.slice(0, 60)}"` : ''}`,
+      emailSubject: `You received a ${params.gift.name} gift on Nexora!`,
+      emailBodyText: `${senderLabel} sent you a free ${params.gift.emoji} ${params.gift.name} on Nexora.${cleanMsg ? `\n\nMessage: "${cleanMsg}"` : ''}`,
+      dedupeKey: `gift:${giftRef.id}`,
+      skipEmailLog: true,
+    });
+
+    return giftRef.id;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, 'virtual_gifts');
+  }
+}
+
+export function subscribeUserGifts(
+  uid: string,
+  callback: (data: { received: GiftTransaction[]; sent: GiftTransaction[] }) => void
+): Unsubscribe {
+  const q = query(
+    collection(db, 'virtual_gifts'),
+    where('targetType', 'in', ['profile', 'post']),
+    limit(150)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const all = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<GiftTransaction, 'id'>) }))
+        .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+      callback({
+        received: all.filter((g) => g.recipientUid === uid),
+        sent: all.filter((g) => g.senderUid === uid),
+      });
+    },
+    () => callback({ received: [], sent: [] })
+  );
+}
+
+// --- Contact, Support & Ban Appeal Submissions ---
+export async function submitContactSubmission(params: {
+  user?: UserProfile | null;
+  name: string;
+  email: string;
+  category: 'support' | 'appeal' | 'verification_help' | 'bug' | 'partnership';
+  subject: string;
+  message: string;
+}): Promise<string> {
+  const cleanName = sanitizeString(params.name, 80);
+  const cleanEmail = sanitizeString(params.email, 254);
+  const cleanSubject = sanitizeString(params.subject, BLUEPRINT_LIMITS.CONTACT_SUBJECT_MAX);
+  const cleanMessage = sanitizeString(params.message, BLUEPRINT_LIMITS.CONTACT_MESSAGE_MAX);
+
+  if (!cleanName || !cleanEmail || cleanSubject.length < 2 || cleanMessage.length < 4) {
+    throw new Error('Please complete your name, valid email, subject, and message.');
+  }
+
+  const now = serverTimestamp();
+  const payload: Record<string, unknown> = {
+    name: cleanName,
+    email: cleanEmail,
+    category: params.category,
+    subject: cleanSubject,
+    message: cleanMessage,
+    status: 'open',
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (params.user?.uid) {
+    payload.uid = params.user.uid;
+  }
+
+  try {
+    const ref = await addDoc(collection(db, 'contact_submissions'), payload);
+    if (params.user?.uid) {
+      void dispatchDualNotification({
+        recipientUid: params.user.uid,
+        recipientName: cleanName,
+        recipientEmail: cleanEmail,
+        actor: params.user,
+        type: 'support_ticket',
+        category: 'admin',
+        targetId: ref.id,
+        allowSelfInApp: true,
+        inAppPreview: `Ticket received (${params.category.replace(/_/g, ' ')}): ${cleanSubject}`,
+        emailSubject: `Nexora Support Ticket Received: ${cleanSubject}`,
+        emailBodyText: `Thank you for contacting Nexora Support (${params.category.replace(/_/g, ' ')}).\n\nSubject: ${cleanSubject}\n\nOur team will review your submission and update you.`,
+      });
+    } else {
+      // Guest submission from landing page Support modal: attempt server email confirmation cleanly
+      void fetch('/api/email/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: cleanEmail,
+          recipientName: cleanName,
+          subject: `Nexora Support Ticket Received: ${cleanSubject}`,
+          title: 'Support Request Received',
+          bodyText: `We received your ${params.category.replace(/_/g, ' ')} inquiry: "${cleanSubject}". Our support team will follow up shortly.`,
+          category: 'admin',
+        }),
+      }).catch(() => {});
+    }
+    return ref.id;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, 'contact_submissions');
+  }
+}
+
 // --- Moderation / Reports ---
 export async function submitModerationReport(params: {
   reporterId: string;
-  targetType: 'post' | 'user' | 'space' | 'vibe';
+  targetType: 'post' | 'user' | 'space' | 'vibe' | 'gift' | 'collab';
   targetId: string;
   reason: string;
 }): Promise<void> {

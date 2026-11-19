@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { NexoraLogo } from '../../components/branding/NexoraLogo';
 import { ResilientImage } from '../../components/common/ResilientImage';
-import { VerifiedBadge } from '../../components/common/VerifiedBadge';
+import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
 import {
   checkIsFollowing,
@@ -65,7 +65,7 @@ interface VibesPageProps {
 }
 
 export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPageProps) {
-  const { profile, getBadgeVariant } = useAuth();
+  const { profile, getUserBadges } = useAuth();
   const [activeIndex, setActiveIndex] = useState(0);
   const [likedIds, setLikedIds] = useState<string[]>([]);
   const [followingAuthor, setFollowingAuthor] = useState(false);
@@ -400,12 +400,11 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
                   <div>
                     <p className="text-sm font-semibold text-white inline-flex items-center gap-1">
                       {profile.displayName}
-                      {getBadgeVariant(profile.uid, profile.verified) && (
-                        <VerifiedBadge
-                          size={14}
-                          variant={getBadgeVariant(profile.uid, profile.verified)}
-                        />
-                      )}
+                      <BadgeStrip
+                        badges={getUserBadges(profile.uid, profile.verified)}
+                        size={14}
+                        max={3}
+                      />
                     </p>
                     <p className="text-[11px] text-white/70">@{profile.username} · Demo Showcase</p>
                   </div>
@@ -580,12 +579,12 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-white inline-flex items-center gap-1 truncate">
                               {currentVibe.authorName}
-                              {getBadgeVariant(currentVibe.authorId, currentVibe.authorVerified) && (
-                                <VerifiedBadge
-                                  size={14}
-                                  variant={getBadgeVariant(currentVibe.authorId, currentVibe.authorVerified)}
-                                />
-                              )}
+                              <BadgeStrip
+                                badges={getUserBadges(currentVibe.authorId, currentVibe.authorVerified)}
+                                size={14}
+                                max={3}
+                                interactive={false}
+                              />
                             </p>
                             <p className="text-[11px] text-white/75 truncate">
                               @{currentVibe.authorUsername}

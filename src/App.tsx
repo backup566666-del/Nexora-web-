@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Ban, LogOut, Wrench } from 'lucide-react';
+import { BadgeModalProvider } from './components/badges/BadgeContext';
+import { BadgeInfoModal } from './components/badges/BadgeInfoModal';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { LoadingScreen } from './components/common/LoadingScreen';
 import { NexoraLogo } from './components/branding/NexoraLogo';
@@ -35,12 +37,15 @@ import {
   Vibe,
 } from './types/nexora';
 
+type ProfileContentTab = 'posts' | 'videos' | 'photos' | 'tagged' | 'collabs' | 'gifts' | 'spaces' | 'saved';
+
 function NexoraAppContent() {
   const { user, profile, myRole, platformConfig, loading, authReady } = useAuth();
   const [authScreenMode, setAuthScreenMode] = useState<'landing' | 'login' | 'register'>('landing');
   const [activeSection, setActiveSection] = useState<NavSection>('home');
   const [openAdminSettings, setOpenAdminSettings] = useState(false);
   const [targetProfileUid, setTargetProfileUid] = useState<string | null>(null);
+  const [targetProfileTab, setTargetProfileTab] = useState<ProfileContentTab | undefined>(undefined);
   const [targetSpaceId, setTargetSpaceId] = useState<string | null>(null);
   const [targetConvId, setTargetConvId] = useState<string | null>(null);
 
@@ -87,6 +92,7 @@ function NexoraAppContent() {
     const matched = users.find((u) => u.username.toLowerCase() === sharedUsername);
     if (matched) {
       setTargetProfileUid(matched.uid === profile.uid ? null : matched.uid);
+      setTargetProfileTab(undefined);
       setActiveSection('profile');
       window.history.replaceState({}, '', window.location.pathname);
     }
@@ -218,11 +224,12 @@ function NexoraAppContent() {
     return <OnboardingFlow />;
   }
 
-  const handleNavigate = (section: NavSection, targetId?: string) => {
+  const handleNavigate = (section: NavSection, targetId?: string, profileTab?: ProfileContentTab) => {
     setOpenAdminSettings(false);
     setActiveSection(section);
     if (section === 'profile') {
-      setTargetProfileUid(targetId || null);
+      setTargetProfileUid(targetId && targetId !== profile.uid ? targetId : null);
+      setTargetProfileTab(profileTab);
     }
     if (section === 'spaces') {
       setTargetSpaceId(targetId || null);
@@ -235,6 +242,7 @@ function NexoraAppContent() {
 
   const handleOpenUserProfile = (uid: string) => {
     setTargetProfileUid(uid === profile.uid ? null : uid);
+    setTargetProfileTab(undefined);
     setActiveSection('profile');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -245,89 +253,93 @@ function NexoraAppContent() {
   };
 
   return (
-    <DashboardShell
-      activeSection={activeSection}
-      onNavigate={handleNavigate}
-      onOpenUserProfile={handleOpenUserProfile}
-      onOpenAdminSettings={() => {
-        setOpenAdminSettings(true);
-        setActiveSection('settings');
-      }}
-      notifications={notifications}
-      spaces={spaces}
-      posts={posts}
-      users={users}
-    >
-      {activeSection === 'home' && (
-        <HomePage
-          posts={posts}
-          stories={stories}
-          spaces={spaces}
-          users={users}
-          savedPostIds={savedPostIds}
-          onOpenProfile={handleOpenUserProfile}
-          onOpenChatThread={handleOpenChatThread}
-        />
-      )}
+    <BadgeModalProvider>
+      <DashboardShell
+        activeSection={activeSection}
+        onNavigate={handleNavigate}
+        onOpenUserProfile={handleOpenUserProfile}
+        onOpenAdminSettings={() => {
+          setOpenAdminSettings(true);
+          setActiveSection('settings');
+        }}
+        notifications={notifications}
+        spaces={spaces}
+        posts={posts}
+        users={users}
+      >
+        {activeSection === 'home' && (
+          <HomePage
+            posts={posts}
+            stories={stories}
+            spaces={spaces}
+            users={users}
+            savedPostIds={savedPostIds}
+            onOpenProfile={handleOpenUserProfile}
+            onOpenChatThread={handleOpenChatThread}
+          />
+        )}
 
-      {activeSection === 'vibes' && (
-        <VibesPage
-          vibes={vibes}
-          users={users}
-          savedIds={savedPostIds}
-          onOpenProfile={handleOpenUserProfile}
-        />
-      )}
+        {activeSection === 'vibes' && (
+          <VibesPage
+            vibes={vibes}
+            users={users}
+            savedIds={savedPostIds}
+            onOpenProfile={handleOpenUserProfile}
+          />
+        )}
 
-      {activeSection === 'create' && (
-        <CreatePage
-          spaces={spaces}
-          onDone={(dest) => handleNavigate(dest)}
-        />
-      )}
+        {activeSection === 'create' && (
+          <CreatePage
+            spaces={spaces}
+            onDone={(dest) => handleNavigate(dest)}
+          />
+        )}
 
-      {activeSection === 'chat' && (
-        <ChatPage
-          users={users}
-          stories={stories}
-          initialConvId={targetConvId}
-        />
-      )}
+        {activeSection === 'chat' && (
+          <ChatPage
+            users={users}
+            stories={stories}
+            initialConvId={targetConvId}
+          />
+        )}
 
-      {activeSection === 'spaces' && (
-        <SpacesPage
-          spaces={spaces}
-          users={users}
-          notifications={notifications}
-          savedPostIds={savedPostIds}
-          initialSpaceId={targetSpaceId}
-          onOpenProfile={handleOpenUserProfile}
-        />
-      )}
+        {activeSection === 'spaces' && (
+          <SpacesPage
+            spaces={spaces}
+            users={users}
+            notifications={notifications}
+            savedPostIds={savedPostIds}
+            initialSpaceId={targetSpaceId}
+            onOpenProfile={handleOpenUserProfile}
+          />
+        )}
 
-      {activeSection === 'profile' && (
-        <ProfilePage
-          targetUid={targetProfileUid}
-          posts={posts}
-          vibes={vibes}
-          spaces={spaces}
-          savedPostIds={savedPostIds}
-          onOpenProfile={handleOpenUserProfile}
-          onOpenChatThread={handleOpenChatThread}
-          onOpenVibes={() => handleNavigate('vibes')}
-        />
-      )}
+        {activeSection === 'profile' && (
+          <ProfilePage
+            targetUid={targetProfileUid}
+            initialTab={targetProfileTab}
+            posts={posts}
+            vibes={vibes}
+            spaces={spaces}
+            savedPostIds={savedPostIds}
+            onOpenProfile={handleOpenUserProfile}
+            onOpenChatThread={handleOpenChatThread}
+            onOpenVibes={() => handleNavigate('vibes')}
+          />
+        )}
 
-      {activeSection === 'settings' && (
-        <SettingsPage
-          users={users}
-          posts={posts}
-          vibes={vibes}
-          spaces={spaces}
-          initialAdminOpen={openAdminSettings}
-        />
-      )}
-    </DashboardShell>
+        {activeSection === 'settings' && (
+          <SettingsPage
+            users={users}
+            posts={posts}
+            vibes={vibes}
+            spaces={spaces}
+            initialAdminOpen={openAdminSettings}
+          />
+        )}
+      </DashboardShell>
+      <BadgeInfoModal />
+    </BadgeModalProvider>
   );
 }
 

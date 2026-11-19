@@ -75,7 +75,7 @@ export function IdentityVerificationPanel({
             Confidential Identity Document Vault
           </h2>
           <p className="text-xs text-[#94A3B8] mt-0.5">
-            Strictly restricted to the Nexora Owner and staff holding explicit <code className="text-[#E9D5FF]">review_identity_docs</code> permission. Ordinary users and standard moderators cannot read these records.
+            Strictly restricted to the Nexora Owner and staff holding explicit <code className="text-[#E9D5FF]">review_identity_docs</code> permission. Approving an identity submission automatically grants the official blue <strong className="text-sky-300">Verified Identity</strong> badge and sends a dual in-app &amp; email confirmation.
           </p>
         </div>
         <span className="px-3 py-1.5 rounded-lg bg-[#08070F] border border-rose-500/25 text-xs font-mono-tabular text-amber-300">

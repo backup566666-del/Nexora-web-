@@ -19,13 +19,20 @@ import {
 import { User } from 'firebase/auth';
 import { db } from './config';
 import { handleFirestoreError, OperationType } from './errorHandler';
+import { dispatchDualNotification } from '../notifications/notificationDispatcher';
 import {
   AdminPermission,
+  AnyVerifiedBadgeType,
   AuditLogCategory,
   AuditLogEntry,
+  BadgeConfig,
+  ContactSubmission,
+  EmailLogEntry,
+  GiftTransaction,
   IdentityVerificationRequest,
   InternalRole,
   ModerationReport,
+  NotificationCategory,
   PlatformAnalyticsSnapshot,
   PlatformAnnouncement,
   PlatformConfig,
@@ -36,12 +43,20 @@ import {
   VerificationRequest,
   VerifiedBadgeRecord,
   VerifiedBadgeType,
+  VirtualGiftCatalogItem,
 } from '../../types/nexora';
 import {
+  ALL_CANONICAL_BADGES,
+  ALL_VALID_BADGE_VALUES,
+  BADGE_CATALOG,
   BADGE_LABELS,
   BLUEPRINT_LIMITS,
+  DEFAULT_BADGE_CONFIGS,
   DEFAULT_PLATFORM_CONFIG,
   FOUNDER_OWNER_EMAIL,
+  FREE_GIFT_CATALOG,
+  normalizeBadgeList,
+  normalizeBadgeType,
   ROLE_DEFAULT_PERMISSIONS,
   sanitizeString,
 } from '../../utils/validation';
@@ -73,7 +88,7 @@ export async function recordAuditLog(params: {
       createdAt: serverTimestamp(),
     });
   } catch {
-    // Audit write errors are handled transparently without crashing primary UI unless critical
+    // Non-blocking audit record
   }
 }
 
@@ -154,11 +169,26 @@ export async function bootstrapFounderGovernance(
       }
     }
 
-    if (!badgeSnap.exists() || (badgeSnap.data() as VerifiedBadgeRecord).badgeType !== 'owner') {
+    const existingBadgeData = badgeSnap.exists() ? (badgeSnap.data() as VerifiedBadgeRecord) : null;
+    const existingNormalized = existingBadgeData
+      ? normalizeBadgeList(existingBadgeData.badges, existingBadgeData.badgeType)
+      : [];
+    const needsFounderUpgrade =
+      !badgeSnap.exists() ||
+      !existingNormalized.includes('founder') ||
+      !existingNormalized.includes('verified_identity') ||
+      !existingBadgeData?.badges;
+
+    if (needsFounderUpgrade) {
+      const mergedBadges = Array.from(
+        new Set<VerifiedBadgeType>(['founder', 'verified_identity', ...existingNormalized])
+      ).slice(0, 20);
       await setDoc(badgeRef, {
         uid: firebaseUser.uid,
-        badgeType: 'owner' satisfies VerifiedBadgeType,
-        label: BADGE_LABELS.owner,
+        badgeType: 'founder' satisfies VerifiedBadgeType,
+        label: BADGE_CATALOG.founder.name,
+        badges: mergedBadges,
+        labels: mergedBadges.map((b) => BADGE_CATALOG[b].name),
         updatedBy: firebaseUser.uid,
         updatedAt: now,
       });
@@ -183,27 +213,87 @@ export async function bootstrapFounderGovernance(
   }
 }
 
-// --- Trusted Badge Registry ---
+// --- Trusted 20-Badge Registry ---
 export function subscribeVerifiedBadges(
   callback: (map: Record<string, VerifiedBadgeRecord>) => void
 ): Unsubscribe {
   const q = query(
     collection(db, 'verified_badges'),
-    where('badgeType', 'in', ['owner', 'verified', 'partner', 'creator', 'founder_circle']),
-    limit(200)
+    where('badgeType', 'in', [...ALL_VALID_BADGE_VALUES]),
+    limit(250)
   );
   return onSnapshot(
     q,
     (snap) => {
       const next: Record<string, VerifiedBadgeRecord> = {};
       snap.docs.forEach((d) => {
-        const rec = d.data() as VerifiedBadgeRecord;
-        next[d.id] = rec;
+        const raw = d.data() as VerifiedBadgeRecord;
+        const normalizedList = normalizeBadgeList(raw.badges, raw.badgeType);
+        const primary = normalizedList[0] || normalizeBadgeType(raw.badgeType);
+        next[d.id] = {
+          ...raw,
+          badgeType: primary,
+          label: BADGE_CATALOG[primary]?.name || raw.label,
+          badges: normalizedList,
+          labels: normalizedList.map((b) => BADGE_CATALOG[b]?.name || b),
+        };
       });
       callback(next);
     },
     () => callback({})
   );
+}
+
+// --- Badge Configs ---
+export function subscribeBadgeConfigs(
+  callback: (configs: Record<VerifiedBadgeType, BadgeConfig>) => void
+): Unsubscribe {
+  const q = query(collection(db, 'badge_configs'), where('enabled', 'in', [true, false]), limit(40));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const merged: Record<VerifiedBadgeType, BadgeConfig> = { ...DEFAULT_BADGE_CONFIGS };
+      snap.docs.forEach((d) => {
+        const data = d.data() as BadgeConfig;
+        const key = normalizeBadgeType(data.badgeId || d.id);
+        merged[key] = { ...DEFAULT_BADGE_CONFIGS[key], ...data, badgeId: key };
+      });
+      callback(merged);
+    },
+    () => callback({ ...DEFAULT_BADGE_CONFIGS })
+  );
+}
+
+export async function saveBadgeConfig(params: {
+  actor: UserProfile;
+  actorRole: InternalRole;
+  config: BadgeConfig;
+}): Promise<void> {
+  try {
+    await setDoc(doc(db, 'badge_configs', params.config.badgeId), {
+      badgeId: params.config.badgeId,
+      enabled: Boolean(params.config.enabled),
+      autoAward: Boolean(params.config.autoAward),
+      minFollowers: Math.max(0, Math.floor(params.config.minFollowers || 0)),
+      minPosts: Math.max(0, Math.floor(params.config.minPosts || 0)),
+      minLikes: Math.max(0, Math.floor(params.config.minLikes || 0)),
+      accountAgeDays: Math.max(0, Math.floor(params.config.accountAgeDays || 0)),
+      customCriteriaNote: sanitizeString(params.config.customCriteriaNote || '', 300),
+      updatedBy: params.actor.uid,
+      updatedAt: serverTimestamp(),
+    });
+    await recordAuditLog({
+      actor: params.actor,
+      actorRole: params.actorRole,
+      action: `Updated badge criteria (${params.config.badgeId})`,
+      category: 'verification',
+      targetType: 'badge_config',
+      targetId: params.config.badgeId,
+      details: `Auto=${params.config.autoAward}, Followers>=${params.config.minFollowers}, Posts>=${params.config.minPosts}`,
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `badge_configs/${params.config.badgeId}`);
+  }
 }
 
 // --- Current User RBAC Subscription ---
@@ -280,6 +370,7 @@ export async function appointStaffMember(params: {
     throw new Error('The permanent Nexora Owner role cannot be modified.');
   }
 
+  const cleanEmail = sanitizeString(params.email || `${params.targetUser.username}@nexora.member`, 254);
   const now = serverTimestamp();
   try {
     if (existing.exists()) {
@@ -297,7 +388,7 @@ export async function appointStaffMember(params: {
     } else {
       await setDoc(targetRef, {
         uid: params.targetUser.uid,
-        email: sanitizeString(params.email || `${params.targetUser.username}@nexora.member`, 254),
+        email: cleanEmail,
         displayName: sanitizeString(params.targetUser.displayName, 80),
         username: params.targetUser.username,
         role: params.role,
@@ -320,6 +411,21 @@ export async function appointStaffMember(params: {
       targetId: params.targetUser.uid,
       targetLabel: `@${params.targetUser.username}`,
       details: `Permissions: ${params.permissions.join(', ')}`,
+    });
+
+    void dispatchDualNotification({
+      recipientUid: params.targetUser.uid,
+      recipientName: params.targetUser.displayName,
+      recipientEmail: params.email,
+      actor: params.actor,
+      type: 'staff_role_change',
+      category: 'admin',
+      targetId: 'settings:admin_centre',
+      inAppPreview: `You were appointed as Nexora ${params.role.replace(/_/g, ' ')}.`,
+      emailSubject: `Nexora Staff Appointment: ${params.role.replace(/_/g, ' ').toUpperCase()}`,
+      emailBodyText: `You have been appointed as ${params.role.replace(/_/g, ' ')} on Nexora by ${params.actor.displayName} with ${params.permissions.length} assigned administrative permissions.`,
+      ctaLabel: 'Open Settings',
+      ctaUrl: '/',
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `platform_roles/${params.targetUser.uid}`);
@@ -358,6 +464,20 @@ export async function updateStaffRoleAndPermissions(params: {
       targetLabel: `@${params.target.username}`,
       details: `Role -> ${params.nextRole} (${params.nextPermissions.length} permissions)`,
     });
+    void dispatchDualNotification({
+      recipientUid: params.target.uid,
+      recipientName: params.target.displayName,
+      recipientEmail: params.target.email,
+      actor: params.actor,
+      type: 'staff_role_change',
+      category: 'admin',
+      targetId: 'settings:admin_centre',
+      inAppPreview: `Your staff role was updated to ${params.nextRole.replace(/_/g, ' ')}.`,
+      emailSubject: 'Nexora Staff Role & Permissions Updated',
+      emailBodyText: `Your Nexora administrative role is now ${params.nextRole.replace(/_/g, ' ')} (${params.nextPermissions.length} permissions active).`,
+      ctaLabel: 'Open Administration Centre',
+      ctaUrl: '/',
+    });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `platform_roles/${params.target.uid}`);
   }
@@ -386,6 +506,20 @@ export async function toggleStaffActiveStatus(params: {
       targetId: params.target.uid,
       targetLabel: `@${params.target.username}`,
     });
+    void dispatchDualNotification({
+      recipientUid: params.target.uid,
+      recipientName: params.target.displayName,
+      recipientEmail: params.target.email,
+      actor: params.actor,
+      type: 'staff_role_change',
+      category: 'admin',
+      targetId: 'settings:admin_centre',
+      inAppPreview: nextActive ? 'Your Nexora staff access was restored.' : 'Your Nexora staff access was paused.',
+      emailSubject: nextActive ? 'Nexora Staff Access Restored' : 'Nexora Staff Access Suspended',
+      emailBodyText: nextActive
+        ? 'Your Nexora staff privileges have been reactivated.'
+        : 'Your Nexora administrative privileges have been temporarily paused by platform administration.',
+    });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `platform_roles/${params.target.uid}`);
   }
@@ -409,6 +543,18 @@ export async function revokeStaffAccess(params: {
       targetType: 'platform_role',
       targetId: params.target.uid,
       targetLabel: `@${params.target.username}`,
+    });
+    void dispatchDualNotification({
+      recipientUid: params.target.uid,
+      recipientName: params.target.displayName,
+      recipientEmail: params.target.email,
+      actor: params.actor,
+      type: 'staff_role_change',
+      category: 'admin',
+      targetId: 'settings:profile',
+      inAppPreview: 'Your Nexora administrative role has been revoked.',
+      emailSubject: 'Nexora Staff Role Revoked',
+      emailBodyText: `Your administrative staff role (@${params.target.username}) on Nexora has been revoked by ${params.actor.displayName}.`,
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, `platform_roles/${params.target.uid}`);
@@ -473,6 +619,21 @@ export async function updateSpaceGovernance(params: {
       targetId: params.space.id,
       targetLabel: params.space.name,
     });
+
+    const ownerRecipient = params.updates.ownerId || params.space.ownerId;
+    if (ownerRecipient) {
+      void dispatchDualNotification({
+        recipientUid: ownerRecipient,
+        recipientName: params.updates.ownerName || params.space.ownerName,
+        actor: params.actor,
+        type: 'community_status',
+        category: 'admin',
+        targetId: params.space.id,
+        inAppPreview: `Space "${params.space.name}": ${params.actionLabel}`,
+        emailSubject: `Nexora Community Update: ${params.space.name}`,
+        emailBodyText: `Administrative update for Space "${params.space.name}": ${params.actionLabel}.${params.updates.suspensionReason ? ` Note: ${params.updates.suspensionReason}` : ''}`,
+      });
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `spaces/${params.space.id}`);
   }
@@ -494,6 +655,19 @@ export async function adminDeleteSpace(params: {
       targetId: params.space.id,
       targetLabel: params.space.name,
     });
+    if (params.space.ownerId) {
+      void dispatchDualNotification({
+        recipientUid: params.space.ownerId,
+        recipientName: params.space.ownerName,
+        actor: params.actor,
+        type: 'community_status',
+        category: 'admin',
+        targetId: params.space.id,
+        inAppPreview: `Your Space "${params.space.name}" was removed by moderation.`,
+        emailSubject: `Nexora Space Removed: ${params.space.name}`,
+        emailBodyText: `Your Space "${params.space.name}" was removed by Nexora platform administration.`,
+      });
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, `spaces/${params.space.id}`);
   }
@@ -565,41 +739,131 @@ export async function adminKickSpaceMember(params: {
   }
 }
 
-// --- Section C: Verification Centre ---
-export async function assignUserBadge(params: {
+// --- Section C: Multi-Badge Verification Centre (All 20 Badges) ---
+export async function assignUserBadges(params: {
   actor: UserProfile;
   actorRole: InternalRole;
   targetUser: UserProfile;
-  badgeType: Exclude<VerifiedBadgeType, 'owner'>;
+  badges: VerifiedBadgeType[];
+  recipientEmail?: string;
 }): Promise<void> {
+  const sanitized = normalizeBadgeList(params.badges).filter((b) => {
+    if (b === 'founder' && params.actorRole !== 'owner') return false;
+    return true;
+  }).slice(0, 20);
+
   try {
     const now = serverTimestamp();
     const batch = writeBatch(db);
-    batch.set(doc(db, 'verified_badges', params.targetUser.uid), {
-      uid: params.targetUser.uid,
-      badgeType: params.badgeType,
-      label: BADGE_LABELS[params.badgeType],
-      updatedBy: params.actor.uid,
-      updatedAt: now,
-    });
-    batch.update(doc(db, 'users', params.targetUser.uid), {
-      verified: true,
-      updatedAt: now,
-    });
+    if (sanitized.length === 0) {
+      batch.delete(doc(db, 'verified_badges', params.targetUser.uid));
+      batch.update(doc(db, 'users', params.targetUser.uid), {
+        verified: false,
+        updatedAt: now,
+      });
+    } else {
+      const primary = sanitized[0];
+      batch.set(doc(db, 'verified_badges', params.targetUser.uid), {
+        uid: params.targetUser.uid,
+        badgeType: primary,
+        label: BADGE_CATALOG[primary].name,
+        badges: sanitized,
+        labels: sanitized.map((b) => BADGE_CATALOG[b].name),
+        updatedBy: params.actor.uid,
+        updatedAt: now,
+      });
+      batch.update(doc(db, 'users', params.targetUser.uid), {
+        verified: true,
+        updatedAt: now,
+      });
+    }
     await batch.commit();
 
     await recordAuditLog({
       actor: params.actor,
       actorRole: params.actorRole,
-      action: `Granted ${params.badgeType} badge`,
+      action: sanitized.length > 0 ? `Updated badges (${sanitized.join(', ')})` : 'Revoked all badges',
       category: 'verification',
       targetType: 'user',
       targetId: params.targetUser.uid,
       targetLabel: `@${params.targetUser.username}`,
     });
+
+    const badgeNames = sanitized.map((b) => BADGE_CATALOG[b].name).join(', ');
+    void dispatchDualNotification({
+      recipientUid: params.targetUser.uid,
+      recipientName: params.targetUser.displayName,
+      recipientEmail: params.recipientEmail,
+      actor: params.actor,
+      type: sanitized.length > 0 ? 'badge_awarded' : 'badge_revoked',
+      category: 'badges',
+      targetId: params.targetUser.uid,
+      inAppPreview:
+        sanitized.length > 0
+          ? `Your profile badges were updated: ${badgeNames}`
+          : 'Your verification/platform badges were removed.',
+      emailSubject:
+        sanitized.length > 0
+          ? `Nexora Badge Update: ${badgeNames}`
+          : 'Nexora Badge Removed',
+      emailBodyText:
+        sanitized.length > 0
+          ? `Your Nexora account (@${params.targetUser.username}) now displays the following verified badge(s): ${badgeNames}.`
+          : `All Nexora verification/platform badges on @${params.targetUser.username} have been removed by administration.`,
+      ctaLabel: 'View Your Profile',
+      ctaUrl: '/',
+    });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `verified_badges/${params.targetUser.uid}`);
   }
+}
+
+export async function addBadgeToUser(params: {
+  actor: UserProfile;
+  actorRole: InternalRole;
+  targetUser: UserProfile;
+  badgeType: VerifiedBadgeType;
+  existingBadges?: VerifiedBadgeType[];
+}): Promise<void> {
+  const next = Array.from(new Set<VerifiedBadgeType>([...(params.existingBadges || []), params.badgeType]));
+  await assignUserBadges({
+    actor: params.actor,
+    actorRole: params.actorRole,
+    targetUser: params.targetUser,
+    badges: next,
+  });
+}
+
+export async function removeBadgeFromUser(params: {
+  actor: UserProfile;
+  actorRole: InternalRole;
+  targetUser: UserProfile;
+  badgeType: VerifiedBadgeType;
+  existingBadges: VerifiedBadgeType[];
+}): Promise<void> {
+  const next = params.existingBadges.filter((b) => b !== params.badgeType);
+  await assignUserBadges({
+    actor: params.actor,
+    actorRole: params.actorRole,
+    targetUser: params.targetUser,
+    badges: next,
+  });
+}
+
+export async function assignUserBadge(params: {
+  actor: UserProfile;
+  actorRole: InternalRole;
+  targetUser: UserProfile;
+  badgeType: Exclude<VerifiedBadgeType, 'founder'>;
+  existingBadges?: VerifiedBadgeType[];
+}): Promise<void> {
+  await addBadgeToUser({
+    actor: params.actor,
+    actorRole: params.actorRole,
+    targetUser: params.targetUser,
+    badgeType: params.badgeType,
+    existingBadges: params.existingBadges,
+  });
 }
 
 export async function revokeUserBadge(params: {
@@ -607,40 +871,80 @@ export async function revokeUserBadge(params: {
   actorRole: InternalRole;
   targetUser: UserProfile;
 }): Promise<void> {
-  try {
-    const now = serverTimestamp();
-    const batch = writeBatch(db);
-    batch.delete(doc(db, 'verified_badges', params.targetUser.uid));
-    batch.update(doc(db, 'users', params.targetUser.uid), {
-      verified: false,
-      updatedAt: now,
-    });
-    await batch.commit();
+  await assignUserBadges({
+    actor: params.actor,
+    actorRole: params.actorRole,
+    targetUser: params.targetUser,
+    badges: [],
+  });
+}
 
-    await recordAuditLog({
-      actor: params.actor,
-      actorRole: params.actorRole,
-      action: 'Revoked verification badge',
-      category: 'verification',
-      targetType: 'user',
-      targetId: params.targetUser.uid,
-      targetLabel: `@${params.targetUser.username}`,
-    });
-  } catch (err) {
-    handleFirestoreError(err, OperationType.DELETE, `verified_badges/${params.targetUser.uid}`);
+export async function evaluateAchievementBadges(params: {
+  actor: UserProfile;
+  actorRole: InternalRole;
+  users: UserProfile[];
+  badgesMap: Record<string, VerifiedBadgeRecord>;
+  badgeConfigs: Record<VerifiedBadgeType, BadgeConfig>;
+}): Promise<{ evaluatedUsers: number; badgesGranted: number }> {
+  const autoBadges = ALL_CANONICAL_BADGES.filter((id) => {
+    const def = BADGE_CATALOG[id];
+    const cfg = params.badgeConfigs[id] || DEFAULT_BADGE_CONFIGS[id];
+    return def.achievementAutoEligible && cfg.enabled && cfg.autoAward;
+  });
+
+  if (autoBadges.length === 0) return { evaluatedUsers: params.users.length, badgesGranted: 0 };
+
+  let badgesGranted = 0;
+  const nowMs = Date.now();
+
+  for (const target of params.users) {
+    if (target.suspended) continue;
+    const currentRec = params.badgesMap[target.uid];
+    const existingList = currentRec
+      ? normalizeBadgeList(currentRec.badges, currentRec.badgeType)
+      : [];
+    const createdMs = target.createdAt?.toMillis?.() ?? nowMs;
+    const ageDays = Math.floor((nowMs - createdMs) / 86_400_000);
+
+    const newlyEarned: VerifiedBadgeType[] = [];
+    for (const badgeId of autoBadges) {
+      if (existingList.includes(badgeId)) continue;
+      const cfg = params.badgeConfigs[badgeId] || DEFAULT_BADGE_CONFIGS[badgeId];
+      if (
+        (target.followersCount || 0) >= cfg.minFollowers &&
+        (target.postsCount || 0) >= cfg.minPosts &&
+        (target.likesCount || 0) >= cfg.minLikes &&
+        ageDays >= cfg.accountAgeDays
+      ) {
+        newlyEarned.push(badgeId);
+      }
+    }
+
+    if (newlyEarned.length > 0) {
+      const merged = Array.from(new Set<VerifiedBadgeType>([...existingList, ...newlyEarned]));
+      await assignUserBadges({
+        actor: params.actor,
+        actorRole: params.actorRole,
+        targetUser: target,
+        badges: merged,
+      });
+      badgesGranted += newlyEarned.length;
+    }
   }
+
+  return { evaluatedUsers: params.users.length, badgesGranted };
 }
 
 export async function submitVerificationRequest(params: {
   user: UserProfile;
-  requestedBadge: 'verified' | 'creator' | 'partner';
+  requestedBadge: AnyVerifiedBadgeType;
   category: string;
   rationale: string;
   referenceLink?: string;
 }): Promise<void> {
   const now = serverTimestamp();
   try {
-    await addDoc(collection(db, 'verification_requests'), {
+    const ref = await addDoc(collection(db, 'verification_requests'), {
       uid: params.user.uid,
       displayName: sanitizeString(params.user.displayName, 80),
       username: params.user.username,
@@ -652,6 +956,19 @@ export async function submitVerificationRequest(params: {
       status: 'pending',
       createdAt: now,
       updatedAt: now,
+    });
+    const norm = normalizeBadgeType(params.requestedBadge);
+    void dispatchDualNotification({
+      recipientUid: params.user.uid,
+      recipientName: params.user.displayName,
+      actor: params.user,
+      type: 'verification_decision',
+      category: 'badges',
+      targetId: ref.id,
+      allowSelfInApp: true,
+      inAppPreview: `Badge application received: ${BADGE_CATALOG[norm].name} (pending review).`,
+      emailSubject: `Nexora Badge Application Received (${BADGE_CATALOG[norm].name})`,
+      emailBodyText: `Your application for the ${BADGE_CATALOG[norm].name} badge has been submitted and is pending administrative review.`,
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, 'verification_requests');
@@ -703,6 +1020,7 @@ export async function reviewVerificationRequest(params: {
   reviewerNote?: string;
 }): Promise<void> {
   const now = serverTimestamp();
+  const normalizedBadge = normalizeBadgeType(params.request.requestedBadge);
   try {
     await updateDoc(doc(db, 'verification_requests', params.request.id), {
       status: params.decision,
@@ -713,12 +1031,25 @@ export async function reviewVerificationRequest(params: {
     });
 
     if (params.decision === 'approved') {
-      const badgeType = params.request.requestedBadge;
+      const existingSnap = await getDoc(doc(db, 'verified_badges', params.request.uid));
+      const existingData = existingSnap.exists()
+        ? (existingSnap.data() as VerifiedBadgeRecord)
+        : null;
+      const existingList = existingData
+        ? normalizeBadgeList(existingData.badges, existingData.badgeType)
+        : [];
+      const mergedBadges = Array.from(
+        new Set<VerifiedBadgeType>([...existingList, normalizedBadge])
+      ).slice(0, 20);
+      const primary = mergedBadges[0] || normalizedBadge;
+
       const batch = writeBatch(db);
       batch.set(doc(db, 'verified_badges', params.request.uid), {
         uid: params.request.uid,
-        badgeType,
-        label: BADGE_LABELS[badgeType],
+        badgeType: primary,
+        label: BADGE_CATALOG[primary].name,
+        badges: mergedBadges,
+        labels: mergedBadges.map((b) => BADGE_CATALOG[b].name),
         updatedBy: params.actor.uid,
         updatedAt: now,
       });
@@ -737,14 +1068,32 @@ export async function reviewVerificationRequest(params: {
       targetType: 'verification_request',
       targetId: params.request.id,
       targetLabel: `@${params.request.username}`,
-      details: params.reviewerNote || `Badge: ${params.request.requestedBadge}`,
+      details: params.reviewerNote || `Badge: ${BADGE_CATALOG[normalizedBadge].name}`,
+    });
+
+    void dispatchDualNotification({
+      recipientUid: params.request.uid,
+      recipientName: params.request.displayName,
+      actor: params.actor,
+      type: 'verification_decision',
+      category: 'badges',
+      targetId: params.request.uid,
+      inAppPreview:
+        params.decision === 'approved'
+          ? `Approved! You earned the ${BADGE_CATALOG[normalizedBadge].name} badge.`
+          : `Your ${BADGE_CATALOG[normalizedBadge].name} badge application was declined.`,
+      emailSubject: `Nexora Verification Update: ${BADGE_CATALOG[normalizedBadge].name}`,
+      emailBodyText:
+        params.decision === 'approved'
+          ? `Congratulations! Your application for the ${BADGE_CATALOG[normalizedBadge].name} badge has been approved.${params.reviewerNote ? ` Note: ${params.reviewerNote}` : ''}`
+          : `Your application for ${BADGE_CATALOG[normalizedBadge].name} was not approved at this time.${params.reviewerNote ? ` Reviewer note: ${params.reviewerNote}` : ''}`,
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `verification_requests/${params.request.id}`);
   }
 }
 
-// --- Section D: Confidential Identity Verification ---
+// --- Section D: Confidential Identity Verification (Auto-grants Blue Verified Identity) ---
 export async function submitIdentityVerification(params: {
   user: UserProfile;
   legalFullName: string;
@@ -755,7 +1104,7 @@ export async function submitIdentityVerification(params: {
 }): Promise<void> {
   const now = serverTimestamp();
   try {
-    await addDoc(collection(db, 'identity_verifications'), {
+    const ref = await addDoc(collection(db, 'identity_verifications'), {
       uid: params.user.uid,
       displayName: sanitizeString(params.user.displayName, 80),
       username: params.user.username,
@@ -767,6 +1116,19 @@ export async function submitIdentityVerification(params: {
       status: 'pending',
       createdAt: now,
       updatedAt: now,
+    });
+    void dispatchDualNotification({
+      recipientUid: params.user.uid,
+      recipientName: params.user.displayName,
+      actor: params.user,
+      type: 'identity_decision',
+      category: 'badges',
+      targetId: ref.id,
+      allowSelfInApp: true,
+      inAppPreview: 'Identity verification submitted securely and queued for reviewer inspection.',
+      emailSubject: 'Nexora Identity Verification Submitted',
+      emailBodyText:
+        'Your confidential identity verification package has been encrypted and queued for authorized Nexora reviewers.',
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, 'identity_verifications');
@@ -827,6 +1189,37 @@ export async function reviewIdentityVerification(params: {
       updatedAt: now,
     });
 
+    // Approving Identity Verification automatically grants the official blue Verified Identity badge
+    if (params.decision === 'approved') {
+      const existingSnap = await getDoc(doc(db, 'verified_badges', params.request.uid));
+      const existingData = existingSnap.exists()
+        ? (existingSnap.data() as VerifiedBadgeRecord)
+        : null;
+      const existingList = existingData
+        ? normalizeBadgeList(existingData.badges, existingData.badgeType)
+        : [];
+      const mergedBadges = Array.from(
+        new Set<VerifiedBadgeType>(['verified_identity', ...existingList])
+      ).slice(0, 20);
+      const primary = existingList.includes('founder') ? 'founder' : 'verified_identity';
+
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'verified_badges', params.request.uid), {
+        uid: params.request.uid,
+        badgeType: primary,
+        label: BADGE_CATALOG[primary].name,
+        badges: mergedBadges,
+        labels: mergedBadges.map((b) => BADGE_CATALOG[b].name),
+        updatedBy: params.actor.uid,
+        updatedAt: now,
+      });
+      batch.update(doc(db, 'users', params.request.uid), {
+        verified: true,
+        updatedAt: now,
+      });
+      await batch.commit();
+    }
+
     await recordAuditLog({
       actor: params.actor,
       actorRole: params.actorRole,
@@ -835,7 +1228,28 @@ export async function reviewIdentityVerification(params: {
       targetType: 'identity_verification',
       targetId: params.request.id,
       targetLabel: `@${params.request.username}`,
-      details: `${params.request.documentType} (${params.request.documentCountry})`,
+      details: `${params.request.documentType} (${params.request.documentCountry})${params.decision === 'approved' ? ' -> Auto-granted Verified Identity blue badge' : ''}`,
+    });
+
+    void dispatchDualNotification({
+      recipientUid: params.request.uid,
+      recipientName: params.request.displayName,
+      actor: params.actor,
+      type: 'identity_decision',
+      category: 'badges',
+      targetId: params.request.uid,
+      inAppPreview:
+        params.decision === 'approved'
+          ? 'Identity verified! Official blue Verified Identity badge is now active on your profile.'
+          : 'Your identity verification submission was declined.',
+      emailSubject:
+        params.decision === 'approved'
+          ? 'Nexora Identity Verified — Blue Badge Active'
+          : 'Nexora Identity Verification Update',
+      emailBodyText:
+        params.decision === 'approved'
+          ? `Your government identity submission has been approved. The official blue Verified Identity badge is now displayed on @${params.request.username}.`
+          : `Your identity verification submission could not be approved.${params.reviewerNote ? ` Reason: ${params.reviewerNote}` : ''}`,
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `identity_verifications/${params.request.id}`);
@@ -917,7 +1331,13 @@ export async function fetchRealPlatformAnalytics(): Promise<PlatformAnalyticsSna
     getDocs(query(collection(db, 'posts'), where('audience', 'in', ['public', 'followers', 'space']), limit(500))),
     getDocs(query(collection(db, 'vibes'), where('viewsCount', '>=', 0), limit(500))),
     getDocs(query(collection(db, 'spaces'), where('isPrivate', 'in', [false, true]), limit(300))),
-    getDocs(query(collection(db, 'reports'), where('targetType', 'in', ['post', 'user', 'space', 'vibe']), limit(300))),
+    getDocs(
+      query(
+        collection(db, 'reports'),
+        where('targetType', 'in', ['post', 'user', 'space', 'vibe', 'gift', 'collab']),
+        limit(300)
+      )
+    ),
     getCountFromServer(query(collection(db, 'verification_requests'), where('status', '==', 'pending'))).catch(
       () => null
     ),
@@ -990,11 +1410,11 @@ export async function fetchRealPlatformAnalytics(): Promise<PlatformAnalyticsSna
   };
 }
 
-// --- Section G: Moderation & Reports ---
+// --- Section G: Moderation, Reports & Support Appeals ---
 export function subscribeReports(callback: (reports: ModerationReport[]) => void): Unsubscribe {
   const q = query(
     collection(db, 'reports'),
-    where('targetType', 'in', ['post', 'user', 'space', 'vibe']),
+    where('targetType', 'in', ['post', 'user', 'space', 'vibe', 'gift', 'collab']),
     limit(150)
   );
   return onSnapshot(
@@ -1061,6 +1481,21 @@ export async function suspendOrRestoreUser(params: {
       targetLabel: `@${params.targetUser.username}`,
       details: params.reason || '',
     });
+    void dispatchDualNotification({
+      recipientUid: params.targetUser.uid,
+      recipientName: params.targetUser.displayName,
+      actor: params.actor,
+      type: 'security_alert',
+      category: 'security',
+      targetId: 'settings:privacy',
+      inAppPreview: params.suspend
+        ? `Account suspended: ${params.reason || 'Policy violation'}`
+        : 'Your Nexora account standing has been restored.',
+      emailSubject: params.suspend ? 'Nexora Account Suspended' : 'Nexora Account Restored',
+      emailBodyText: params.suspend
+        ? `Your Nexora account (@${params.targetUser.username}) has been suspended. Reason: ${params.reason || 'Policy violation'}. You may submit an appeal via Support.`
+        : `Good news! Your Nexora account (@${params.targetUser.username}) has been restored to full standing.`,
+    });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `users/${params.targetUser.uid}`);
   }
@@ -1091,7 +1526,100 @@ export async function adminRemoveContent(params: {
   }
 }
 
-// --- Section H: Notifications & Announcements ---
+export async function adminResetPostCollabAndTags(params: {
+  actor: UserProfile;
+  actorRole: InternalRole;
+  postId: string;
+}): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'posts', params.postId), {
+      taggedUids: [],
+      taggedUsernames: [],
+      collaboratorInviteUids: [],
+      collaboratorUids: [],
+      declinedCollaboratorUids: [],
+      collaboratorProfiles: {},
+      updatedAt: serverTimestamp(),
+    });
+    await recordAuditLog({
+      actor: params.actor,
+      actorRole: params.actorRole,
+      action: 'Cleared post tags & collaborations',
+      category: 'moderation',
+      targetType: 'post',
+      targetId: params.postId,
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `posts/${params.postId}`);
+  }
+}
+
+// --- Contact Submissions & Ban Appeals Queue ---
+export function subscribeAllContactSubmissions(
+  callback: (items: ContactSubmission[]) => void
+): Unsubscribe {
+  const q = query(
+    collection(db, 'contact_submissions'),
+    where('status', 'in', ['open', 'in_review', 'resolved']),
+    limit(100)
+  );
+  return onSnapshot(
+    q,
+    (snap) =>
+      callback(
+        snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as Omit<ContactSubmission, 'id'>) }))
+          .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
+      ),
+    (err) => handleFirestoreError(err, OperationType.LIST, 'contact_submissions')
+  );
+}
+
+export async function updateContactSubmission(params: {
+  actor: UserProfile;
+  actorRole: InternalRole;
+  submission: ContactSubmission;
+  status: 'open' | 'in_review' | 'resolved';
+  adminNote: string;
+}): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'contact_submissions', params.submission.id), {
+      status: params.status,
+      adminNote: sanitizeString(params.adminNote, 300),
+      handledBy: params.actor.uid,
+      handledAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    await recordAuditLog({
+      actor: params.actor,
+      actorRole: params.actorRole,
+      action: `Updated ${params.submission.category} ticket -> ${params.status}`,
+      category: 'moderation',
+      targetType: 'contact_submission',
+      targetId: params.submission.id,
+      targetLabel: params.submission.subject,
+      details: params.adminNote,
+    });
+
+    void dispatchDualNotification({
+      recipientUid: params.submission.uid,
+      recipientName: params.submission.name,
+      recipientEmail: params.submission.email,
+      actor: params.actor,
+      type: 'support_ticket',
+      category: 'admin',
+      targetId: params.submission.id,
+      inAppPreview: `Support response (${params.status}): ${params.adminNote || params.submission.subject}`,
+      emailSubject: `Nexora Support Update: ${params.submission.subject}`,
+      emailBodyText: `Your Nexora ${params.submission.category.replace(/_/g, ' ')} request "${params.submission.subject}" is now marked "${params.status.replace(/_/g, ' ')}".\n\nAdministrative Note: ${params.adminNote || 'Reviewed by the Nexora team.'}`,
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `contact_submissions/${params.submission.id}`);
+  }
+}
+
+// --- Section H: Notifications, Announcements & Email Logs ---
 export function subscribePlatformAnnouncements(
   callback: (items: PlatformAnnouncement[]) => void
 ): Unsubscribe {
@@ -1211,6 +1739,7 @@ export async function dispatchAdminNotification(params: {
         actorName: sanitizeString(params.actor.displayName, 80),
         actorAvatar: sanitizeString(params.actor.avatarUrl || '', 200000),
         type: params.type,
+        category: params.type === 'security_alert' ? 'security' : 'admin',
         targetId: '',
         preview: sanitizeString(params.preview, 200),
         read: false,
@@ -1232,5 +1761,163 @@ export async function dispatchAdminNotification(params: {
     return uniqueIds.length;
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, 'notifications');
+  }
+}
+
+export function subscribeEmailLogs(callback: (logs: EmailLogEntry[]) => void): Unsubscribe {
+  const q = query(
+    collection(db, 'email_logs'),
+    where('status', 'in', ['sent', 'not_configured', 'skipped', 'failed']),
+    limit(100)
+  );
+  return onSnapshot(
+    q,
+    (snap) =>
+      callback(
+        snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as Omit<EmailLogEntry, 'id'>) }))
+          .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
+      ),
+    () => callback([])
+  );
+}
+
+export async function dispatchAdminDirectEmail(params: {
+  actor: UserProfile;
+  actorRole: InternalRole;
+  to: string;
+  subject: string;
+  bodyText: string;
+  category?: NotificationCategory;
+  recipientUid?: string;
+  recipientName?: string;
+}) {
+  const outcome = await dispatchDualNotification({
+    recipientUid: params.recipientUid,
+    recipientName: params.recipientName || 'Nexora Member',
+    recipientEmail: params.to,
+    actor: params.actor,
+    type: 'admin_notice',
+    category: params.category || 'admin',
+    targetId: 'settings:notifications',
+    inAppPreview: params.subject,
+    emailSubject: params.subject,
+    emailBodyText: params.bodyText,
+  });
+
+  await recordAuditLog({
+    actor: params.actor,
+    actorRole: params.actorRole,
+    action: `Dispatched email (${outcome.emailStatus})`,
+    category: 'notification',
+    targetType: 'email',
+    targetId: params.recipientUid || 'direct',
+    details: `${params.subject} (${outcome.emailProvider})`,
+  });
+
+  return outcome;
+}
+
+// --- Section I: Free Virtual Gift Catalog & Moderation ---
+export function subscribeGiftCatalog(
+  callback: (items: VirtualGiftCatalogItem[]) => void
+): Unsubscribe {
+  const q = query(
+    collection(db, 'gift_catalog'),
+    where('tier', 'in', ['free', 'future_premium']),
+    limit(40)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const overrides = new Map<string, VirtualGiftCatalogItem>();
+      snap.docs.forEach((d) => {
+        overrides.set(d.id, { id: d.id, ...(d.data() as Omit<VirtualGiftCatalogItem, 'id'>) });
+      });
+      const mergedMap = new Map<string, VirtualGiftCatalogItem>();
+      FREE_GIFT_CATALOG.forEach((base) => {
+        mergedMap.set(base.id, overrides.get(base.id) || base);
+      });
+      overrides.forEach((val, key) => {
+        if (!mergedMap.has(key)) mergedMap.set(key, val);
+      });
+      const sorted = Array.from(mergedMap.values()).sort((a, b) => a.sortOrder - b.sortOrder);
+      callback(sorted);
+    },
+    () => callback([...FREE_GIFT_CATALOG])
+  );
+}
+
+export async function saveGiftCatalogItem(params: {
+  actor: UserProfile;
+  actorRole: InternalRole;
+  item: VirtualGiftCatalogItem;
+}): Promise<void> {
+  const giftId = params.item.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || `gift_${Date.now()}`;
+  try {
+    await setDoc(doc(db, 'gift_catalog', giftId), {
+      name: sanitizeString(params.item.name, 60),
+      description: sanitizeString(params.item.description, 200),
+      emoji: sanitizeString(params.item.emoji, 16) || '🎁',
+      category: params.item.category,
+      accentColor: sanitizeString(params.item.accentColor, 24) || '#A855F7',
+      tier: 'free',
+      enabled: Boolean(params.item.enabled),
+      sortOrder: Math.max(0, Math.floor(params.item.sortOrder || 0)),
+      createdBy: params.actor.uid,
+      updatedAt: serverTimestamp(),
+    });
+    await recordAuditLog({
+      actor: params.actor,
+      actorRole: params.actorRole,
+      action: `Updated free gift "${params.item.name}"`,
+      category: 'platform',
+      targetType: 'gift_catalog',
+      targetId: giftId,
+      details: `Enabled=${params.item.enabled}`,
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `gift_catalog/${giftId}`);
+  }
+}
+
+export function subscribeAllGiftTransactionsAdmin(
+  callback: (items: GiftTransaction[]) => void
+): Unsubscribe {
+  const q = query(
+    collection(db, 'virtual_gifts'),
+    where('targetType', 'in', ['profile', 'post']),
+    limit(120)
+  );
+  return onSnapshot(
+    q,
+    (snap) =>
+      callback(
+        snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as Omit<GiftTransaction, 'id'>) }))
+          .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
+      ),
+    () => callback([])
+  );
+}
+
+export async function adminDeleteGiftTransaction(params: {
+  actor: UserProfile;
+  actorRole: InternalRole;
+  giftTx: GiftTransaction;
+}): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'virtual_gifts', params.giftTx.id));
+    await recordAuditLog({
+      actor: params.actor,
+      actorRole: params.actorRole,
+      action: `Removed gift transaction (${params.giftTx.giftName})`,
+      category: 'moderation',
+      targetType: 'virtual_gift',
+      targetId: params.giftTx.id,
+      targetLabel: `@${params.giftTx.recipientUsername}`,
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `virtual_gifts/${params.giftTx.id}`);
   }
 }
