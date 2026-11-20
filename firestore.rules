@@ -984,6 +984,18 @@ service cloud.firestore {
         && (
           (isFounderOwner() && isOwner(userId) && (!('suspended' in incoming()) || incoming().suspended == false)) ||
           (
+            isOwner(userId)
+            && isNotSuspended()
+            && incoming().verified == existing().verified
+            && (!('suspended' in incoming()) ? !('suspended' in existing()) : ('suspended' in existing() && incoming().suspended == existing().suspended))
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'username', 'bio', 'avatarUrl', 'coverUrl',
+              'coverPositionY', 'website', 'location', 'interests',
+              'onboardingCompleted', 'isOnline', 'lastActiveAt', 'postsCount',
+              'followingCount', 'updatedAt'
+            ])
+          ) ||
+          (
             !isTargetPlatformOwner(userId)
             && isPlatformOwner()
           ) ||
@@ -997,18 +1009,6 @@ service cloud.firestore {
             && hasPerm('moderate_content')
             && incoming().verified == existing().verified
             && incoming().diff(existing()).affectedKeys().hasOnly(['suspended', 'suspendedReason', 'suspendedAt', 'updatedAt'])
-          ) ||
-          (
-            isOwner(userId)
-            && isNotSuspended()
-            && incoming().verified == existing().verified
-            && (!('suspended' in incoming()) ? !('suspended' in existing()) : ('suspended' in existing() && incoming().suspended == existing().suspended))
-            && incoming().diff(existing()).affectedKeys().hasOnly([
-              'displayName', 'username', 'bio', 'avatarUrl', 'coverUrl',
-              'coverPositionY', 'website', 'location', 'interests',
-              'onboardingCompleted', 'isOnline', 'lastActiveAt', 'postsCount',
-              'followingCount', 'updatedAt'
-            ])
           ) ||
           (
             incoming().verified == existing().verified

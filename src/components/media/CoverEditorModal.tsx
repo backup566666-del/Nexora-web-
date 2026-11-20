@@ -1,7 +1,9 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Check, MoveVertical, Upload, X, ZoomIn } from 'lucide-react';
+import { resolveAssetUrl } from '../../assets/defaultAssets';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
+import { ResilientImage } from '../common/ResilientImage';
 
 interface CoverEditorModalProps {
   title: string;
@@ -13,6 +15,8 @@ interface CoverEditorModalProps {
   onClose: () => void;
 }
 
+const DEFAULT_COVER_PATH = '/src/assets/images/space_cover_code_1795066815138.jpg';
+
 export function CoverEditorModal({
   title,
   initialUrl,
@@ -22,15 +26,18 @@ export function CoverEditorModal({
   onSave,
   onClose,
 }: CoverEditorModalProps) {
-  const [imageUrl, setImageUrl] = useState(
-    initialUrl || '/src/assets/images/space_cover_code_1795066815138.jpg'
-  );
+  const [imageUrl, setImageUrl] = useState(initialUrl || DEFAULT_COVER_PATH);
   const [positionY, setPositionY] = useState(initialPositionY);
   const [zoom, setZoom] = useState(1);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setImageUrl(initialUrl || DEFAULT_COVER_PATH);
+    setPositionY(initialPositionY);
+  }, [initialUrl, initialPositionY]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -46,6 +53,7 @@ export function CoverEditorModal({
       setError(extractReadableErrorMessage(err, 'Unable to process image.'));
     } finally {
       setUploading(false);
+      e.target.value = '';
     }
   };
 
@@ -53,7 +61,7 @@ export function CoverEditorModal({
     setSaving(true);
     setError('');
     try {
-      await onSave(imageUrl, positionY);
+      await onSave(imageUrl || DEFAULT_COVER_PATH, positionY);
       onClose();
     } catch (err) {
       setError(extractReadableErrorMessage(err, 'Failed to save cover changes.'));
@@ -81,10 +89,9 @@ export function CoverEditorModal({
           <div
             className={`relative w-full ${aspectClass} rounded-xl overflow-hidden border border-white/10 bg-[#06060A]`}
           >
-            <img
-              src={imageUrl}
+            <ResilientImage
+              src={resolveAssetUrl(imageUrl)}
               alt="Cover preview"
-              referrerPolicy="no-referrer"
               style={{
                 objectPosition: `50% ${positionY}%`,
                 transform: `scale(${zoom})`,

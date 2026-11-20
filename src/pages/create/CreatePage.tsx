@@ -26,10 +26,11 @@ import { useAuth } from '../../hooks/useAuth';
 import { updateUserProfileFields } from '../../services/auth/authService';
 import { createStory, createVibe, updateSpaceCover } from '../../services/firebase/socialService';
 import { uploadBlobAsset, uploadMediaAsset } from '../../services/storage/mediaUploadService';
-import { Space, StoryPrivacy } from '../../types/nexora';
+import { Space, StoryPrivacy, UserProfile } from '../../types/nexora';
 
 interface CreatePageProps {
   spaces: Space[];
+  users?: UserProfile[];
   onDone: (goTo: 'home' | 'vibes' | 'spaces' | 'profile') => void;
 }
 
@@ -79,7 +80,7 @@ const STORY_GRADIENTS = [
   'from-[#0F172A] via-[#3B0764] to-[#06060A]',
 ];
 
-export function CreatePage({ spaces, onDone }: CreatePageProps) {
+export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
   const { profile, refreshUserAndProfile } = useAuth();
   const [mode, setMode] = useState<StudioMode>('post');
 
@@ -485,6 +486,7 @@ export function CreatePage({ spaces, onDone }: CreatePageProps) {
         <div className="max-w-3xl space-y-4">
           <PostComposer
             spaces={spaces}
+            users={users}
             initialMediaUrl={attachedPostMediaUrl}
             initialMediaType="image"
             onCreated={() => {

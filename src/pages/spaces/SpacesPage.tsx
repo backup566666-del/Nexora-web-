@@ -37,6 +37,7 @@ import {
   sendSpaceDiscussion,
   sendSpaceInviteNotification,
   subscribeFeedPosts,
+  subscribeMySpaceMembership,
   subscribeSpaceDiscussions,
   subscribeSpaceEvents,
   subscribeSpaceMembers,
@@ -143,9 +144,8 @@ export function SpacesPage({
   useEffect(() => {
     if (!profile || spaces.length === 0) return;
     const unsubs = spaces.map((s) =>
-      subscribeSpaceMembers(s.id, (members) => {
-        const joined = members.some((m) => m.uid === profile.uid);
-        setMembershipsMap((prev) => ({ ...prev, [s.id]: joined }));
+      subscribeMySpaceMembership(s.id, profile.uid, (joined) => {
+        setMembershipsMap((prev) => (prev[s.id] === joined ? prev : { ...prev, [s.id]: joined }));
       })
     );
     return () => unsubs.forEach((u) => u());
@@ -353,7 +353,7 @@ export function SpacesPage({
         {spaceInnerTab === 'posts' && (
           <div className="max-w-3xl space-y-5">
             {isMemberOfActive && (
-              <PostComposer spaces={spaces} defaultSpaceId={activeSpace.id} />
+              <PostComposer spaces={spaces} users={users} defaultSpaceId={activeSpace.id} />
             )}
             {spacePosts.length === 0 ? (
               <p className="text-xs text-[#64748B] py-6">

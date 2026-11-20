@@ -54,18 +54,25 @@ function savePendingUsername(uid: string, username: string): void {
   }
 }
 
-function readAndClearPendingUsername(uid: string): string | undefined {
+function peekPendingUsername(uid: string): string | undefined {
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
-      const key = `${PENDING_USERNAME_PREFIX}${uid}`;
-      const value = window.localStorage.getItem(key) || undefined;
-      if (value) window.localStorage.removeItem(key);
-      return value;
+      return window.localStorage.getItem(`${PENDING_USERNAME_PREFIX}${uid}`) || undefined;
+    }
+  } catch {
+    // Ignore storage restriction errors in private browsing
+  }
+  return undefined;
+}
+
+function clearPendingUsername(uid: string): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(`${PENDING_USERNAME_PREFIX}${uid}`);
     }
   } catch {
     // Ignore storage restriction errors
   }
-  return undefined;
 }
 
 export async function ensureVerifiedTokenClaims(user: User, forceRefresh = false): Promise<void> {
@@ -113,7 +120,7 @@ export function mapAuthErrorMessage(err: unknown): string {
     case 'auth/user-not-found':
     case 'auth/wrong-password':
     case 'auth/invalid-credential':
-      return 'Incorrect email or password. Please verify your credentials.';
+      return 'Incorrect email or password. If you originally registered with Google, click "Continue with Google" above or use "Forgot password?" to set a password.';
     case 'auth/popup-closed-by-user':
       return 'Google sign-in window was closed before completing authorization.';
     case 'auth/network-request-failed':
@@ -313,6 +320,27 @@ async function ensureUserDocumentsInternal(
 
   if (snap.exists()) {
     const existing = snap.data() as UserProfile;
+    const privateRef = doc(db, 'users', user.uid, 'private', 'account');
+    try {
+      const privateSnap = await getDoc(privateRef);
+      if (!privateSnap.exists()) {
+        await setDoc(privateRef, {
+          uid: user.uid,
+          email: sanitizeString(user.email || '', 254),
+          blockedUserIds: [] as string[],
+          privacySettings: withPrivacyDefaults({
+            profileVisibility: 'public',
+            storyPrivacy: 'public',
+            allowDMs: 'everyone',
+            showOnlineStatus: true,
+          }) satisfies PrivacySettings,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch {
+      // Non-fatal if private doc check encounters transient error
+    }
+
     const lastActiveMs = existing.lastActiveAt?.toMillis?.() ?? 0;
     const shouldRefreshPresence =
       !existing.isOnline || Date.now() - lastActiveMs > PRESENCE_REFRESH_INTERVAL_MS;
@@ -332,7 +360,7 @@ async function ensureUserDocumentsInternal(
     return existing;
   }
 
-  const pendingUsername = readAndClearPendingUsername(user.uid);
+  const pendingUsername = peekPendingUsername(user.uid);
   const rawDisplayName =
     sanitizeString(user.displayName || '', BLUEPRINT_LIMITS.DISPLAY_NAME_MAX) ||
     sanitizeString(user.email?.split('@')[0] || '', BLUEPRINT_LIMITS.DISPLAY_NAME_MAX) ||
@@ -390,6 +418,7 @@ async function ensureUserDocumentsInternal(
     batch.set(userRef, profilePayload);
     batch.set(doc(db, 'users', user.uid, 'private', 'account'), privatePayload);
     await batch.commit();
+    clearPendingUsername(user.uid);
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
   }

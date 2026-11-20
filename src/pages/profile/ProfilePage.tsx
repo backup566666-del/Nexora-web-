@@ -19,6 +19,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
+import { resolveAssetUrl } from '../../assets/defaultAssets';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip, VerifiedBadge } from '../../components/common/VerifiedBadge';
 import { GiftPickerModal } from '../../components/gifts/GiftPickerModal';
@@ -97,6 +98,7 @@ export function ProfilePage({
   const [shareToast, setShareToast] = useState('');
   const [avatarLoadError, setAvatarLoadError] = useState(false);
   const [uploadingQuickAvatar, setUploadingQuickAvatar] = useState(false);
+  const [uploadingModalAvatar, setUploadingModalAvatar] = useState(false);
   const [lightboxMedia, setLightboxMedia] = useState<{
     type: 'image' | 'video';
     url: string;
@@ -129,8 +131,8 @@ export function ProfilePage({
     if (isOwnProfile) {
       setViewedProfile(currentUser);
     } else if (targetUid) {
-      void getUserProfile(targetUid).then(setViewedProfile);
-      void checkIsFollowing(currentUser.uid, targetUid).then(setIsFollowing);
+      void getUserProfile(targetUid).then(setViewedProfile).catch(() => setViewedProfile(null));
+      void checkIsFollowing(currentUser.uid, targetUid).then(setIsFollowing).catch(() => setIsFollowing(false));
     }
   }, [targetUid, currentUser, isOwnProfile]);
 
@@ -145,7 +147,7 @@ export function ProfilePage({
   const primaryAvatarUrl = useMemo(() => {
     if (!activeProfile) return '';
     if (activeProfile.avatarUrl && activeProfile.avatarUrl.trim().length > 0) {
-      return activeProfile.avatarUrl.trim();
+      return resolveAssetUrl(activeProfile.avatarUrl.trim());
     }
     if (isOwnProfile && firebaseUser?.photoURL) {
       return firebaseUser.photoURL;
@@ -158,16 +160,16 @@ export function ProfilePage({
   }, [primaryAvatarUrl]);
 
   useEffect(() => {
-    if (!activeProfile) return;
+    if (!activeProfile || showEditProfile) return;
     setEditName(activeProfile.displayName);
     setEditUsername(activeProfile.username);
     setEditBio(activeProfile.bio || '');
     setEditWebsite(activeProfile.website || '');
     setEditLocation(activeProfile.location || '');
-    setEditAvatar(primaryAvatarUrl);
+    setEditAvatar(activeProfile.avatarUrl?.trim() || primaryAvatarUrl);
     setEditInterests(activeProfile.interests || []);
     setEditError('');
-  }, [activeProfile, primaryAvatarUrl]);
+  }, [activeProfile?.uid, showEditProfile]);
 
   const userPosts = useMemo(
     () => (activeProfile ? posts.filter((p) => p.authorId === activeProfile.uid) : []),
@@ -267,6 +269,19 @@ export function ProfilePage({
     setTimeout(() => setShareToast(''), 2800);
   };
 
+  const openEditProfileModal = () => {
+    setEditName(currentUser.displayName);
+    setEditUsername(currentUser.username);
+    setEditBio(currentUser.bio || '');
+    setEditWebsite(currentUser.website || '');
+    setEditLocation(currentUser.location || '');
+    setEditAvatar(currentUser.avatarUrl?.trim() || primaryAvatarUrl);
+    setEditInterests(currentUser.interests || []);
+    setNewInterest('');
+    setEditError('');
+    setShowEditProfile(true);
+  };
+
   const handleQuickAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -275,7 +290,7 @@ export function ProfilePage({
       const res = await uploadMediaAsset(file, `users/${currentUser.uid}/avatar`, ['image']);
       await updateUserProfileFields(currentUser.uid, { avatarUrl: res.url });
       setAvatarLoadError(false);
-      await refreshUserAndProfile();
+      await refreshUserAndProfile(false);
     } catch (err) {
       setShareToast(extractReadableErrorMessage(err, 'Unable to upload profile photo.'));
       setTimeout(() => setShareToast(''), 3000);
@@ -288,18 +303,21 @@ export function ProfilePage({
   const handleModalAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setEditError('');
+    setUploadingModalAvatar(true);
     try {
       const res = await uploadMediaAsset(file, `users/${currentUser.uid}/avatar`, ['image']);
       setEditAvatar(res.url);
     } catch (err) {
       setEditError(extractReadableErrorMessage(err, 'Unable to upload profile photo.'));
     } finally {
+      setUploadingModalAvatar(false);
       e.target.value = '';
     }
   };
 
   const handleAddInterest = () => {
-    const clean = newInterest.trim();
+    const clean = newInterest.trim().slice(0, 40);
     if (!clean || editInterests.length >= 10) return;
     if (!editInterests.includes(clean)) {
       setEditInterests((prev) => [...prev, clean]);
@@ -309,7 +327,13 @@ export function ProfilePage({
 
   const handleSaveProfileEdit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (uploadingModalAvatar || savingEdit) return;
     setEditError('');
+    const cleanName = editName.trim();
+    if (!cleanName) {
+      setEditError('Full name cannot be empty.');
+      return;
+    }
     const normalized = normalizeUsername(editUsername);
     if (!isValidUsername(normalized)) {
       setEditError(
@@ -327,21 +351,32 @@ export function ProfilePage({
           return;
         }
       }
-      await updateUserProfileFields(
-        currentUser.uid,
-        {
-          displayName: editName,
-          username: normalized,
-          bio: editBio,
-          website: editWebsite,
-          location: editLocation,
-          avatarUrl: editAvatar,
-          interests: editInterests,
-        },
-        currentUser.username
-      );
-      setAvatarLoadError(false);
-      await refreshUserAndProfile();
+
+      const updates: Parameters<typeof updateUserProfileFields>[1] = {};
+      if (cleanName !== currentUser.displayName) updates.displayName = cleanName;
+      if (normalized !== currentUser.username) updates.username = normalized;
+      if (editBio !== (currentUser.bio || '')) updates.bio = editBio;
+      if (editWebsite !== (currentUser.website || '')) updates.website = editWebsite;
+      if (editLocation !== (currentUser.location || '')) updates.location = editLocation;
+
+      const currentAvatarResolved = currentUser.avatarUrl?.trim() || primaryAvatarUrl;
+      if (editAvatar && editAvatar !== currentAvatarResolved) {
+        updates.avatarUrl = editAvatar;
+      }
+
+      const existingInterests = currentUser.interests || [];
+      if (
+        editInterests.length !== existingInterests.length ||
+        editInterests.some((item, idx) => item !== existingInterests[idx])
+      ) {
+        updates.interests = editInterests;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await updateUserProfileFields(currentUser.uid, updates, currentUser.username);
+        setAvatarLoadError(false);
+        await refreshUserAndProfile(false);
+      }
       setShowEditProfile(false);
     } catch (err) {
       setEditError(extractReadableErrorMessage(err, 'Unable to save profile updates.'));
@@ -352,11 +387,16 @@ export function ProfilePage({
 
   const handleToggleBlock = async () => {
     if (!privateInfo) return;
-    const nextBlocked = isBlocked
-      ? privateInfo.blockedUserIds.filter((id) => id !== activeProfile.uid)
-      : [...privateInfo.blockedUserIds, activeProfile.uid];
-    await updateUserPrivacySettings(currentUser.uid, privateInfo.privacySettings, nextBlocked);
-    await refreshUserAndProfile();
+    try {
+      const nextBlocked = isBlocked
+        ? privateInfo.blockedUserIds.filter((id) => id !== activeProfile.uid)
+        : [...privateInfo.blockedUserIds, activeProfile.uid];
+      await updateUserPrivacySettings(currentUser.uid, privateInfo.privacySettings, nextBlocked);
+      await refreshUserAndProfile(false);
+    } catch (err) {
+      setShareToast(extractReadableErrorMessage(err, 'Unable to update block setting.'));
+      setTimeout(() => setShareToast(''), 3000);
+    }
   };
 
   return (
@@ -466,9 +506,9 @@ export function ProfilePage({
                     {activeProfile.website && (
                       <a
                         href={
-                          activeProfile.website.startsWith('http')
+                          /^https?:\/\//i.test(activeProfile.website)
                             ? activeProfile.website
-                            : `https://${activeProfile.website}`
+                            : `https://${activeProfile.website.replace(/^[a-z]+:/i, '')}`
                         }
                         target="_blank"
                         rel="noreferrer"
@@ -516,7 +556,7 @@ export function ProfilePage({
                   <>
                     <button
                       type="button"
-                      onClick={() => setShowEditProfile(true)}
+                      onClick={openEditProfileModal}
                       className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] hover:brightness-110 text-xs font-semibold text-white shadow-[0_4px_18px_rgba(124,58,237,0.4)] transition-all whitespace-nowrap"
                     >
                       <Edit3 size={14} /> Edit Profile
@@ -534,14 +574,19 @@ export function ProfilePage({
                     <button
                       type="button"
                       onClick={async () => {
-                        const next = await toggleFollowUser(
-                          currentUser,
-                          activeProfile,
-                          isFollowing
-                        );
-                        setIsFollowing(next);
-                        const fresh = await getUserProfile(activeProfile.uid);
-                        if (fresh) setViewedProfile(fresh);
+                        try {
+                          const next = await toggleFollowUser(
+                            currentUser,
+                            activeProfile,
+                            isFollowing
+                          );
+                          setIsFollowing(next);
+                          const fresh = await getUserProfile(activeProfile.uid);
+                          if (fresh) setViewedProfile(fresh);
+                        } catch (err) {
+                          setShareToast(extractReadableErrorMessage(err, 'Unable to update follow status.'));
+                          setTimeout(() => setShareToast(''), 3000);
+                        }
                       }}
                       className={`px-5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                         isFollowing
@@ -554,11 +599,16 @@ export function ProfilePage({
                     <button
                       type="button"
                       onClick={async () => {
-                        const convId = await createOrGetDirectConversation(
-                          currentUser,
-                          activeProfile
-                        );
-                        onOpenChatThread(convId);
+                        try {
+                          const convId = await createOrGetDirectConversation(
+                            currentUser,
+                            activeProfile
+                          );
+                          onOpenChatThread(convId);
+                        } catch (err) {
+                          setShareToast(extractReadableErrorMessage(err, 'Unable to open chat thread.'));
+                          setTimeout(() => setShareToast(''), 3000);
+                        }
                       }}
                       className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-[#8B5CF6]/25 bg-[#0D0B16] hover:border-[#8B5CF6]/60 text-xs font-semibold text-white"
                     >
@@ -1062,7 +1112,7 @@ export function ProfilePage({
               coverUrl: url,
               coverPositionY: posY,
             });
-            await refreshUserAndProfile();
+            await refreshUserAndProfile(false);
           }}
           onClose={() => setShowCoverEditor(false)}
         />
@@ -1087,7 +1137,7 @@ export function ProfilePage({
                 <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-[#8B5CF6]/60 bg-[#141420]">
                   {editAvatar ? (
                     <img
-                      src={editAvatar}
+                      src={resolveAssetUrl(editAvatar)}
                       alt="Avatar preview"
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover"
@@ -1107,10 +1157,11 @@ export function ProfilePage({
                 />
                 <button
                   type="button"
+                  disabled={uploadingModalAvatar}
                   onClick={() => modalAvatarInputRef.current?.click()}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-white"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-white disabled:opacity-50"
                 >
-                  <Camera size={14} /> Change Profile Photo
+                  <Camera size={14} /> {uploadingModalAvatar ? 'Uploading...' : 'Change Profile Photo'}
                 </button>
               </div>
 
@@ -1251,8 +1302,8 @@ export function ProfilePage({
               </button>
               <button
                 type="submit"
-                disabled={savingEdit}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white"
+                disabled={savingEdit || uploadingModalAvatar}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] disabled:opacity-50 text-xs font-semibold text-white"
               >
                 {savingEdit ? 'Saving...' : 'Save Changes'}
               </button>

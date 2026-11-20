@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { resolveAssetUrl } from '../../assets/defaultAssets';
 
 interface ResilientImageProps {
   src?: string | null;
@@ -15,9 +16,14 @@ export function ResilientImage({
   style,
   fallbackLabel,
 }: ResilientImageProps) {
+  const resolvedSrc = resolveAssetUrl(src);
   const [failed, setFailed] = useState(false);
 
-  if (!src || failed) {
+  useEffect(() => {
+    setFailed(false);
+  }, [resolvedSrc]);
+
+  if (!resolvedSrc || failed) {
     const initial = (fallbackLabel || alt || 'N').trim().charAt(0).toUpperCase();
     return (
       <div
@@ -33,7 +39,7 @@ export function ResilientImage({
 
   return (
     <img
-      src={src}
+      src={resolvedSrc}
       alt={alt}
       referrerPolicy="no-referrer"
       onError={() => setFailed(true)}

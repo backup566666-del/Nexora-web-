@@ -43,7 +43,7 @@ export function AuthView({ initialMode, onBackToLanding }: AuthViewProps) {
   useEffect(() => {
     if (user && !emailVerified) {
       setMode('verify-email');
-    } else if (initialMode === 'login' || initialMode === 'register') {
+    } else if (!user && (initialMode === 'login' || initialMode === 'register')) {
       setMode(initialMode);
     }
   }, [user, emailVerified, initialMode]);
@@ -81,7 +81,7 @@ export function AuthView({ initialMode, onBackToLanding }: AuthViewProps) {
     setBusy(true);
     try {
       await signInWithGoogle(rememberSession);
-      await refreshUserAndProfile();
+      await refreshUserAndProfile(false);
     } catch (err) {
       setError(mapAuthErrorMessage(err));
     } finally {
@@ -93,13 +93,18 @@ export function AuthView({ initialMode, onBackToLanding }: AuthViewProps) {
     e.preventDefault();
     setError('');
     setNotice('');
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password) {
+      setError('Please enter both your email address and password.');
+      return;
+    }
     setBusy(true);
     try {
-      const signedUser = await loginWithEmail(email, password, rememberSession);
+      const signedUser = await loginWithEmail(cleanEmail, password, rememberSession);
       if (!signedUser.emailVerified) {
         setMode('verify-email');
       } else {
-        await refreshUserAndProfile();
+        await refreshUserAndProfile(false);
       }
     } catch (err) {
       setError(mapAuthErrorMessage(err));
@@ -287,8 +292,22 @@ export function AuthView({ initialMode, onBackToLanding }: AuthViewProps) {
 
               <button
                 type="button"
-                onClick={() => logoutUser(user?.uid)}
-                className="w-full py-2 text-xs text-[#94A3B8] hover:text-white"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setError('');
+                  setNotice('');
+                  try {
+                    await logoutUser(user?.uid);
+                    setPassword('');
+                    setMode('login');
+                  } catch (err) {
+                    setError(mapAuthErrorMessage(err));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="w-full py-2 text-xs text-[#94A3B8] hover:text-white disabled:opacity-50"
               >
                 Sign out and use another account
               </button>

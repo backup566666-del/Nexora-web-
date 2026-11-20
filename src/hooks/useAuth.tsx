@@ -47,7 +47,7 @@ interface AuthContextValue {
   profileError: string | null;
   getBadgeVariant: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType | null;
   getUserBadges: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType[];
-  refreshUserAndProfile: () => Promise<void>;
+  refreshUserAndProfile: (reloadAuthUser?: boolean) => Promise<void>;
   retryProfileLoad: () => Promise<void>;
 }
 
@@ -82,6 +82,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authReady, setAuthReady] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
 
+  const inFlightSyncRef = React.useRef<Promise<void> | null>(null);
+
   const loadProfileForUser = useCallback(async (firebaseUser: User | null, forceTokenRefresh = false) => {
     setProfileError(null);
 
@@ -93,49 +95,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    setEmailVerified(Boolean(firebaseUser.emailVerified));
-
     if (!firebaseUser.emailVerified) {
+      setEmailVerified(false);
       setProfile(null);
       setPrivateInfo(null);
       setMyRole(null);
       return;
     }
 
-    try {
-      await ensureVerifiedTokenClaims(firebaseUser, forceTokenRefresh);
-      let finalProfile = await ensureUserDocuments(firebaseUser);
-      const freshPrivate = await getUserPrivate(firebaseUser.uid);
-
-      if ((firebaseUser.email || '').toLowerCase() === FOUNDER_OWNER_EMAIL.toLowerCase()) {
-        await bootstrapFounderGovernance(firebaseUser, finalProfile);
-        const updated = await getUserProfile(firebaseUser.uid);
-        if (updated) finalProfile = updated;
-      }
-
-      setProfile(finalProfile);
-      setPrivateInfo(
-        freshPrivate
-          ? {
-              ...freshPrivate,
-              privacySettings: withPrivacyDefaults(freshPrivate.privacySettings),
-            }
-          : null
-      );
-      if (finalProfile.onboardingCompleted && !finalProfile.suspended) {
-        void seedInitialSpacesIfEmpty(finalProfile);
-      }
-    } catch (err) {
-      const readable = extractReadableErrorMessage(
-        err,
-        'Unable to synchronize your Nexora profile.'
-      );
-      setProfileError(readable);
-      throw err;
+    if (inFlightSyncRef.current && !forceTokenRefresh) {
+      return inFlightSyncRef.current;
     }
+
+    const syncTask = (async () => {
+      try {
+        await ensureVerifiedTokenClaims(firebaseUser, forceTokenRefresh);
+        let finalProfile = await ensureUserDocuments(firebaseUser);
+        const freshPrivate = await getUserPrivate(firebaseUser.uid);
+
+        if ((firebaseUser.email || '').toLowerCase() === FOUNDER_OWNER_EMAIL.toLowerCase()) {
+          await bootstrapFounderGovernance(firebaseUser, finalProfile);
+          const updated = await getUserProfile(firebaseUser.uid);
+          if (updated) finalProfile = updated;
+        }
+
+        setEmailVerified(true);
+        setProfile(finalProfile);
+        setPrivateInfo(
+          freshPrivate
+            ? {
+                ...freshPrivate,
+                privacySettings: withPrivacyDefaults(freshPrivate.privacySettings),
+              }
+            : null
+        );
+        if (finalProfile.onboardingCompleted && !finalProfile.suspended) {
+          void seedInitialSpacesIfEmpty(finalProfile);
+        }
+      } catch (err) {
+        const readable = extractReadableErrorMessage(
+          err,
+          'Unable to synchronize your Nexora profile.'
+        );
+        setEmailVerified(Boolean(firebaseUser.emailVerified));
+        setProfileError(readable);
+        throw err;
+      } finally {
+        inFlightSyncRef.current = null;
+      }
+    })();
+
+    inFlightSyncRef.current = syncTask;
+    return syncTask;
   }, []);
 
-  const refreshUserAndProfile = useCallback(async () => {
+  const refreshUserAndProfile = useCallback(async (reloadAuthUser = true) => {
     if (!auth.currentUser) {
       setUser(null);
       setEmailVerified(false);
@@ -145,20 +159,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setProfileError(null);
       return;
     }
-    await auth.currentUser.reload();
-    if (auth.currentUser.emailVerified) {
-      await auth.currentUser.getIdToken(true);
+    if (reloadAuthUser) {
+      await auth.currentUser.reload();
+      if (auth.currentUser.emailVerified) {
+        await auth.currentUser.getIdToken(true);
+      }
     }
     const updatedUser = auth.currentUser;
     setUser(updatedUser);
-    setEmailVerified(Boolean(updatedUser.emailVerified));
-    await loadProfileForUser(updatedUser, Boolean(updatedUser.emailVerified));
+    await loadProfileForUser(updatedUser, Boolean(reloadAuthUser && updatedUser.emailVerified));
   }, [loadProfileForUser]);
 
   const retryProfileLoad = useCallback(async () => {
     setLoading(true);
     try {
-      await refreshUserAndProfile();
+      await refreshUserAndProfile(true);
     } catch {
       // profileError state is populated by loadProfileForUser
     } finally {

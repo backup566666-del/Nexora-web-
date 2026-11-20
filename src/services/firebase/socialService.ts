@@ -22,7 +22,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { getUserProfile, resolveUidByUsername } from '../auth/authService';
-import { handleFirestoreError, OperationType } from './errorHandler';
+import { handleFirestoreError, logFirestoreListenerError, OperationType } from './errorHandler';
 import {
   dispatchDualNotification,
   inferCategoryFromNotificationType,
@@ -104,7 +104,7 @@ export function subscribeNotifications(
         .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
       callback(items);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, 'notifications')
+    (error) => logFirestoreListenerError(error, OperationType.LIST, 'notifications')
   );
 }
 
@@ -136,12 +136,12 @@ export function subscribeDirectoryUsers(callback: (users: UserProfile[]) => void
     collection(db, 'users'),
     where('onboardingCompleted', '==', true),
     orderBy('createdAt', 'desc'),
-    limit(250)
+    limit(120)
   );
   return onSnapshot(
     q,
     (snap) => callback(snap.docs.map((d) => d.data() as UserProfile)),
-    (error) => handleFirestoreError(error, OperationType.LIST, 'users')
+    (error) => logFirestoreListenerError(error, OperationType.LIST, 'users')
   );
 }
 
@@ -273,7 +273,7 @@ export function subscribeFeedPosts(
         .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
       callback(items);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, 'posts')
+    (error) => logFirestoreListenerError(error, OperationType.LIST, 'posts')
   );
 }
 
@@ -600,7 +600,7 @@ export function subscribeSavedPostIds(uid: string, callback: (ids: string[]) => 
   return onSnapshot(
     collection(db, 'users', uid, 'saved'),
     (snap) => callback(snap.docs.map((d) => d.id)),
-    (error) => handleFirestoreError(error, OperationType.LIST, `users/${uid}/saved`)
+    (error) => logFirestoreListenerError(error, OperationType.LIST, `users/${uid}/saved`)
   );
 }
 
@@ -662,7 +662,7 @@ export function subscribePostComments(
   return onSnapshot(
     q,
     (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<PostComment, 'id'>) }))),
-    (error) => handleFirestoreError(error, OperationType.LIST, `posts/${postId}/comments`)
+    (error) => logFirestoreListenerError(error, OperationType.LIST, `posts/${postId}/comments`)
   );
 }
 
@@ -723,7 +723,7 @@ export function subscribeStories(callback: (stories: Story[]) => void): Unsubscr
         .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
       callback(active);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, 'stories')
+    (error) => logFirestoreListenerError(error, OperationType.LIST, 'stories')
   );
 }
 
@@ -813,7 +813,7 @@ export function subscribeVibes(callback: (vibes: Vibe[]) => void): Unsubscribe {
         .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
       callback(items);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, 'vibes')
+    (error) => logFirestoreListenerError(error, OperationType.LIST, 'vibes')
   );
 }
 
@@ -983,7 +983,7 @@ export function subscribeVibeComments(
   return onSnapshot(
     q,
     (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<PostComment, 'id'>) }))),
-    (error) => handleFirestoreError(error, OperationType.LIST, `vibes/${vibeId}/comments`)
+    (error) => logFirestoreListenerError(error, OperationType.LIST, `vibes/${vibeId}/comments`)
   );
 }
 
@@ -1003,7 +1003,7 @@ export function subscribeSpaces(callback: (spaces: Space[]) => void): Unsubscrib
         .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
       callback(items);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, 'spaces')
+    (error) => logFirestoreListenerError(error, OperationType.LIST, 'spaces')
   );
 }
 
@@ -1167,10 +1167,23 @@ export function subscribeSpaceMembers(
   spaceId: string,
   callback: (members: SpaceMember[]) => void
 ): Unsubscribe {
+  const q = query(collection(db, 'spaces', spaceId, 'members'), limit(150));
   return onSnapshot(
-    collection(db, 'spaces', spaceId, 'members'),
+    q,
     (snap) => callback(snap.docs.map((d) => d.data() as SpaceMember)),
-    (error) => handleFirestoreError(error, OperationType.LIST, `spaces/${spaceId}/members`)
+    (error) => logFirestoreListenerError(error, OperationType.LIST, `spaces/${spaceId}/members`)
+  );
+}
+
+export function subscribeMySpaceMembership(
+  spaceId: string,
+  uid: string,
+  callback: (isMember: boolean) => void
+): Unsubscribe {
+  return onSnapshot(
+    doc(db, 'spaces', spaceId, 'members', uid),
+    (snap) => callback(snap.exists()),
+    (error) => logFirestoreListenerError(error, OperationType.GET, `spaces/${spaceId}/members/${uid}`)
   );
 }
 
@@ -1266,7 +1279,7 @@ export function subscribeSpaceEvents(
   return onSnapshot(
     q,
     (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<SpaceEvent, 'id'>) }))),
-    (error) => handleFirestoreError(error, OperationType.LIST, `spaces/${spaceId}/events`)
+    (error) => logFirestoreListenerError(error, OperationType.LIST, `spaces/${spaceId}/events`)
   );
 }
 
@@ -1310,7 +1323,7 @@ export function subscribeConversations(
         .sort((a, b) => (b.updatedAt?.toMillis?.() ?? 0) - (a.updatedAt?.toMillis?.() ?? 0));
       callback(items);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, 'conversations')
+    (error) => logFirestoreListenerError(error, OperationType.LIST, 'conversations')
   );
 }
 
@@ -1397,7 +1410,7 @@ export function subscribeMessages(
   return onSnapshot(
     q,
     (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ChatMessage, 'id'>) }))),
-    (error) => handleFirestoreError(error, OperationType.LIST, `conversations/${convId}/messages`)
+    (error) => logFirestoreListenerError(error, OperationType.LIST, `conversations/${convId}/messages`)
   );
 }
 

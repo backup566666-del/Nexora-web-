@@ -19,7 +19,7 @@ import {
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { db } from './config';
-import { handleFirestoreError, OperationType } from './errorHandler';
+import { handleFirestoreError, logFirestoreListenerError, OperationType } from './errorHandler';
 import { dispatchDualNotification } from '../notifications/notificationDispatcher';
 import {
   AdminPermission,
@@ -115,7 +115,7 @@ export function subscribeAuditLogs(callback: (logs: AuditLogEntry[]) => void): U
           .map((d) => ({ id: d.id, ...(d.data() as Omit<AuditLogEntry, 'id'>) }))
           .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
       ),
-    (err) => handleFirestoreError(err, OperationType.LIST, 'audit_logs')
+    (err) => logFirestoreListenerError(err, OperationType.LIST, 'audit_logs')
   );
 }
 
@@ -221,7 +221,7 @@ export function subscribeVerifiedBadges(
   const q = query(
     collection(db, 'verified_badges'),
     where('badgeType', 'in', [...ALL_VALID_BADGE_VALUES]),
-    limit(1200)
+    limit(500)
   );
   return onSnapshot(
     q,

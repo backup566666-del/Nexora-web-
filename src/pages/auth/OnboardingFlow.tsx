@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowRight, Camera, Check, Image as ImageIcon, SkipForward } from 'lucide-react';
+import { ArrowRight, Camera, Check, Image as ImageIcon, SkipForward, Upload } from 'lucide-react';
 import { NexoraLogo } from '../../components/branding/NexoraLogo';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { CoverEditorModal } from '../../components/media/CoverEditorModal';
@@ -25,35 +25,68 @@ const INTEREST_OPTIONS = [
   'Entrepreneurship',
 ];
 
+const DEFAULT_AVATAR_PATH = '/src/assets/images/avatar_creator_one_1795066815825.jpg';
+const DEFAULT_COVER_PATH = '/src/assets/images/space_cover_code_1795066815138.jpg';
+
 export function OnboardingFlow() {
   const { profile, refreshUserAndProfile } = useAuth();
   const [step, setStep] = useState(1);
 
-  const [avatarUrl, setAvatarUrl] = useState(
-    profile?.avatarUrl || '/src/assets/images/avatar_creator_one_1795066815825.jpg'
-  );
+  const [avatarUrl, setAvatarUrl] = useState(profile?.avatarUrl || DEFAULT_AVATAR_PATH);
   const [username, setUsername] = useState(profile?.username || '');
+  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid'>('idle');
   const [bio, setBio] = useState(profile?.bio || '');
   const [interests, setInterests] = useState<string[]>(profile?.interests || []);
-  const [coverUrl, setCoverUrl] = useState(
-    profile?.coverUrl || '/src/assets/images/space_cover_code_1795066815138.jpg'
-  );
+  const [coverUrl, setCoverUrl] = useState(profile?.coverUrl || DEFAULT_COVER_PATH);
   const [coverPositionY, setCoverPositionY] = useState(profile?.coverPositionY ?? 50);
 
   const [showCoverEditor, setShowCoverEditor] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [uploadingCover, setUploadingCover] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const coverInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!profile) return;
-    setAvatarUrl((prev) => prev || profile.avatarUrl || '/src/assets/images/avatar_creator_one_1795066815825.jpg');
+    setAvatarUrl((prev) => prev || profile.avatarUrl || DEFAULT_AVATAR_PATH);
     setUsername((prev) => prev || profile.username || '');
     setBio((prev) => prev || profile.bio || '');
     setInterests((prev) => (prev.length > 0 ? prev : profile.interests || []));
-    setCoverUrl((prev) => prev || profile.coverUrl || '/src/assets/images/space_cover_code_1795066815138.jpg');
+    setCoverUrl((prev) => prev || profile.coverUrl || DEFAULT_COVER_PATH);
   }, [profile?.uid]);
+
+  useEffect(() => {
+    if (!profile || step !== 2) return;
+    const clean = normalizeUsername(username);
+    if (!clean) {
+      setUsernameStatus('idle');
+      return;
+    }
+    if (!isValidUsername(clean)) {
+      setUsernameStatus('invalid');
+      return;
+    }
+    if (clean === profile.username) {
+      setUsernameStatus('available');
+      return;
+    }
+    let cancelled = false;
+    setUsernameStatus('checking');
+    const timer = setTimeout(async () => {
+      try {
+        const available = await isUsernameAvailable(clean, profile.uid);
+        if (!cancelled) setUsernameStatus(available ? 'available' : 'taken');
+      } catch {
+        if (!cancelled) setUsernameStatus('idle');
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [username, step, profile?.uid, profile?.username]);
 
   if (!profile) return null;
 
@@ -69,6 +102,23 @@ export function OnboardingFlow() {
       setError(extractReadableErrorMessage(err, 'Unable to upload avatar.'));
     } finally {
       setUploadingAvatar(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleDirectCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError('');
+    setUploadingCover(true);
+    try {
+      const res = await uploadMediaAsset(file, `users/${profile.uid}/cover`, ['image']);
+      setCoverUrl(res.url);
+      setCoverPositionY(50);
+    } catch (err) {
+      setError(extractReadableErrorMessage(err, 'Unable to upload cover image.'));
+    } finally {
+      setUploadingCover(false);
       e.target.value = '';
     }
   };
@@ -109,6 +159,7 @@ export function OnboardingFlow() {
   };
 
   const completeOnboarding = async () => {
+    if (uploadingAvatar || uploadingCover || saving) return;
     setSaving(true);
     setError('');
     try {
@@ -117,11 +168,14 @@ export function OnboardingFlow() {
         throw new Error('Username must be 3-30 characters using lowercase letters, numbers, or underscores.');
       }
 
+      const safeAvatar = avatarUrl || profile.avatarUrl || DEFAULT_AVATAR_PATH;
+      const safeCover = coverUrl || profile.coverUrl || DEFAULT_COVER_PATH;
+
       const updates: Parameters<typeof updateUserProfileFields>[1] = {
         onboardingCompleted: true,
       };
-      if (avatarUrl && avatarUrl !== profile.avatarUrl) {
-        updates.avatarUrl = avatarUrl;
+      if (safeAvatar !== profile.avatarUrl) {
+        updates.avatarUrl = safeAvatar;
       }
       if (cleanUsername !== profile.username) {
         updates.username = cleanUsername;
@@ -136,15 +190,15 @@ export function OnboardingFlow() {
       ) {
         updates.interests = interests;
       }
-      if (coverUrl && coverUrl !== profile.coverUrl) {
-        updates.coverUrl = coverUrl;
+      if (safeCover !== profile.coverUrl) {
+        updates.coverUrl = safeCover;
       }
       if (coverPositionY !== (profile.coverPositionY ?? 50)) {
         updates.coverPositionY = coverPositionY;
       }
 
       await updateUserProfileFields(profile.uid, updates, profile.username);
-      await refreshUserAndProfile();
+      await refreshUserAndProfile(false);
     } catch (err) {
       setError(extractReadableErrorMessage(err, 'Could not complete onboarding.'));
     } finally {
@@ -218,13 +272,27 @@ export function OnboardingFlow() {
               </p>
             </div>
             <label className="block space-y-1.5">
-              <span className="text-xs font-medium text-[#CBD5E1]">Username</span>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-[#CBD5E1]">Username</span>
+                {usernameStatus === 'available' && (
+                  <span className="text-[11px] text-emerald-400">Available</span>
+                )}
+                {usernameStatus === 'taken' && (
+                  <span className="text-[11px] text-rose-400">Already taken</span>
+                )}
+                {usernameStatus === 'invalid' && (
+                  <span className="text-[11px] text-amber-400">Min 3 chars (a-z, 0-9, _)</span>
+                )}
+              </div>
               <div className="flex items-center rounded-xl bg-[#06060A] border border-white/10 focus-within:border-[#8B5CF6] px-4">
                 <span className="text-[#64748B] text-sm mr-1">@</span>
                 <input
                   type="text"
                   value={username}
-                  onChange={(e) => setUsername(normalizeUsername(e.target.value))}
+                  onChange={(e) => {
+                    setError('');
+                    setUsername(normalizeUsername(e.target.value));
+                  }}
                   className="w-full py-3 bg-transparent outline-none text-sm text-white"
                   placeholder="your_handle"
                 />
@@ -290,7 +358,7 @@ export function OnboardingFlow() {
             <div className="space-y-1">
               <h1 className="font-display text-2xl font-bold text-white">Add a profile cover image</h1>
               <p className="text-sm text-[#94A3B8]">
-                Frame your profile header with custom positioning.
+                Frame your profile header with custom positioning, or keep the default cover.
               </p>
             </div>
             <div className="relative aspect-[16/5] rounded-xl overflow-hidden border border-white/10">
@@ -301,13 +369,30 @@ export function OnboardingFlow() {
                 className="w-full h-full object-cover"
               />
             </div>
-            <button
-              type="button"
-              onClick={() => setShowCoverEditor(true)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-sm font-medium text-white"
-            >
-              <ImageIcon size={16} /> Customize Cover Image
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                ref={coverInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                onChange={handleDirectCoverUpload}
+                className="hidden"
+              />
+              <button
+                type="button"
+                disabled={uploadingCover}
+                onClick={() => coverInputRef.current?.click()}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-sm font-medium text-white"
+              >
+                <Upload size={16} /> {uploadingCover ? 'Uploading...' : 'Upload Cover'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCoverEditor(true)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-sm font-medium text-white"
+              >
+                <ImageIcon size={16} /> Customize & Reposition
+              </button>
+            </div>
           </div>
         )}
 
@@ -321,9 +406,9 @@ export function OnboardingFlow() {
           {step !== 2 ? (
             <button
               type="button"
-              disabled={saving}
+              disabled={saving || uploadingAvatar || uploadingCover}
               onClick={() => (step < 5 ? setStep((s) => s + 1) : completeOnboarding())}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-[#94A3B8] hover:text-white"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-[#94A3B8] hover:text-white disabled:opacity-50"
             >
               <SkipForward size={14} /> Skip step
             </button>
@@ -335,7 +420,10 @@ export function OnboardingFlow() {
             {step > 1 && (
               <button
                 type="button"
-                onClick={() => setStep((s) => s - 1)}
+                onClick={() => {
+                  setError('');
+                  setStep((s) => s - 1);
+                }}
                 className="px-4 py-2 text-sm text-[#94A3B8] hover:text-white"
               >
                 Back
@@ -343,9 +431,9 @@ export function OnboardingFlow() {
             )}
             <button
               type="button"
-              disabled={saving}
+              disabled={saving || uploadingAvatar || uploadingCover}
               onClick={handleNext}
-              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-sm font-semibold transition-colors"
+              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] disabled:opacity-50 text-white text-sm font-semibold transition-colors"
             >
               {step === 5 ? (
                 <>

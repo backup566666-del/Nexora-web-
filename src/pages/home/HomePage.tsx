@@ -56,7 +56,7 @@ export function HomePage({
       )}
 
       {/* Main Composer */}
-      <PostComposer spaces={spaces} />
+      <PostComposer spaces={spaces} users={users} />
 
       {/* Feed Filter Bar */}
       <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">

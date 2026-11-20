@@ -379,7 +379,7 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
           <div className="relative w-full max-w-[1100px] h-[78vh] max-h-[820px] rounded-3xl border border-[#8B5CF6]/25 bg-[#0B0914] overflow-hidden shadow-[0_24px_80px_rgba(0,0,0,0.85)] grid grid-cols-1 lg:grid-cols-12">
             {/* Cinematic Vertical Video Canvas */}
             <div className="lg:col-span-7 relative bg-black flex items-center justify-center overflow-hidden">
-              <img
+              <ResilientImage
                 src="/src/assets/images/space_cover_sound_1795066815582.jpg"
                 alt="Demo Showcase Vibe Stage"
                 className="w-full h-full object-cover opacity-85 scale-105"

@@ -347,6 +347,7 @@ function NexoraAppContent() {
         {activeSection === 'create' && (
           <CreatePage
             spaces={spaces}
+            users={users}
             onDone={(dest) => handleNavigate(dest)}
           />
         )}
