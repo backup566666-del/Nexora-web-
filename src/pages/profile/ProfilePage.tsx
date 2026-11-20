@@ -33,10 +33,11 @@ import {
   updateUserProfileFields,
 } from '../../services/auth/authService';
 import {
-  checkIsFollowing,
   createOrGetDirectConversation,
   respondToCollaborationInvite,
+  subscribeIsFollowing,
   subscribeUserGifts,
+  subscribeUserProfile,
   toggleFollowUser,
 } from '../../services/firebase/socialService';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
@@ -86,7 +87,10 @@ export function ProfilePage({
   } = useAuth();
   const [viewedProfile, setViewedProfile] = useState<UserProfile | null>(null);
   const [isFollowing, setIsFollowing] = useState(false);
+  const [followLoading, setFollowLoading] = useState(false);
+  const [followBusy, setFollowBusy] = useState(false);
   const [contentTab, setContentTab] = useState<ProfileContentTab>(initialTab || 'posts');
+  const [giftsViewTab, setGiftsViewTab] = useState<'received' | 'sent'>('received');
   const [userGifts, setUserGifts] = useState<{
     received: GiftTransaction[];
     sent: GiftTransaction[];
@@ -130,11 +134,38 @@ export function ProfilePage({
     if (!currentUser) return;
     if (isOwnProfile) {
       setViewedProfile(currentUser);
-    } else if (targetUid) {
-      void getUserProfile(targetUid).then(setViewedProfile).catch(() => setViewedProfile(null));
-      void checkIsFollowing(currentUser.uid, targetUid).then(setIsFollowing).catch(() => setIsFollowing(false));
+      setIsFollowing(false);
+      setFollowLoading(false);
+      return;
     }
-  }, [targetUid, currentUser, isOwnProfile]);
+    if (!targetUid) return;
+
+    setFollowLoading(true);
+    let cancelled = false;
+    void getUserProfile(targetUid)
+      .then((loaded) => {
+        if (!cancelled) setViewedProfile(loaded);
+      })
+      .catch(() => {
+        if (!cancelled) setViewedProfile(null);
+      });
+
+    const unsubProfile = subscribeUserProfile(targetUid, (fresh) => {
+      if (!cancelled) setViewedProfile(fresh);
+    });
+    const unsubFollowing = subscribeIsFollowing(currentUser.uid, targetUid, (following) => {
+      if (!cancelled) {
+        setIsFollowing(following);
+        setFollowLoading(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubProfile();
+      unsubFollowing();
+    };
+  }, [targetUid, currentUser?.uid, isOwnProfile]);
 
   const activeProfile = isOwnProfile ? currentUser : viewedProfile;
 
@@ -573,7 +604,10 @@ export function ProfilePage({
                   <>
                     <button
                       type="button"
+                      disabled={followLoading || followBusy}
                       onClick={async () => {
+                        if (followLoading || followBusy) return;
+                        setFollowBusy(true);
                         try {
                           const next = await toggleFollowUser(
                             currentUser,
@@ -583,18 +617,21 @@ export function ProfilePage({
                           setIsFollowing(next);
                           const fresh = await getUserProfile(activeProfile.uid);
                           if (fresh) setViewedProfile(fresh);
+                          await refreshUserAndProfile(false);
                         } catch (err) {
                           setShareToast(extractReadableErrorMessage(err, 'Unable to update follow status.'));
-                          setTimeout(() => setShareToast(''), 3000);
+                          setTimeout(() => setShareToast(''), 4000);
+                        } finally {
+                          setFollowBusy(false);
                         }
                       }}
-                      className={`px-5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      className={`px-5 py-2.5 rounded-xl text-xs font-semibold transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
                         isFollowing
                           ? 'bg-white/10 hover:bg-white/20 text-white'
                           : 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white shadow-[0_4px_18px_rgba(124,58,237,0.35)]'
                       }`}
                     >
-                      {isFollowing ? 'Following' : 'Follow'}
+                      {followLoading ? 'Loading...' : followBusy ? 'Updating...' : isFollowing ? 'Following' : 'Follow'}
                     </button>
                     <button
                       type="button"
@@ -650,7 +687,7 @@ export function ProfilePage({
       </section>
 
       {/* 6. PROFILE CONTENT TABS: Posts | Videos | Photos | Tagged | Collabs | Gifts | Spaces | Saved */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-white/[0.08] pb-3.5">
+      <div className="flex items-center gap-2 border-b border-white/[0.08] pb-3.5 overflow-x-auto no-scrollbar">
         {[
           { id: 'posts', label: 'Posts', count: userPosts.length },
           { id: 'videos', label: 'Videos', count: videoPosts.length + userVibes.length },
@@ -667,7 +704,7 @@ export function ProfilePage({
             key={tab.id}
             type="button"
             onClick={() => setContentTab(tab.id as ProfileContentTab)}
-            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
+            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 min-h-[42px] ${
               contentTab === tab.id
                 ? 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white shadow-[0_4px_16px_rgba(124,58,237,0.35)]'
                 : 'text-[#94A3B8] hover:text-white hover:bg-white/[0.05]'
@@ -924,7 +961,7 @@ export function ProfilePage({
 
       {contentTab === 'gifts' && (
         <div className="space-y-6">
-          <div className="p-5 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="p-5 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="space-y-1">
               <h3 className="font-display text-base font-semibold text-white flex items-center gap-2">
                 <Gift size={17} className="text-pink-300" /> Free Virtual Gifts Showcase
@@ -933,28 +970,133 @@ export function ProfilePage({
                 Community appreciation tokens are 100% free on Nexora — no purchases or currency required.
               </p>
             </div>
-            <div className="flex items-center gap-4 text-xs font-mono-tabular">
-              <span className="px-3.5 py-2 rounded-xl bg-[#08070F] border border-white/10 text-white">
-                Received: <strong>{receivedGifts.length}</strong>
-              </span>
-              {isOwnProfile && (
-                <span className="px-3.5 py-2 rounded-xl bg-[#08070F] border border-white/10 text-[#C084FC]">
-                  Sent: <strong>{sentGifts.length}</strong>
-                </span>
-              )}
-              {!isOwnProfile && (
-                <button
-                  type="button"
-                  onClick={() => setShowGiftModal(true)}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white"
-                >
-                  <Sparkles size={13} /> Send Free Gift
-                </button>
+            <div className="flex flex-wrap items-center gap-2.5 text-xs font-mono-tabular">
+              {isOwnProfile ? (
+                <div className="inline-flex items-center p-1 rounded-xl bg-[#08070F] border border-white/10">
+                  <button
+                    type="button"
+                    onClick={() => setGiftsViewTab('received')}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                      giftsViewTab === 'received'
+                        ? 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white'
+                        : 'text-[#94A3B8] hover:text-white'
+                    }`}
+                  >
+                    Received ({receivedGifts.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGiftsViewTab('sent')}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                      giftsViewTab === 'sent'
+                        ? 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white'
+                        : 'text-[#94A3B8] hover:text-white'
+                    }`}
+                  >
+                    Sent ({sentGifts.length})
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <span className="px-3.5 py-2 rounded-xl bg-[#08070F] border border-white/10 text-white">
+                    Received: <strong>{receivedGifts.length}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowGiftModal(true)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white min-h-[40px]"
+                  >
+                    <Sparkles size={13} /> Send Free Gift
+                  </button>
+                </>
               )}
             </div>
           </div>
 
-          {receivedGifts.length === 0 ? (
+          {/* Gift Showcase Summary Pills */}
+          {receivedGifts.length > 0 && (giftsViewTab === 'received' || !isOwnProfile) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {Array.from(
+                receivedGifts.reduce((map, g) => {
+                  const key = `${g.giftEmoji}|${g.giftName}`;
+                  map.set(key, (map.get(key) || 0) + 1);
+                  return map;
+                }, new Map<string, number>())
+              ).map(([key, count]) => {
+                const [emoji, name] = key.split('|');
+                return (
+                  <span
+                    key={key}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#0D0B16] border border-[#8B5CF6]/20 text-xs text-white"
+                  >
+                    <span>{emoji}</span>
+                    <span className="font-medium">{name}</span>
+                    <span className="font-mono-tabular text-[#C084FC]">×{count}</span>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
+          {isOwnProfile && giftsViewTab === 'sent' ? (
+            sentGifts.length === 0 ? (
+              <div className="p-12 rounded-2xl bg-[#0D0B16] border border-white/[0.08] text-center space-y-2">
+                <Gift size={24} className="mx-auto text-[#8B5CF6]" />
+                <p className="text-sm font-medium text-white">No gifts sent yet</p>
+                <p className="text-xs text-[#94A3B8]">
+                  Free virtual gifts you send to creators and posts appear here.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {sentGifts.map((g) => (
+                  <div
+                    key={g.id}
+                    className="p-4 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span
+                          className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0 border"
+                          style={{
+                            backgroundColor: `${g.giftAccent || '#A855F7'}1A`,
+                            borderColor: `${g.giftAccent || '#A855F7'}4D`,
+                          }}
+                        >
+                          {g.giftEmoji}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-white truncate">{g.giftName}</p>
+                          <p className="text-[11px] text-[#94A3B8] truncate">
+                            To{' '}
+                            <button
+                              type="button"
+                              onClick={() => onOpenProfile(g.recipientUid)}
+                              className="text-[#C084FC] hover:underline font-medium"
+                            >
+                              @{g.recipientUsername}
+                            </button>
+                            {g.anonymous ? ' (sent anonymously)' : ''}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-[#64748B] font-mono-tabular shrink-0">
+                        {formatRelativeTime(g.createdAt)}
+                      </span>
+                    </div>
+                    {g.message && (
+                      <p className="text-xs text-[#E2E8F0] bg-[#08070F] p-2.5 rounded-xl border border-white/[0.06]">
+                        &ldquo;{g.message}&rdquo;
+                      </p>
+                    )}
+                    <p className="text-[10px] uppercase tracking-wider text-[#64748B]">
+                      {g.targetType === 'post' ? 'Sent on a Post' : 'Sent on Profile'} · Free Token
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : receivedGifts.length === 0 ? (
             <div className="p-12 rounded-2xl bg-[#0D0B16] border border-white/[0.08] text-center space-y-2">
               <Gift size={24} className="mx-auto text-[#8B5CF6]" />
               <p className="text-sm font-medium text-white">No gifts received yet</p>
@@ -970,21 +1112,35 @@ export function ProfilePage({
                   className="p-4 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-2.5"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-2xl leading-none">{g.giftEmoji}</span>
-                      <div>
-                        <p className="text-xs font-semibold text-white">{g.giftName}</p>
-                        <p className="text-[11px] text-[#94A3B8]">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span
+                        className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0 border"
+                        style={{
+                          backgroundColor: `${g.giftAccent || '#A855F7'}1A`,
+                          borderColor: `${g.giftAccent || '#A855F7'}4D`,
+                        }}
+                      >
+                        {g.giftEmoji}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-white truncate">{g.giftName}</p>
+                        <p className="text-[11px] text-[#94A3B8] truncate">
                           From{' '}
-                          {g.anonymous
-                            ? 'Anonymous Supporter'
-                            : g.senderUsername
-                            ? `@${g.senderUsername}`
-                            : g.senderName}
+                          {g.anonymous ? (
+                            'Anonymous Supporter'
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onOpenProfile(g.senderUid)}
+                              className="text-[#C084FC] hover:underline font-medium"
+                            >
+                              {g.senderUsername ? `@${g.senderUsername}` : g.senderName}
+                            </button>
+                          )}
                         </p>
                       </div>
                     </div>
-                    <span className="text-[10px] text-[#64748B] font-mono-tabular">
+                    <span className="text-[10px] text-[#64748B] font-mono-tabular shrink-0">
                       {formatRelativeTime(g.createdAt)}
                     </span>
                   </div>
@@ -993,6 +1149,9 @@ export function ProfilePage({
                       &ldquo;{g.message}&rdquo;
                     </p>
                   )}
+                  <p className="text-[10px] uppercase tracking-wider text-[#64748B]">
+                    {g.targetType === 'post' ? 'Appreciated a Post' : 'Profile Gift'} · 100% Free
+                  </p>
                 </div>
               ))}
             </div>

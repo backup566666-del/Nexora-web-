@@ -6,10 +6,12 @@ import {
   BADGE_CATALOG,
   DEFAULT_BADGE_CONFIGS,
   FREE_GIFT_CATALOG,
+  computePostEngagementScore,
   isValidUsername,
   normalizeBadgeList,
   normalizeBadgeType,
   normalizeUsername,
+  rankTrendingPosts,
   sanitizeString,
   withPrivacyDefaults,
 } from '../src/utils/validation';
@@ -347,3 +349,173 @@ test('5-step onboarding payload (avatar, username, bio, interests, cover, coverP
   assert.ok(isValidUsername(step5Payload.username));
   assert.ok(step5Payload.coverPositionY >= 0 && step5Payload.coverPositionY <= 100);
 });
+
+test('firestore.rules enforces secure follow/unfollow edges, blocks self-follow, and guards followersCount atomically', async () => {
+  const fs = await import('node:fs');
+  const rules = fs.readFileSync('firestore.rules', 'utf8');
+
+  // Followers subcollection rules
+  const followersBlock = rules.match(/match \/followers\/\{followerId\}\s*\{([\s\S]*?)\}/);
+  assert.ok(followersBlock, 'followers/{followerId} match block must exist');
+  const fRule = followersBlock[1];
+  assert.ok(fRule.includes('userId != followerId'), 'Must block self-following on followers subcollection');
+  assert.ok(fRule.includes('isVerified()'), 'Must require verified auth on followers subcollection');
+  assert.ok(fRule.includes('isOwner(followerId)'), 'Follower edge must match authenticated follower UID');
+  assert.ok(fRule.includes('incoming().uid == followerId'), 'Follower payload uid must match followerId');
+  assert.ok(fRule.includes('allow update: if false;'), 'Follower edge updates must be blocked');
+  assert.ok(
+    fRule.includes('existsAfter(/databases/$(database)/documents/users/$(followerId)/following/$(userId))'),
+    'Follower create/delete must remain atomic with following edge'
+  );
+
+  // Following subcollection rules
+  const followingBlock = rules.match(/match \/following\/\{targetId\}\s*\{([\s\S]*?)\}/);
+  assert.ok(followingBlock, 'following/{targetId} match block must exist');
+  const fgRule = followingBlock[1];
+  assert.ok(fgRule.includes('userId != targetId'), 'Must block self-following on following subcollection');
+  assert.ok(fgRule.includes('isVerified()'), 'Must require verified auth on following subcollection');
+  assert.ok(fgRule.includes('isOwner(userId)'), 'Following edge must belong to authenticated owner');
+  assert.ok(fgRule.includes('incoming().uid == targetId'), 'Following payload uid must match targetId');
+  assert.ok(fgRule.includes('allow update: if false;'), 'Following edge updates must be blocked');
+  assert.ok(
+    fgRule.includes('existsAfter(/databases/$(database)/documents/users/$(targetId)/followers/$(userId))'),
+    'Following create/delete must remain atomic with follower edge'
+  );
+
+  // Target followersCount updates require atomic follower edge transition (+1 / -1 only)
+  assert.ok(rules.includes("affectedKeys().hasOnly(['followersCount', 'updatedAt'])"));
+  assert.ok(rules.includes('incoming().followersCount == existing().followersCount + 1'));
+  assert.ok(rules.includes('incoming().followersCount == existing().followersCount - 1'));
+});
+
+test('setFollowRelationship rejects self-follow and missing users cleanly', async () => {
+  const { setFollowRelationship, toggleFollowUser } = await import('../src/services/firebase/socialService');
+  const baseUser = {
+    uid: 'user_alpha_1',
+    displayName: 'Alpha User',
+    username: 'alpha_user',
+    verified: false,
+    onboardingCompleted: true,
+    followersCount: 0,
+    followingCount: 0,
+    postsCount: 0,
+    likesCount: 0,
+    isOnline: true,
+  } as unknown as import('../src/types/nexora').UserProfile;
+
+  await assert.rejects(
+    () => setFollowRelationship(baseUser, baseUser, true),
+    /cannot follow your own account/i
+  );
+  await assert.rejects(
+    () => toggleFollowUser(baseUser, baseUser, false),
+    /cannot follow your own account/i
+  );
+});
+
+test('firestore.rules enforces participant-only conversation privacy while allowing deterministic dm_ get checks', async () => {
+  const fs = await import('node:fs');
+  const rules = fs.readFileSync('firestore.rules', 'utf8');
+
+  const convMatch = rules.match(/match \/conversations\/\{convId\}\s*\{([\s\S]*?)\n\s{4}\}/);
+  assert.ok(convMatch, 'conversations/{convId} rule block must exist');
+  const convBlock = convMatch[1];
+
+  // Must support uncreated dm_ lookup without breaking existing() null guard
+  assert.ok(convBlock.includes("resource == null && convId.matches('^dm_.*')"));
+  assert.ok(convBlock.includes('resource != null && request.auth.uid in existing().participantIds'));
+  assert.ok(convBlock.includes('allow list: if isSignedIn() && request.auth.uid in existing().participantIds;'));
+
+  // Must block self-DM on creation and lock participantIds on message updates
+  assert.ok(convBlock.includes('incoming().participantIds[0] != incoming().participantIds[1]'));
+  assert.ok(convBlock.includes('incoming().participantIds == existing().participantIds'));
+  assert.ok(
+    convBlock.includes("affectedKeys().hasOnly(['lastMessageText', 'lastMessageSenderId', 'lastMessageAt', 'updatedAt', 'readBy', 'typingBy'])")
+  );
+
+  // Nested messages subcollection must verify caller is a participant of parent conversation
+  assert.ok(
+    convBlock.includes('request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participantIds')
+  );
+
+  // Virtual gifts remain strictly free
+  const giftCatalogMatch = rules.match(/match \/gift_catalog\/\{giftId\}\s*\{([\s\S]*?)\}/);
+  assert.ok(giftCatalogMatch);
+  assert.ok(giftCatalogMatch[1].includes("incoming().tier == 'free'"));
+
+  const giftTxMatch = rules.match(/match \/virtual_gifts\/\{giftTxId\}\s*\{([\s\S]*?)\}/);
+  assert.ok(giftTxMatch);
+  assert.ok(giftTxMatch[1].includes('incoming().senderUid == request.auth.uid'));
+  assert.ok(giftTxMatch[1].includes('incoming().senderUid != incoming().recipientUid'));
+});
+
+test('isUserOnlineNow respects active freshness window and createOrGetDirectConversation rejects self-DM & blocked users', async () => {
+  const { isUserOnlineNow, createOrGetDirectConversation } = await import(
+    '../src/services/firebase/socialService'
+  );
+
+  const nowMs = Date.now();
+  const makeUser = (uid: string, isOnline: boolean, ageMs: number) =>
+    ({
+      uid,
+      displayName: `User ${uid}`,
+      username: `user_${uid}`,
+      bio: '',
+      avatarUrl: '',
+      coverUrl: '',
+      coverPositionY: 50,
+      website: '',
+      location: '',
+      interests: [],
+      verified: false,
+      onboardingCompleted: true,
+      followersCount: 0,
+      followingCount: 0,
+      postsCount: 0,
+      likesCount: 0,
+      isOnline,
+      lastActiveAt: { toMillis: () => nowMs - ageMs },
+    }) as unknown as import('../src/types/nexora').UserProfile;
+
+  assert.equal(isUserOnlineNow(makeUser('u1', true, 60_000)), true);
+  assert.equal(isUserOnlineNow(makeUser('u1', true, 12 * 60_000)), false);
+  assert.equal(isUserOnlineNow(makeUser('u1', false, 10_000)), false);
+  assert.equal(isUserOnlineNow(null), false);
+
+  const uA = makeUser('alice_1', true, 5000);
+  const uB = makeUser('bob_2', true, 5000);
+  await assert.rejects(
+    () => createOrGetDirectConversation(uA, uA),
+    /cannot start a direct conversation with your own account/i
+  );
+  await assert.rejects(
+    () => createOrGetDirectConversation(uA, uB, ['bob_2']),
+    /unblock this user/i
+  );
+});
+
+test('rankTrendingPosts prioritizes engagement score across likes, comments, reposts, and free gifts', () => {
+  const mkPost = (id: string, likesCount: number, commentsCount: number, repostsCount: number, giftsCount: number, ms: number) =>
+    ({
+      id,
+      likesCount,
+      commentsCount,
+      repostsCount,
+      giftsCount,
+      savesCount: 0,
+      createdAt: { toMillis: () => ms },
+    }) as unknown as import('../src/types/nexora').Post;
+
+  const pLow = mkPost('low', 5, 0, 0, 0, 3000);
+  const pMid = mkPost('mid', 4, 2, 1, 0, 2000); // score: 4 + 4 + 2 = 10
+  const pTop = mkPost('top', 2, 2, 1, 3, 1000); // score: 2 + 4 + 2 + 9 = 17
+
+  const ranked = rankTrendingPosts([pLow, pMid, pTop]);
+  assert.deepEqual(
+    ranked.map((p) => p.id),
+    ['top', 'mid', 'low']
+  );
+  assert.equal(computePostEngagementScore(pTop), 17);
+});
+
+

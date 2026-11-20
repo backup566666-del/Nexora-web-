@@ -39,9 +39,10 @@ interface PostCardProps {
   post: Post;
   isSaved: boolean;
   onOpenProfile: (uid: string) => void;
+  onHashtagClick?: (tag: string) => void;
 }
 
-export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
+export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostCardProps) {
   const { profile, getUserBadges } = useAuth();
   const postBadges = getUserBadges(post.authorId, post.authorVerified);
   const [liked, setLiked] = useState(false);
@@ -149,7 +150,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
   const totalVotes = (post.pollCounts || []).reduce((acc, n) => acc + n, 0);
 
   return (
-    <article className="px-5 py-5 rounded-2xl bg-[#0D0B16]/70 hover:bg-[#0D0B16] transition-colors border border-white/[0.05] hover:border-[#8B5CF6]/20 space-y-3.5">
+    <article className="p-4 sm:p-5 rounded-2xl bg-[#0D0B16]/75 hover:bg-[#0D0B16] transition-colors border border-white/[0.06] hover:border-[#8B5CF6]/20 space-y-3.5">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
@@ -220,7 +221,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
           <button
             type="button"
             onClick={() => setShowMenu((v) => !v)}
-            className="p-1.5 rounded-lg text-[#94A3B8] hover:text-white hover:bg-white/5"
+            className="p-2 rounded-xl text-[#94A3B8] hover:text-white hover:bg-white/5 min-w-[36px] min-h-[36px] flex items-center justify-center"
             aria-label="Post options"
           >
             <MoreHorizontal size={16} />
@@ -273,7 +274,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
 
       {/* Pending Collaboration Invitation Banner */}
       {isPendingCollabInvitee && (
-        <div className="ml-[52px] px-3.5 py-2.5 rounded-xl bg-[#161029] border border-[#8B5CF6]/40 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="sm:ml-[52px] px-3.5 py-2.5 rounded-xl bg-[#161029] border border-[#8B5CF6]/40 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2 text-xs text-[#E9D5FF]">
             <UserPlus size={14} className="text-[#C084FC] shrink-0" />
             <span>
@@ -303,9 +304,29 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
 
       {/* Text Content */}
       {post.text && (
-        <p className="text-[15px] text-[#E2E8F0] leading-relaxed whitespace-pre-wrap break-words pl-[52px]">
+        <p className="text-[15px] text-[#E2E8F0] leading-relaxed whitespace-pre-wrap break-words sm:pl-[52px]">
           {post.text.split(/(\s+)/).map((token, i) => {
-            if (token.startsWith('#') || token.startsWith('@')) {
+            if (token.startsWith('#') && token.length > 1) {
+              const cleanTag = token.replace(/^#+/, '').replace(/[^\w]/g, '').toLowerCase();
+              if (onHashtagClick && cleanTag) {
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => onHashtagClick(cleanTag)}
+                    className="text-[#C084FC] font-medium hover:underline"
+                  >
+                    {token}
+                  </button>
+                );
+              }
+              return (
+                <span key={i} className="text-[#C084FC] font-medium">
+                  {token}
+                </span>
+              );
+            }
+            if (token.startsWith('@')) {
               return (
                 <span key={i} className="text-[#C084FC] font-medium">
                   {token}
@@ -319,7 +340,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
 
       {/* Tagged Users Chip Strip (Distinct from @mentions) */}
       {taggedUids.length > 0 && (
-        <div className="pl-[52px] flex flex-wrap items-center gap-2 text-[11px]">
+        <div className="sm:pl-[52px] flex flex-wrap items-center gap-2 text-[11px]">
           <span className="inline-flex items-center gap-1 text-[#94A3B8]">
             <Tag size={11} className="text-sky-400" /> Tagged:
           </span>
@@ -348,7 +369,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
       {/* Media Gallery */}
       {post.mediaUrls && post.mediaUrls.length > 0 && (
         <div
-          className={`pl-[52px] grid gap-2.5 ${
+          className={`sm:pl-[52px] grid gap-2.5 ${
             post.mediaUrls.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
           }`}
         >
@@ -373,7 +394,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
 
       {/* Poll */}
       {post.type === 'poll' && post.pollOptions && post.pollOptions.length > 0 && (
-        <div className="pl-[52px] space-y-2 pt-1">
+        <div className="sm:pl-[52px] space-y-2 pt-1">
           {post.pollOptions.map((option, idx) => {
             const votes = post.pollCounts?.[idx] || 0;
             const pct = totalVotes > 0 ? Math.round((votes / totalVotes) * 100) : 0;
@@ -402,12 +423,12 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
       )}
 
       {/* Action Bar */}
-      <div className="pl-[52px] flex items-center justify-between pt-2 text-xs text-[#94A3B8]">
-        <div className="flex items-center gap-5 sm:gap-6 flex-wrap">
+      <div className="sm:pl-[52px] flex items-center justify-between gap-2 pt-1.5 text-xs text-[#94A3B8]">
+        <div className="flex items-center gap-3 sm:gap-6 flex-wrap">
           <button
             type="button"
             onClick={handleLike}
-            className={`inline-flex items-center gap-1.5 transition-colors ${
+            className={`inline-flex items-center gap-1.5 py-1.5 px-1 rounded-lg transition-colors min-h-[36px] ${
               liked ? 'text-[#C084FC] font-semibold' : 'hover:text-white'
             }`}
           >
@@ -418,7 +439,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
           <button
             type="button"
             onClick={() => setShowComments((v) => !v)}
-            className="inline-flex items-center gap-1.5 hover:text-white transition-colors"
+            className="inline-flex items-center gap-1.5 py-1.5 px-1 rounded-lg hover:text-white transition-colors min-h-[36px]"
           >
             <MessageCircle size={16} />
             <span className="font-mono-tabular">{formatCompactCount(post.commentsCount)}</span>
@@ -427,7 +448,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
           <button
             type="button"
             onClick={() => void repostPost(post, profile)}
-            className="inline-flex items-center gap-1.5 hover:text-white transition-colors"
+            className="inline-flex items-center gap-1.5 py-1.5 px-1 rounded-lg hover:text-white transition-colors min-h-[36px]"
           >
             <Repeat2 size={16} />
             <span className="font-mono-tabular">{formatCompactCount(post.repostsCount)}</span>
@@ -437,7 +458,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
             <button
               type="button"
               onClick={() => setGiftModalOpen(true)}
-              className="inline-flex items-center gap-1.5 hover:text-[#C084FC] transition-colors"
+              className="inline-flex items-center gap-1.5 py-1.5 px-1.5 rounded-lg hover:text-[#C084FC] hover:bg-[#7C3AED]/10 transition-colors min-h-[36px]"
               title="Send a free virtual gift"
             >
               <Gift size={16} className="text-[#C084FC]" />
@@ -445,7 +466,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
             </button>
           ) : (
             (post.giftsCount || 0) > 0 && (
-              <span className="inline-flex items-center gap-1.5 text-[#C084FC]">
+              <span className="inline-flex items-center gap-1.5 text-[#C084FC] py-1.5 px-1">
                 <Gift size={15} />
                 <span className="font-mono-tabular">{formatCompactCount(post.giftsCount || 0)}</span>
               </span>
@@ -455,17 +476,21 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
           <button
             type="button"
             onClick={handleShare}
-            className="inline-flex items-center gap-1.5 hover:text-white transition-colors"
+            className="inline-flex items-center gap-1.5 py-1.5 px-1 rounded-lg hover:text-white transition-colors min-h-[36px]"
           >
             <Share2 size={16} />
-            {shareToast && <span className="text-[#C084FC]">{shareToast}</span>}
+            {shareToast && (
+              <span className="text-[#E9D5FF] bg-[#7C3AED]/20 border border-[#8B5CF6]/30 px-2 py-0.5 rounded-md text-[11px]">
+                {shareToast}
+              </span>
+            )}
           </button>
         </div>
 
         <button
           type="button"
           onClick={() => void toggleSavePost(post, profile.uid)}
-          className={`inline-flex items-center gap-1.5 transition-colors ${
+          className={`inline-flex items-center justify-center p-2 rounded-lg transition-colors min-w-[36px] min-h-[36px] ${
             isSaved ? 'text-[#C084FC]' : 'hover:text-white'
           }`}
           aria-label="Save post"
@@ -476,7 +501,7 @@ export function PostCard({ post, isSaved, onOpenProfile }: PostCardProps) {
 
       {/* Comments & Replies */}
       {showComments && (
-        <div className="pl-[52px] pt-3 border-t border-white/[0.06] space-y-3">
+        <div className="sm:pl-[52px] pt-3 border-t border-white/[0.06] space-y-3">
           <form onSubmit={handleCommentSubmit} className="space-y-2">
             {replyTo && (
               <div className="flex items-center justify-between text-[11px] text-[#C084FC] bg-[#7C3AED]/10 px-3 py-1 rounded-lg">

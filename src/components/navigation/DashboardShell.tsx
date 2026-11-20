@@ -30,8 +30,10 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
   searchDirectoryUsers,
+  subscribeFollowingIds,
   toggleFollowUser,
 } from '../../services/firebase/socialService';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import {
   NavSection,
   NotificationCategory,
@@ -135,11 +137,28 @@ export function DashboardShell({
   const [searchQuery, setSearchQuery] = useState('');
   const [remoteSearchUsers, setRemoteSearchUsers] = useState<UserProfile[]>([]);
   const [searchFocused, setSearchFocused] = useState(false);
+  const [showMobileSearch, setShowMobileSearch] = useState(false);
   const [showNotifs, setShowNotifs] = useState(false);
   const [notifFilter, setNotifFilter] = useState<'all' | 'unread' | NotificationCategory>('all');
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [followedUids, setFollowedUids] = useState<Record<string, boolean>>({});
+  const [followBusyUids, setFollowBusyUids] = useState<Record<string, boolean>>({});
+  const [followError, setFollowError] = useState('');
   const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!profile?.uid) {
+      setFollowedUids({});
+      return;
+    }
+    return subscribeFollowingIds(profile.uid, (followingSet) => {
+      const next: Record<string, boolean> = {};
+      followingSet.forEach((id) => {
+        next[id] = true;
+      });
+      setFollowedUids(next);
+    });
+  }, [profile?.uid]);
 
   useEffect(() => {
     const clean = searchQuery.trim();
@@ -198,6 +217,11 @@ export function DashboardShell({
 
   const unreadCount = useMemo(
     () => notifications.filter((n) => !n.read).length,
+    [notifications]
+  );
+
+  const unreadChatCount = useMemo(
+    () => notifications.filter((n) => !n.read && n.type === 'message').length,
     [notifications]
   );
 
@@ -345,9 +369,9 @@ export function DashboardShell({
             : 'translate-y-0 opacity-100'
         }`}
       >
-        <div className="max-w-[1760px] mx-auto px-4 lg:px-8 h-16 flex items-center justify-between gap-6">
+        <div className="max-w-[1760px] mx-auto px-3 sm:px-4 lg:px-8 h-14 md:h-16 flex items-center justify-between gap-2 sm:gap-6">
           {/* Left: Nexora Logo + Contextual Section Title */}
-          <div className="flex items-center gap-3.5 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3.5 shrink-0 min-w-0">
             <button
               type="button"
               onClick={() => onNavigate('home')}
@@ -385,7 +409,7 @@ export function DashboardShell({
                   key={item.id}
                   type="button"
                   onClick={() => onNavigate(item.id)}
-                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
+                  className={`relative inline-flex items-center gap-2 px-3.5 lg:px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
                     active
                       ? 'bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-white shadow-[0_4px_20px_rgba(124,58,237,0.4)]'
                       : 'text-[#94A3B8] hover:text-white hover:bg-white/[0.05]'
@@ -393,6 +417,11 @@ export function DashboardShell({
                 >
                   <Icon size={15} />
                   <span>{item.label}</span>
+                  {item.id === 'chat' && unreadChatCount > 0 && (
+                    <span className="min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 text-[10px] font-bold text-[#06060A] flex items-center justify-center font-mono-tabular">
+                      {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -400,13 +429,27 @@ export function DashboardShell({
 
           {/* Right: Search + Notifications + Settings + User Identity */}
           <div
-            className={`flex items-center gap-2.5 shrink-0 transition-opacity duration-200 ${
+            className={`flex items-center gap-1.5 sm:gap-2.5 shrink-0 transition-opacity duration-200 ${
               navPhase === 'logo-only'
                 ? 'opacity-0 pointer-events-none w-0 overflow-hidden'
                 : 'opacity-100'
             }`}
           >
-            {/* Global Live Search */}
+            {/* Mobile / Tablet / Laptop Search Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setShowMobileSearch(true);
+                setShowNotifs(false);
+                setShowAccountMenu(false);
+              }}
+              aria-label="Search Nexora"
+              className="xl:hidden p-2 sm:p-2.5 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 text-[#CBD5E1] hover:text-white transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center"
+            >
+              <Search size={16} />
+            </button>
+
+            {/* Global Live Search (Wide Desktop) */}
             <div className="relative hidden xl:block w-64 2xl:w-72">
               <Search
                 size={15}
@@ -535,7 +578,7 @@ export function DashboardShell({
                   setShowAccountMenu(false);
                 }}
                 aria-label="Notifications"
-                className="relative p-2.5 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 text-[#CBD5E1] hover:text-white transition-colors"
+                className="relative p-2 sm:p-2.5 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 text-[#CBD5E1] hover:text-white transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center"
               >
                 <Bell size={16} />
                 {unreadCount > 0 && (
@@ -546,7 +589,7 @@ export function DashboardShell({
               </button>
 
               {showNotifs && (
-                <div className="absolute right-0 mt-2 w-96 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl overflow-hidden z-50">
+                <div className="fixed inset-x-3 top-16 sm:absolute sm:inset-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl overflow-hidden z-50">
                   <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
                     <span className="font-display text-sm font-semibold text-white">
                       Notifications {unreadCount > 0 ? `(${unreadCount})` : ''}
@@ -639,7 +682,7 @@ export function DashboardShell({
               type="button"
               onClick={() => onNavigate('settings')}
               aria-label="Settings"
-              className={`p-2.5 rounded-xl border transition-colors ${
+              className={`p-2 sm:p-2.5 rounded-xl border transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center ${
                 activeSection === 'settings'
                   ? 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] border-[#8B5CF6] text-white'
                   : 'bg-[#0E0C18] border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 text-[#CBD5E1] hover:text-white'
@@ -656,7 +699,7 @@ export function DashboardShell({
                   setShowAccountMenu((v) => !v);
                   setShowNotifs(false);
                 }}
-                className="flex items-center gap-2.5 pl-1.5 pr-3 py-1 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 transition-colors"
+                className="flex items-center gap-2 p-1 sm:pl-1.5 sm:pr-3 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 transition-colors min-h-[40px]"
               >
                 <ResilientImage
                   src={profile.avatarUrl}
@@ -669,7 +712,7 @@ export function DashboardShell({
               </button>
 
               {showAccountMenu && (
-                <div className="absolute right-0 mt-2 w-64 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-2 space-y-1 z-50">
+                <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-1.5rem)] bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-2 space-y-1 z-50">
                   <div className="px-3 py-2.5 border-b border-white/10">
                     <p className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
                       <span className="truncate">{profile.displayName}</span>
@@ -725,28 +768,150 @@ export function DashboardShell({
             </div>
           </div>
         </div>
-
-        {/* Mobile / Tablet compact horizontal nav */}
-        <nav className="flex md:hidden items-center justify-around border-t border-white/[0.06] px-2 py-1.5 overflow-x-auto">
-          {visibleNavItems.map((item) => {
-            const Icon = item.icon;
-            const active = activeSection === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onNavigate(item.id)}
-                className={`flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-lg text-[10px] font-semibold whitespace-nowrap ${
-                  active ? 'text-[#C084FC]' : 'text-[#94A3B8]'
-                }`}
-              >
-                <Icon size={16} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
       </header>
+
+      {/* Mobile / Tablet / Laptop Search Overlay */}
+      {showMobileSearch && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-start justify-center p-3 sm:p-6 pt-16 xl:hidden"
+          onClick={() => setShowMobileSearch(false)}
+        >
+          <div
+            className="w-full max-w-lg bg-[#0E0C18] border border-[#8B5CF6]/30 rounded-2xl shadow-2xl p-4 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search
+                  size={15}
+                  className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7C6E9B]"
+                />
+                <input
+                  type="text"
+                  autoFocus
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search people, spaces, posts..."
+                  className="w-full pl-9 pr-8 py-2.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/25 focus:border-[#8B5CF6] outline-none text-sm text-white placeholder:text-[#64748B]"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#64748B] hover:text-white p-1"
+                    aria-label="Clear search"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMobileSearch(false)}
+                className="px-3 py-2.5 rounded-xl bg-white/[0.06] text-xs font-semibold text-[#CBD5E1] hover:text-white min-h-[42px]"
+              >
+                Close
+              </button>
+            </div>
+
+            {searchQuery.trim().length > 0 ? (
+              <div className="max-h-[60vh] overflow-y-auto space-y-3">
+                {searchResults.users.length === 0 &&
+                searchResults.spaces.length === 0 &&
+                searchResults.posts.length === 0 ? (
+                  <p className="text-xs text-[#64748B] py-6 text-center">
+                    No matches found for &ldquo;{searchQuery}&rdquo;
+                  </p>
+                ) : (
+                  <>
+                    {searchResults.users.length > 0 && (
+                      <div className="space-y-1">
+                        <p className="text-[11px] font-semibold text-[#94A3B8] px-2">People</p>
+                        {searchResults.users.map((u) => (
+                          <button
+                            key={u.uid}
+                            type="button"
+                            onClick={() => {
+                              onOpenUserProfile(u.uid);
+                              setSearchQuery('');
+                              setShowMobileSearch(false);
+                            }}
+                            className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
+                          >
+                            <ResilientImage
+                              src={u.avatarUrl}
+                              alt={u.displayName}
+                              className="w-9 h-9 rounded-full object-cover shrink-0"
+                            />
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
+                                <span className="truncate">{u.displayName}</span>
+                                <BadgeStrip
+                                  badges={getUserBadges(u.uid, u.verified)}
+                                  size={12}
+                                  max={2}
+                                  interactive={false}
+                                />
+                              </p>
+                              <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {searchResults.spaces.length > 0 && (
+                      <div className="space-y-1">
+                        <p className="text-[11px] font-semibold text-[#94A3B8] px-2">Spaces</p>
+                        {searchResults.spaces.map((s) => (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => {
+                              onNavigate('spaces', s.id);
+                              setSearchQuery('');
+                              setShowMobileSearch(false);
+                            }}
+                            className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
+                          >
+                            <span className="text-xs font-medium text-white truncate">{s.name}</span>
+                            <span className="text-[11px] text-[#94A3B8] shrink-0 font-mono-tabular">
+                              {s.membersCount} members
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {searchResults.posts.length > 0 && (
+                      <div className="space-y-1">
+                        <p className="text-[11px] font-semibold text-[#94A3B8] px-2">Posts</p>
+                        {searchResults.posts.map((p) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => {
+                              onNavigate('home');
+                              setSearchQuery('');
+                              setShowMobileSearch(false);
+                            }}
+                            className="w-full p-2.5 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
+                          >
+                            <p className="text-xs text-white truncate">{p.text}</p>
+                            <p className="text-[11px] text-[#64748B] truncate">by {p.authorName}</p>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-[#64748B] py-4 text-center">
+                Type a name, @username, space, or keyword to search Nexora.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Active Platform Announcements Banner */}
       {activeBannerAnnouncements.length > 0 && (
@@ -787,43 +952,43 @@ export function DashboardShell({
         </div>
       )}
 
-      {/* Section-Specific Desktop Viewport Architectures */}
+      {/* Section-Specific Responsive Viewport Architectures */}
       {activeSection === 'vibes' && (
-        <main className="relative z-10 flex-1 flex flex-col">{children}</main>
+        <main className="relative z-10 flex-1 flex flex-col pb-16 md:pb-0">{children}</main>
       )}
 
       {activeSection === 'chat' && (
-        <main className="relative z-10 flex-1 max-w-[1720px] w-full mx-auto px-4 lg:px-8 py-4 flex flex-col">
+        <main className="relative z-10 flex-1 max-w-[1720px] w-full mx-auto px-2 sm:px-4 lg:px-8 pt-2 sm:pt-4 pb-20 md:pb-4 flex flex-col">
           {children}
         </main>
       )}
 
       {activeSection === 'spaces' && (
-        <main className="relative z-10 flex-1 max-w-[1720px] w-full mx-auto px-4 lg:px-8 py-6">
+        <main className="relative z-10 flex-1 max-w-[1720px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-24 md:pb-6">
           {children}
         </main>
       )}
 
       {activeSection === 'profile' && (
-        <main className="relative z-10 flex-1 max-w-[1400px] w-full mx-auto px-4 lg:px-8 py-6">
+        <main className="relative z-10 flex-1 max-w-[1400px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-24 md:pb-6">
           {children}
         </main>
       )}
 
       {activeSection === 'create' && (
-        <main className="relative z-10 flex-1 max-w-[1400px] w-full mx-auto px-4 lg:px-8 py-6">
+        <main className="relative z-10 flex-1 max-w-[1400px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-24 md:pb-6">
           {children}
         </main>
       )}
 
       {activeSection === 'settings' && (
-        <main className="relative z-10 flex-1 max-w-[1440px] w-full mx-auto px-4 lg:px-8 py-6">
+        <main className="relative z-10 flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-24 md:pb-6">
           {children}
         </main>
       )}
 
       {activeSection === 'home' && (
-        <div className="relative z-10 flex-1 max-w-[1640px] w-full mx-auto px-4 lg:px-8 py-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className="relative z-10 flex-1 max-w-[1640px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-24 md:pb-6 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
           {/* Left Desktop Column: Identity & Quick Spaces */}
           <aside className="hidden lg:block lg:col-span-3 space-y-6">
             <div className="sticky top-24 space-y-6">
@@ -933,6 +1098,7 @@ export function DashboardShell({
                   ) : (
                     suggestedCreators.map((u) => {
                       const isFollowed = Boolean(followedUids[u.uid]);
+                      const isBusy = Boolean(followBusyUids[u.uid]);
                       return (
                         <div key={u.uid} className="flex items-center justify-between gap-2.5">
                           <button
@@ -960,22 +1126,39 @@ export function DashboardShell({
                           </button>
                           <button
                             type="button"
+                            disabled={isBusy}
                             onClick={async () => {
-                              const next = await toggleFollowUser(profile, u, isFollowed);
-                              setFollowedUids((prev) => ({ ...prev, [u.uid]: next }));
+                              if (isBusy) return;
+                              setFollowError('');
+                              setFollowBusyUids((prev) => ({ ...prev, [u.uid]: true }));
+                              try {
+                                const next = await toggleFollowUser(profile, u, isFollowed);
+                                setFollowedUids((prev) => ({ ...prev, [u.uid]: next }));
+                              } catch (err) {
+                                setFollowError(
+                                  extractReadableErrorMessage(err, 'Unable to update follow status.')
+                                );
+                              } finally {
+                                setFollowBusyUids((prev) => ({ ...prev, [u.uid]: false }));
+                              }
                             }}
-                            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors shrink-0 ${
+                            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors shrink-0 disabled:opacity-60 disabled:cursor-not-allowed ${
                               isFollowed
                                 ? 'bg-white/10 text-white'
                                 : 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white'
                             }`}
                           >
                             <UserPlus size={12} />
-                            {isFollowed ? 'Following' : 'Follow'}
+                            {isBusy ? '...' : isFollowed ? 'Following' : 'Follow'}
                           </button>
                         </div>
                       );
                     })
+                  )}
+                  {followError && (
+                    <p className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/25 rounded-lg px-2.5 py-1.5">
+                      {followError}
+                    </p>
                   )}
                 </div>
               </div>
@@ -1002,6 +1185,47 @@ export function DashboardShell({
           </aside>
         </div>
       )}
+
+      {/* Mobile Bottom Navigation (Touch-Friendly Thumb Zone) */}
+      <nav
+        aria-label="Mobile navigation"
+        className="fixed bottom-0 inset-x-0 z-40 md:hidden bg-[#08070F]/95 backdrop-blur-xl border-t border-[#8B5CF6]/20 pb-safe"
+      >
+        <div className="flex items-center justify-around px-1 pt-1">
+          {visibleNavItems.map((item) => {
+            const Icon = item.icon;
+            const active = activeSection === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onNavigate(item.id)}
+                className={`relative flex-1 flex flex-col items-center justify-center gap-0.5 py-2 min-h-[50px] rounded-xl text-[10px] font-semibold transition-colors ${
+                  active
+                    ? 'text-[#E9D5FF]'
+                    : 'text-[#94A3B8] hover:text-white'
+                }`}
+              >
+                {active && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute top-0.5 w-6 h-0.5 rounded-full bg-gradient-to-r from-[#7C3AED] to-[#C084FC]"
+                  />
+                )}
+                <span className="relative">
+                  <Icon size={18} />
+                  {item.id === 'chat' && unreadChatCount > 0 && (
+                    <span className="absolute -top-1.5 -right-2 min-w-[15px] h-[15px] px-1 rounded-full bg-emerald-500 text-[9px] font-bold text-[#06060A] flex items-center justify-center font-mono-tabular">
+                      {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                    </span>
+                  )}
+                </span>
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }

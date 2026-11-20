@@ -1011,9 +1011,31 @@ service cloud.firestore {
             && incoming().diff(existing()).affectedKeys().hasOnly(['suspended', 'suspendedReason', 'suspendedAt', 'updatedAt'])
           ) ||
           (
+            userId != request.auth.uid
+            && isNotSuspended()
+            && incoming().verified == existing().verified
+            && (!('suspended' in incoming()) ? !('suspended' in existing()) : ('suspended' in existing() && incoming().suspended == existing().suspended))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['followersCount', 'updatedAt'])
+            && (
+              (
+                !exists(/databases/$(database)/documents/users/$(userId)/followers/$(request.auth.uid))
+                && existsAfter(/databases/$(database)/documents/users/$(userId)/followers/$(request.auth.uid))
+                && incoming().followersCount == existing().followersCount + 1
+              ) ||
+              (
+                exists(/databases/$(database)/documents/users/$(userId)/followers/$(request.auth.uid))
+                && !existsAfter(/databases/$(database)/documents/users/$(userId)/followers/$(request.auth.uid))
+                && (
+                  (existing().followersCount > 0 && incoming().followersCount == existing().followersCount - 1) ||
+                  (existing().followersCount == 0 && incoming().followersCount == 0)
+                )
+              )
+            )
+          ) ||
+          (
             incoming().verified == existing().verified
             && (!('suspended' in incoming()) ? !('suspended' in existing()) : ('suspended' in existing() && incoming().suspended == existing().suspended))
-            && incoming().diff(existing()).affectedKeys().hasOnly(['followersCount', 'likesCount', 'updatedAt'])
+            && incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt'])
           )
         );
 
@@ -1045,21 +1067,43 @@ service cloud.firestore {
       match /followers/{followerId} {
         allow get: if isValidId(userId) && isValidId(followerId) && isSignedIn();
         allow list: if isValidId(userId) && isSignedIn();
-        allow create: if isValidId(userId) && isValidId(followerId) && isVerified() && isOwner(followerId)
+        allow create: if isValidId(userId) && isValidId(followerId)
+          && userId != followerId
+          && isVerified()
+          && isOwner(followerId)
           && isValidFollowEdge(incoming())
           && incoming().uid == followerId
-          && incoming().createdAt == request.time;
-        allow delete: if isValidId(userId) && isValidId(followerId) && isVerified() && isOwner(followerId);
+          && incoming().createdAt == request.time
+          && isNotSuspended()
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && existsAfter(/databases/$(database)/documents/users/$(followerId)/following/$(userId));
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(followerId)
+          && userId != followerId
+          && isVerified()
+          && isOwner(followerId)
+          && !existsAfter(/databases/$(database)/documents/users/$(followerId)/following/$(userId));
       }
 
       match /following/{targetId} {
         allow get: if isValidId(userId) && isValidId(targetId) && isSignedIn();
         allow list: if isValidId(userId) && isSignedIn();
-        allow create: if isValidId(userId) && isValidId(targetId) && isVerified() && isOwner(userId)
+        allow create: if isValidId(userId) && isValidId(targetId)
+          && userId != targetId
+          && isVerified()
+          && isOwner(userId)
           && isValidFollowEdge(incoming())
           && incoming().uid == targetId
-          && incoming().createdAt == request.time;
-        allow delete: if isValidId(userId) && isValidId(targetId) && isVerified() && isOwner(userId);
+          && incoming().createdAt == request.time
+          && isNotSuspended()
+          && exists(/databases/$(database)/documents/users/$(targetId))
+          && existsAfter(/databases/$(database)/documents/users/$(targetId)/followers/$(userId));
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(targetId)
+          && userId != targetId
+          && isVerified()
+          && isOwner(userId)
+          && !existsAfter(/databases/$(database)/documents/users/$(targetId)/followers/$(userId));
       }
     }
 
@@ -1375,7 +1419,10 @@ service cloud.firestore {
     }
 
     match /conversations/{convId} {
-      allow get: if isValidId(convId) && isSignedIn() && request.auth.uid in existing().participantIds;
+      allow get: if isValidId(convId) && isSignedIn() && (
+        (resource == null && convId.matches('^dm_.*')) ||
+        (resource != null && request.auth.uid in existing().participantIds)
+      );
       allow list: if isSignedIn() && request.auth.uid in existing().participantIds;
 
       allow create: if isValidId(convId)
@@ -1384,6 +1431,10 @@ service cloud.firestore {
         && isValidConversation(incoming())
         && incoming().createdBy == request.auth.uid
         && request.auth.uid in incoming().participantIds
+        && (
+          incoming().isGroup == true ||
+          (incoming().participantIds.size() == 2 && incoming().participantIds[0] != incoming().participantIds[1])
+        )
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
@@ -1398,12 +1449,19 @@ service cloud.firestore {
           (
             incoming().updatedAt == request.time
             && (
-              incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageText', 'lastMessageSenderId', 'lastMessageAt', 'updatedAt']) ||
+              (
+                incoming().participantIds == existing().participantIds &&
+                (
+                  incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageText', 'lastMessageSenderId', 'lastMessageAt', 'updatedAt']) ||
+                  incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageText', 'lastMessageSenderId', 'lastMessageAt', 'updatedAt', 'readBy', 'typingBy'])
+                )
+              ) ||
               (existing().isGroup == true && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'participantIds', 'participantNames', 'participantAvatars', 'updatedAt']))
             )
           ) ||
           (
             incoming().updatedAt == existing().updatedAt
+            && incoming().participantIds == existing().participantIds
             && incoming().diff(existing()).affectedKeys().hasOnly(['readBy', 'typingBy'])
           )
         );

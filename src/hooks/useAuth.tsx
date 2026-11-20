@@ -15,7 +15,7 @@ import {
   subscribeVerifiedBadges,
 } from '../services/firebase/adminService';
 import { extractReadableErrorMessage } from '../services/firebase/errorHandler';
-import { seedInitialSpacesIfEmpty } from '../services/firebase/socialService';
+import { seedInitialSpacesIfEmpty, setUserOnlinePresence, subscribeUserProfile } from '../services/firebase/socialService';
 import {
   PlatformAnnouncement,
   PlatformConfig,
@@ -214,12 +214,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const u1 = subscribeMyPlatformRole(user.uid, setMyRole);
     const u2 = subscribeVerifiedBadges(setBadgesMap);
     const u3 = subscribePlatformAnnouncements(setAnnouncements);
+    const u4 = subscribeUserProfile(user.uid, (freshProfile) => {
+      if (freshProfile) {
+        setProfile(freshProfile);
+      }
+    });
     return () => {
       u1();
       u2();
       u3();
+      u4();
     };
   }, [authReady, user?.uid, emailVerified, profile?.uid]);
+
+  // Lightweight live presence heartbeat respecting user showOnlineStatus privacy setting
+  useEffect(() => {
+    if (!authReady || !user?.uid || !emailVerified || !profile?.uid) return;
+    const allowOnline = privateInfo?.privacySettings?.showOnlineStatus !== false;
+    void setUserOnlinePresence(user.uid, allowOnline);
+
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void setUserOnlinePresence(user.uid, allowOnline);
+      }
+    }, 3 * 60 * 1000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void setUserOnlinePresence(user.uid, allowOnline);
+      } else {
+        void setUserOnlinePresence(user.uid, false);
+      }
+    };
+
+    const handlePageHide = () => {
+      void setUserOnlinePresence(user.uid, false);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, [authReady, user?.uid, emailVerified, profile?.uid, privateInfo?.privacySettings?.showOnlineStatus]);
 
   const getUserBadges = useCallback(
     (uid?: string | null, fallbackVerified?: boolean): VerifiedBadgeType[] => {

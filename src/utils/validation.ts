@@ -7,6 +7,7 @@ import {
   NotificationCategory,
   PlatformConfig,
   PlatformRole,
+  Post,
   PrivacySettings,
   VerifiedBadgeType,
   VirtualGiftCatalogItem,
@@ -706,4 +707,24 @@ export function formatCompactCount(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
   return String(count);
+}
+
+export function computePostEngagementScore(post: Post): number {
+  return (
+    (post.likesCount || 0) +
+    (post.commentsCount || 0) * 2 +
+    (post.repostsCount || 0) * 2 +
+    (post.giftsCount || 0) * 3 +
+    (post.savesCount || 0)
+  );
+}
+
+export function rankTrendingPosts(posts: Post[]): Post[] {
+  return [...posts].sort((a, b) => {
+    const scoreDiff = computePostEngagementScore(b) - computePostEngagementScore(a);
+    if (scoreDiff !== 0) return scoreDiff;
+    const aTime = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+    const bTime = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+    return bTime - aTime;
+  });
 }

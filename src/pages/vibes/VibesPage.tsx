@@ -28,17 +28,18 @@ import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
 import {
-  checkIsFollowing,
   createVibe,
   addVibeComment,
   incrementVibeView,
   repostVibe,
   submitModerationReport,
+  subscribeIsFollowing,
   subscribeVibeComments,
   toggleFollowUser,
   toggleSaveVibe,
   toggleVibeLike,
 } from '../../services/firebase/socialService';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { uploadBlobAsset, uploadMediaAsset } from '../../services/storage/mediaUploadService';
 import { PostComment, UserProfile, Vibe } from '../../types/nexora';
 import { formatCompactCount, formatRelativeTime } from '../../utils/validation';
@@ -69,6 +70,7 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
   const [activeIndex, setActiveIndex] = useState(0);
   const [likedIds, setLikedIds] = useState<string[]>([]);
   const [followingAuthor, setFollowingAuthor] = useState(false);
+  const [followBusy, setFollowBusy] = useState(false);
   const [isPausedVisual, setIsPausedVisual] = useState(false);
 
   const [showComments, setShowComments] = useState(false);
@@ -120,14 +122,20 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
     setShowHeaderMenu(false);
     setShowBottomMenu(false);
     void incrementVibeView(currentVibe.id);
+    let unsubFollow: (() => void) | undefined;
     if (currentVibe.authorId !== profile.uid) {
-      void checkIsFollowing(profile.uid, currentVibe.authorId).then(setFollowingAuthor);
+      unsubFollow = subscribeIsFollowing(profile.uid, currentVibe.authorId, setFollowingAuthor);
     } else {
       setFollowingAuthor(false);
     }
+    let unsubComments: (() => void) | undefined;
     if (showComments) {
-      return subscribeVibeComments(currentVibe.id, setComments);
+      unsubComments = subscribeVibeComments(currentVibe.id, setComments);
     }
+    return () => {
+      unsubFollow?.();
+      unsubComments?.();
+    };
   }, [currentVibe?.id, showComments, profile?.uid]);
 
   // Enforce trim boundaries silently on playback
@@ -324,11 +332,19 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
   };
 
   const handleFollowCreator = async (authorId: string) => {
+    if (followBusy) return;
     const target = users.find((u) => u.uid === authorId);
     if (!target) return;
-    const next = await toggleFollowUser(profile, target, followingAuthor);
-    setFollowingAuthor(next);
-    showToast(next ? `Following ${target.displayName}` : `Unfollowed ${target.displayName}`);
+    setFollowBusy(true);
+    try {
+      const next = await toggleFollowUser(profile, target, followingAuthor);
+      setFollowingAuthor(next);
+      showToast(next ? `Following ${target.displayName}` : `Unfollowed ${target.displayName}`);
+    } catch (err) {
+      showToast(extractReadableErrorMessage(err, 'Unable to update follow status.'));
+    } finally {
+      setFollowBusy(false);
+    }
   };
 
   return (

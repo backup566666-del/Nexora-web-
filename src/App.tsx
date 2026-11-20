@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { AlertTriangle, Ban, LogOut, RefreshCw, Wrench } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { AlertTriangle, Ban, Gift, LogOut, RefreshCw, Sparkles, Wrench, X } from 'lucide-react';
 import { BadgeModalProvider } from './components/badges/BadgeContext';
 import { BadgeInfoModal } from './components/badges/BadgeInfoModal';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -69,15 +70,45 @@ function NexoraAppContent() {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [savedPostIds, setSavedPostIds] = useState<string[]>([]);
   const [deepLinkHandled, setDeepLinkHandled] = useState(false);
+  const [incomingGiftToast, setIncomingGiftToast] = useState<NotificationItem | null>(null);
+  const seenGiftNotifIdsRef = useRef<Set<string>>(new Set());
+  const giftObserverPrimedRef = useRef(false);
+  const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
-    if (!authReady || !user || !emailVerified || !profile?.uid) return;
+    if (!authReady || !user || !emailVerified || !profile?.uid) {
+      seenGiftNotifIdsRef.current.clear();
+      giftObserverPrimedRef.current = false;
+      return;
+    }
 
     const u1 = subscribeFeedPosts(setPosts);
     const u2 = subscribeStories(setStories);
     const u3 = subscribeSpaces(setSpaces);
     const u4 = subscribeDirectoryUsers(setUsers);
-    const u5 = subscribeNotifications(user.uid, setNotifications);
+    const u5 = subscribeNotifications(user.uid, (items) => {
+      setNotifications(items);
+      if (!giftObserverPrimedRef.current) {
+        items.forEach((n) => {
+          if (n.type === 'gift_received') {
+            seenGiftNotifIdsRef.current.add(n.id);
+          }
+        });
+        giftObserverPrimedRef.current = true;
+        return;
+      }
+
+      const freshGift = items.find(
+        (n) =>
+          n.type === 'gift_received' &&
+          !n.read &&
+          !seenGiftNotifIdsRef.current.has(n.id)
+      );
+      if (freshGift) {
+        seenGiftNotifIdsRef.current.add(freshGift.id);
+        setIncomingGiftToast(freshGift);
+      }
+    });
     const u6 = subscribeSavedPostIds(user.uid, setSavedPostIds);
     const u7 = subscribeVibes(setVibes);
 
@@ -91,6 +122,14 @@ function NexoraAppContent() {
       u7();
     };
   }, [authReady, user?.uid, emailVerified, profile?.uid]);
+
+  useEffect(() => {
+    if (!incomingGiftToast) return;
+    const timer = window.setTimeout(() => {
+      setIncomingGiftToast(null);
+    }, 6500);
+    return () => window.clearTimeout(timer);
+  }, [incomingGiftToast]);
 
   useEffect(() => {
     if (deepLinkHandled || !profile?.onboardingCompleted) return;
@@ -327,11 +366,15 @@ function NexoraAppContent() {
           <HomePage
             posts={posts}
             stories={stories}
+            vibes={vibes}
             spaces={spaces}
             users={users}
+            notifications={notifications}
             savedPostIds={savedPostIds}
             onOpenProfile={handleOpenUserProfile}
             onOpenChatThread={handleOpenChatThread}
+            onNavigate={handleNavigate}
+            onOpenVibes={() => handleNavigate('vibes')}
           />
         )}
 
@@ -357,6 +400,7 @@ function NexoraAppContent() {
             users={users}
             stories={stories}
             initialConvId={targetConvId}
+            onOpenProfile={handleOpenUserProfile}
           />
         )}
 
@@ -396,6 +440,60 @@ function NexoraAppContent() {
         )}
       </DashboardShell>
       <BadgeInfoModal />
+
+      {/* Real-time Incoming Free Gift Celebration Toast */}
+      <AnimatePresence>
+        {incomingGiftToast && (
+          <motion.div
+            key={incomingGiftToast.id}
+            initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 24, scale: 0.94 }}
+            animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
+            exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 16, scale: 0.96 }}
+            transition={{ duration: 0.25 }}
+            className="fixed bottom-20 md:bottom-6 right-3 sm:right-6 left-3 sm:left-auto z-50 sm:w-96 p-4 rounded-2xl bg-[#120E22]/95 backdrop-blur-xl border border-pink-400/35 shadow-[0_20px_50px_rgba(0,0,0,0.65)] flex items-start gap-3"
+          >
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#7C3AED]/30 to-pink-500/30 border border-pink-400/30 flex items-center justify-center shrink-0">
+              <Gift size={18} className="text-pink-300" />
+            </div>
+            <div className="min-w-0 flex-1 space-y-1">
+              <p className="font-display text-xs font-semibold text-white flex items-center gap-1.5">
+                <Sparkles size={12} className="text-amber-300" /> Virtual Gift Received
+              </p>
+              <p className="text-xs text-[#CBD5E1] leading-snug">
+                <span className="font-semibold text-white">{incomingGiftToast.actorName}</span>{' '}
+                {incomingGiftToast.preview}
+              </p>
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIncomingGiftToast(null);
+                    handleNavigate('profile', profile.uid, 'gifts');
+                  }}
+                  className="px-3 py-1 rounded-lg bg-gradient-to-r from-[#6D28D9] to-[#9333EA] text-[11px] font-semibold text-white"
+                >
+                  Open Gifts
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIncomingGiftToast(null)}
+                  className="px-2 py-1 text-[11px] text-[#94A3B8] hover:text-white"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIncomingGiftToast(null)}
+              className="p-1 text-[#94A3B8] hover:text-white"
+              aria-label="Close notification"
+            >
+              <X size={14} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </BadgeModalProvider>
   );
 }

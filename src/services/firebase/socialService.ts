@@ -11,6 +11,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   startAt,
@@ -20,8 +21,8 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { db } from './config';
-import { getUserProfile, resolveUidByUsername } from '../auth/authService';
+import { auth, db } from './config';
+import { ensureVerifiedTokenClaims, getUserProfile, resolveUidByUsername } from '../auth/authService';
 import { handleFirestoreError, logFirestoreListenerError, OperationType } from './errorHandler';
 import {
   dispatchDualNotification,
@@ -189,7 +190,52 @@ export async function searchDirectoryUsers(
   return Array.from(merged.values()).slice(0, maxResults);
 }
 
+export function subscribeUserProfile(
+  uid: string,
+  callback: (profile: UserProfile | null) => void
+): Unsubscribe {
+  return onSnapshot(
+    doc(db, 'users', uid),
+    (snap) => {
+      callback(snap.exists() ? (snap.data() as UserProfile) : null);
+    },
+    (error) => logFirestoreListenerError(error, OperationType.GET, `users/${uid}`)
+  );
+}
+
+export function subscribeFollowingIds(
+  uid: string,
+  callback: (followingIds: Set<string>) => void
+): Unsubscribe {
+  return onSnapshot(
+    collection(db, 'users', uid, 'following'),
+    (snap) => {
+      callback(new Set(snap.docs.map((d) => d.id)));
+    },
+    (error) => logFirestoreListenerError(error, OperationType.LIST, `users/${uid}/following`)
+  );
+}
+
+export function subscribeIsFollowing(
+  currentUid: string,
+  targetUid: string,
+  callback: (following: boolean) => void
+): Unsubscribe {
+  if (!currentUid || !targetUid || currentUid === targetUid) {
+    callback(false);
+    return () => {};
+  }
+  return onSnapshot(
+    doc(db, 'users', currentUid, 'following', targetUid),
+    (snap) => {
+      callback(snap.exists());
+    },
+    (error) => logFirestoreListenerError(error, OperationType.GET, `users/${currentUid}/following/${targetUid}`)
+  );
+}
+
 export async function checkIsFollowing(currentUid: string, targetUid: string): Promise<boolean> {
+  if (!currentUid || !targetUid || currentUid === targetUid) return false;
   try {
     const snap = await getDoc(doc(db, 'users', currentUid, 'following', targetUid));
     return snap.exists();
@@ -198,40 +244,107 @@ export async function checkIsFollowing(currentUid: string, targetUid: string): P
   }
 }
 
-export async function toggleFollowUser(
+export async function setFollowRelationship(
   currentUser: UserProfile,
   targetUser: UserProfile,
-  currentlyFollowing: boolean
+  shouldFollow: boolean
 ): Promise<boolean> {
+  if (!currentUser?.uid || !targetUser?.uid) {
+    throw new Error('Both accounts are required to update follow status.');
+  }
+  if (currentUser.uid === targetUser.uid) {
+    throw new Error('You cannot follow your own account.');
+  }
+  if (auth.currentUser) {
+    if (auth.currentUser.uid !== currentUser.uid) {
+      throw new Error(
+        `Firestore permission guard: signed-in user (${auth.currentUser.uid}) cannot modify follow edges for ${currentUser.uid}.`
+      );
+    }
+    await ensureVerifiedTokenClaims(auth.currentUser);
+  }
+
+  const currentRef = doc(db, 'users', currentUser.uid);
+  const targetRef = doc(db, 'users', targetUser.uid);
   const followingRef = doc(db, 'users', currentUser.uid, 'following', targetUser.uid);
   const followerRef = doc(db, 'users', targetUser.uid, 'followers', currentUser.uid);
+
   try {
-    const batch = writeBatch(db);
-    if (currentlyFollowing) {
-      batch.delete(followingRef);
-      batch.delete(followerRef);
-      batch.update(doc(db, 'users', currentUser.uid), {
-        followingCount: increment(-1),
-        updatedAt: serverTimestamp(),
-      });
-      batch.update(doc(db, 'users', targetUser.uid), {
-        followersCount: increment(-1),
-        updatedAt: serverTimestamp(),
-      });
-      await batch.commit();
-      return false;
-    } else {
-      batch.set(followingRef, { uid: targetUser.uid, createdAt: serverTimestamp() });
-      batch.set(followerRef, { uid: currentUser.uid, createdAt: serverTimestamp() });
-      batch.update(doc(db, 'users', currentUser.uid), {
-        followingCount: increment(1),
-        updatedAt: serverTimestamp(),
-      });
-      batch.update(doc(db, 'users', targetUser.uid), {
-        followersCount: increment(1),
-        updatedAt: serverTimestamp(),
-      });
-      await batch.commit();
+    const outcome = await runTransaction(db, async (tx) => {
+      const [followingSnap, followerSnap, currentSnap, targetSnap] = await Promise.all([
+        tx.get(followingRef),
+        tx.get(followerRef),
+        tx.get(currentRef),
+        tx.get(targetRef),
+      ]);
+
+      if (!currentSnap.exists()) {
+        throw new Error('Your Nexora profile must exist before following others.');
+      }
+      if (!targetSnap.exists()) {
+        throw new Error('This user profile is no longer available.');
+      }
+
+      const currentData = currentSnap.data() as UserProfile;
+      const targetData = targetSnap.data() as UserProfile;
+      const currentFollowingCount =
+        typeof currentData.followingCount === 'number' && currentData.followingCount >= 0
+          ? currentData.followingCount
+          : 0;
+      const targetFollowersCount =
+        typeof targetData.followersCount === 'number' && targetData.followersCount >= 0
+          ? targetData.followersCount
+          : 0;
+
+      const hasFollowing = followingSnap.exists();
+      const hasFollower = followerSnap.exists();
+
+      if (shouldFollow) {
+        if (hasFollowing && hasFollower) {
+          return { following: true, createdNewEdge: false };
+        }
+
+        if (!hasFollowing) {
+          tx.set(followingRef, { uid: targetUser.uid, createdAt: serverTimestamp() });
+          tx.update(currentRef, {
+            followingCount: currentFollowingCount + 1,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        if (!hasFollower) {
+          tx.set(followerRef, { uid: currentUser.uid, createdAt: serverTimestamp() });
+          tx.update(targetRef, {
+            followersCount: targetFollowersCount + 1,
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        return { following: true, createdNewEdge: !hasFollower };
+      } else {
+        if (!hasFollowing && !hasFollower) {
+          return { following: false, createdNewEdge: false };
+        }
+
+        if (hasFollowing) {
+          tx.delete(followingRef);
+          tx.update(currentRef, {
+            followingCount: Math.max(0, currentFollowingCount - 1),
+            updatedAt: serverTimestamp(),
+          });
+        }
+        if (hasFollower) {
+          tx.delete(followerRef);
+          tx.update(targetRef, {
+            followersCount: Math.max(0, targetFollowersCount - 1),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        return { following: false, createdNewEdge: false };
+      }
+    });
+
+    if (outcome.following && outcome.createdNewEdge) {
       await createNotification({
         recipientId: targetUser.uid,
         actor: currentUser,
@@ -239,11 +352,20 @@ export async function toggleFollowUser(
         targetId: currentUser.uid,
         preview: `${currentUser.displayName} started following you`,
       });
-      return true;
     }
+
+    return outcome.following;
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `users/${targetUser.uid}/followers`);
   }
+}
+
+export async function toggleFollowUser(
+  currentUser: UserProfile,
+  targetUser: UserProfile,
+  currentlyFollowing: boolean
+): Promise<boolean> {
+  return setFollowRelationship(currentUser, targetUser, !currentlyFollowing);
 }
 
 // --- Posts & Feed ---
@@ -1305,6 +1427,26 @@ export async function createSpaceEvent(params: {
 }
 
 // --- Chat & Messaging ---
+export function isUserOnlineNow(user?: Partial<UserProfile> | null): boolean {
+  if (!user || !user.isOnline) return false;
+  const lastMs = user.lastActiveAt?.toMillis?.();
+  if (!lastMs) return true;
+  return Date.now() - lastMs < 8 * 60 * 1000;
+}
+
+export async function setUserOnlinePresence(uid: string, isOnline: boolean): Promise<void> {
+  if (!uid) return;
+  try {
+    await updateDoc(doc(db, 'users', uid), {
+      isOnline,
+      lastActiveAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-fatal presence heartbeat
+  }
+}
+
 export function subscribeConversations(
   uid: string,
   callback: (convs: Conversation[]) => void
@@ -1329,8 +1471,19 @@ export function subscribeConversations(
 
 export async function createOrGetDirectConversation(
   currentUser: UserProfile,
-  targetUser: UserProfile
+  targetUser: UserProfile,
+  blockedUserIds?: string[]
 ): Promise<string> {
+  if (!currentUser?.uid || !targetUser?.uid) {
+    throw new Error('Both member profiles are required to open a conversation.');
+  }
+  if (currentUser.uid === targetUser.uid) {
+    throw new Error('You cannot start a direct conversation with your own account.');
+  }
+  if (blockedUserIds?.includes(targetUser.uid)) {
+    throw new Error('Unblock this user in Privacy settings before starting a conversation.');
+  }
+
   const sortedIds = [currentUser.uid, targetUser.uid].sort();
   const convId = `dm_${sortedIds[0]}_${sortedIds[1]}`.slice(0, 128);
   const convRef = doc(db, 'conversations', convId);
@@ -1350,6 +1503,9 @@ export async function createOrGetDirectConversation(
       participantAvatars: {
         [currentUser.uid]: sanitizeString(currentUser.avatarUrl || '', 200000),
         [targetUser.uid]: sanitizeString(targetUser.avatarUrl || '', 200000),
+      },
+      readBy: {
+        [currentUser.uid]: serverTimestamp(),
       },
       lastMessageText: '',
       lastMessageSenderId: '',
@@ -1386,6 +1542,9 @@ export async function createGroupConversation(
       participantIds: uniqueMembers.map((m) => m.uid),
       participantNames,
       participantAvatars,
+      readBy: {
+        [creator.uid]: serverTimestamp(),
+      },
       lastMessageText: '',
       lastMessageSenderId: '',
       createdBy: creator.uid,
@@ -1426,22 +1585,14 @@ export async function sendChatMessage(params: {
   recipientIds?: string[];
 }): Promise<void> {
   const cleanText = sanitizeString(params.text, BLUEPRINT_LIMITS.CHAT_MESSAGE_MAX);
+  const cleanMediaUrl = sanitizeString(params.mediaUrl || '', 500000);
+  if (!cleanText && !cleanMediaUrl) {
+    throw new Error('Write a message or attach media before sending.');
+  }
+
   try {
-    await addDoc(collection(db, 'conversations', params.convId, 'messages'), {
-      senderId: params.sender.uid,
-      senderName: sanitizeString(params.sender.displayName, 80),
-      type: params.type,
-      text: cleanText,
-      mediaUrl: sanitizeString(params.mediaUrl || '', 500000),
-      fileName: sanitizeString(params.fileName || '', 120),
-      replyToId: sanitizeString(params.replyToId || '', 128),
-      replyToText: sanitizeString(params.replyToText || '', 200),
-      reactions: {},
-      edited: false,
-      deleted: false,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    const msgRef = doc(collection(db, 'conversations', params.convId, 'messages'));
+    const convRef = doc(db, 'conversations', params.convId);
     const preview =
       cleanText ||
       (params.type === 'image'
@@ -1451,12 +1602,32 @@ export async function sendChatMessage(params: {
         : params.type === 'voice'
         ? 'Sent a voice note'
         : 'Sent a document');
-    await updateDoc(doc(db, 'conversations', params.convId), {
+
+    const batch = writeBatch(db);
+    batch.set(msgRef, {
+      senderId: params.sender.uid,
+      senderName: sanitizeString(params.sender.displayName, 80),
+      type: params.type,
+      text: cleanText,
+      mediaUrl: cleanMediaUrl,
+      fileName: sanitizeString(params.fileName || '', 120),
+      replyToId: sanitizeString(params.replyToId || '', 128),
+      replyToText: sanitizeString(params.replyToText || '', 200),
+      reactions: {},
+      edited: false,
+      deleted: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    batch.update(convRef, {
       lastMessageText: sanitizeString(preview, 300),
       lastMessageSenderId: params.sender.uid,
       lastMessageAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
+      [`readBy.${params.sender.uid}`]: serverTimestamp(),
+      [`typingBy.${params.sender.uid}`]: Timestamp.fromMillis(0),
     });
+    await batch.commit();
 
     for (const rId of params.recipientIds || []) {
       if (rId !== params.sender.uid) {
