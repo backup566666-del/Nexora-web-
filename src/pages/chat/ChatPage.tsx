@@ -577,7 +577,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
   const activePartnerOnline = activeConv ? getOtherOnline(activeConv) : false;
 
   return (
-    <div className="h-[calc(100dvh-9.25rem)] md:h-[calc(100vh-6.5rem)] min-h-[500px] rounded-2xl border border-[#8B5CF6]/20 bg-[#0B0A13] overflow-hidden grid grid-cols-1 lg:grid-cols-12 shadow-[0_20px_70px_rgba(0,0,0,0.65)]">
+    <div className="h-[calc(100dvh-10.75rem)] md:h-[calc(100vh-11.25rem)] min-h-[380px] rounded-2xl border border-[#8B5CF6]/20 bg-[#0B0A13] overflow-hidden grid grid-cols-1 lg:grid-cols-12 shadow-[0_20px_70px_rgba(0,0,0,0.65)]">
       {/* LEFT PANEL – CONVERSATIONS */}
       <aside
         className={`${

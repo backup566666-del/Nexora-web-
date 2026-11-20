@@ -22,6 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { NexoraLogo } from '../branding/NexoraLogo';
+import { FloatingBottomDock } from './FloatingBottomDock';
 import { ResilientImage } from '../common/ResilientImage';
 import { BadgeStrip } from '../common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
@@ -65,11 +66,11 @@ interface DashboardShellProps {
 const NAV_ITEMS: {
   id: NavSection;
   label: string;
-  icon: React.ComponentType<{ size?: number }>;
+  icon: React.ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
 }[] = [
   { id: 'home', label: 'Home', icon: Home },
   { id: 'vibes', label: 'Vibes', icon: Film },
-  { id: 'create', label: 'Create', icon: PlusSquare },
+  { id: 'create', label: 'Nexora', icon: PlusSquare },
   { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'spaces', label: 'Spaces', icon: Compass },
   { id: 'profile', label: 'Profile', icon: UserIcon },
@@ -131,7 +132,10 @@ export function DashboardShell({
 }: DashboardShellProps) {
   const { profile, myRole, announcements, platformConfig, getUserBadges } = useAuth();
   const [navPhase, setNavPhase] = useState<'expanded' | 'logo-only' | 'hidden'>('expanded');
+  const [dockVisible, setDockVisible] = useState(true);
   const lastScrollY = useRef(0);
+  const scrollDeltaAccumRef = useRef(0);
+  const scrollRafRef = useRef<number | null>(null);
   const phaseTimerRef = useRef<number | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -178,18 +182,46 @@ export function DashboardShell({
   }, [searchQuery]);
 
   useEffect(() => {
+    setDockVisible(true);
+    lastScrollY.current = window.scrollY;
+    scrollDeltaAccumRef.current = 0;
+
     if (activeSection === 'vibes' || activeSection === 'chat') {
       setNavPhase('expanded');
       return;
     }
 
-    const handleScroll = () => {
-      const currentY = window.scrollY;
+    const processScroll = () => {
+      scrollRafRef.current = null;
+      const currentY = Math.max(0, window.scrollY);
       const delta = currentY - lastScrollY.current;
       lastScrollY.current = currentY;
 
-      if (Math.abs(delta) < 6) return;
+      if (Math.abs(delta) < 2) return;
 
+      // Reset directional accumulator when scroll direction flips
+      if (
+        (delta > 0 && scrollDeltaAccumRef.current < 0) ||
+        (delta < 0 && scrollDeltaAccumRef.current > 0)
+      ) {
+        scrollDeltaAccumRef.current = 0;
+      }
+      scrollDeltaAccumRef.current += delta;
+
+      // Floating bottom dock hysteresis: smooth hide on scroll down, reveal on scroll up
+      if (currentY <= 48) {
+        setDockVisible(true);
+        scrollDeltaAccumRef.current = 0;
+      } else if (scrollDeltaAccumRef.current > 18 && currentY > 72) {
+        setDockVisible(false);
+        scrollDeltaAccumRef.current = 0;
+      } else if (scrollDeltaAccumRef.current < -12) {
+        setDockVisible(true);
+        scrollDeltaAccumRef.current = 0;
+      }
+
+      // Top bar adaptive transition
+      if (Math.abs(delta) < 6) return;
       if (phaseTimerRef.current) {
         window.clearTimeout(phaseTimerRef.current);
         phaseTimerRef.current = null;
@@ -208,9 +240,16 @@ export function DashboardShell({
       }
     };
 
+    const handleScroll = () => {
+      if (scrollRafRef.current === null) {
+        scrollRafRef.current = window.requestAnimationFrame(processScroll);
+      }
+    };
+
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => {
       window.removeEventListener('scroll', handleScroll);
+      if (scrollRafRef.current !== null) window.cancelAnimationFrame(scrollRafRef.current);
       if (phaseTimerRef.current) window.clearTimeout(phaseTimerRef.current);
     };
   }, [activeSection]);
@@ -391,41 +430,6 @@ export function DashboardShell({
               </span>
             )}
           </div>
-
-          {/* Center: Desktop Primary Navigation */}
-          <nav
-            aria-label="Primary navigation"
-            className={`hidden md:flex items-center gap-1 p-1 rounded-2xl bg-[#0E0C18] border border-[#8B5CF6]/15 transition-opacity duration-200 ${
-              navPhase === 'logo-only'
-                ? 'opacity-0 pointer-events-none w-0 overflow-hidden'
-                : 'opacity-100'
-            }`}
-          >
-            {visibleNavItems.map((item) => {
-              const Icon = item.icon;
-              const active = activeSection === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onNavigate(item.id)}
-                  className={`relative inline-flex items-center gap-2 px-3.5 lg:px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
-                    active
-                      ? 'bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-white shadow-[0_4px_20px_rgba(124,58,237,0.4)]'
-                      : 'text-[#94A3B8] hover:text-white hover:bg-white/[0.05]'
-                  }`}
-                >
-                  <Icon size={15} />
-                  <span>{item.label}</span>
-                  {item.id === 'chat' && unreadChatCount > 0 && (
-                    <span className="min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 text-[10px] font-bold text-[#06060A] flex items-center justify-center font-mono-tabular">
-                      {unreadChatCount > 9 ? '9+' : unreadChatCount}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </nav>
 
           {/* Right: Search + Notifications + Settings + User Identity */}
           <div
@@ -954,41 +958,41 @@ export function DashboardShell({
 
       {/* Section-Specific Responsive Viewport Architectures */}
       {activeSection === 'vibes' && (
-        <main className="relative z-10 flex-1 flex flex-col pb-16 md:pb-0">{children}</main>
+        <main className="relative z-10 flex-1 flex flex-col pb-24 md:pb-28">{children}</main>
       )}
 
       {activeSection === 'chat' && (
-        <main className="relative z-10 flex-1 max-w-[1720px] w-full mx-auto px-2 sm:px-4 lg:px-8 pt-2 sm:pt-4 pb-20 md:pb-4 flex flex-col">
+        <main className="relative z-10 flex-1 max-w-[1720px] w-full mx-auto px-2 sm:px-4 lg:px-8 pt-2 sm:pt-4 pb-24 flex flex-col">
           {children}
         </main>
       )}
 
       {activeSection === 'spaces' && (
-        <main className="relative z-10 flex-1 max-w-[1720px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-24 md:pb-6">
+        <main className="relative z-10 flex-1 max-w-[1720px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28">
           {children}
         </main>
       )}
 
       {activeSection === 'profile' && (
-        <main className="relative z-10 flex-1 max-w-[1400px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-24 md:pb-6">
+        <main className="relative z-10 flex-1 max-w-[1400px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28">
           {children}
         </main>
       )}
 
       {activeSection === 'create' && (
-        <main className="relative z-10 flex-1 max-w-[1400px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-24 md:pb-6">
+        <main className="relative z-10 flex-1 max-w-[1400px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28">
           {children}
         </main>
       )}
 
       {activeSection === 'settings' && (
-        <main className="relative z-10 flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-24 md:pb-6">
+        <main className="relative z-10 flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28">
           {children}
         </main>
       )}
 
       {activeSection === 'home' && (
-        <div className="relative z-10 flex-1 max-w-[1640px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-24 md:pb-6 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
+        <div className="relative z-10 flex-1 max-w-[1640px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
           {/* Left Desktop Column: Identity & Quick Spaces */}
           <aside className="hidden lg:block lg:col-span-3 space-y-6">
             <div className="sticky top-24 space-y-6">
@@ -1186,46 +1190,14 @@ export function DashboardShell({
         </div>
       )}
 
-      {/* Mobile Bottom Navigation (Touch-Friendly Thumb Zone) */}
-      <nav
-        aria-label="Mobile navigation"
-        className="fixed bottom-0 inset-x-0 z-40 md:hidden bg-[#08070F]/95 backdrop-blur-xl border-t border-[#8B5CF6]/20 pb-safe"
-      >
-        <div className="flex items-center justify-around px-1 pt-1">
-          {visibleNavItems.map((item) => {
-            const Icon = item.icon;
-            const active = activeSection === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onNavigate(item.id)}
-                className={`relative flex-1 flex flex-col items-center justify-center gap-0.5 py-2 min-h-[50px] rounded-xl text-[10px] font-semibold transition-colors ${
-                  active
-                    ? 'text-[#E9D5FF]'
-                    : 'text-[#94A3B8] hover:text-white'
-                }`}
-              >
-                {active && (
-                  <span
-                    aria-hidden="true"
-                    className="absolute top-0.5 w-6 h-0.5 rounded-full bg-gradient-to-r from-[#7C3AED] to-[#C084FC]"
-                  />
-                )}
-                <span className="relative">
-                  <Icon size={18} />
-                  {item.id === 'chat' && unreadChatCount > 0 && (
-                    <span className="absolute -top-1.5 -right-2 min-w-[15px] h-[15px] px-1 rounded-full bg-emerald-500 text-[9px] font-bold text-[#06060A] flex items-center justify-center font-mono-tabular">
-                      {unreadChatCount > 9 ? '9+' : unreadChatCount}
-                    </span>
-                  )}
-                </span>
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </nav>
+      {/* Floating Glassmorphic Bottom Dock (Mobile, Tablet & Desktop) */}
+      <FloatingBottomDock
+        items={visibleNavItems}
+        activeSection={activeSection}
+        onNavigate={(section) => onNavigate(section)}
+        unreadChatCount={unreadChatCount}
+        visible={dockVisible}
+      />
     </div>
   );
 }

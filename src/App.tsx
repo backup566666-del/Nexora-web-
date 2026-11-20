@@ -450,7 +450,7 @@ function NexoraAppContent() {
             animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
             exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 16, scale: 0.96 }}
             transition={{ duration: 0.25 }}
-            className="fixed bottom-20 md:bottom-6 right-3 sm:right-6 left-3 sm:left-auto z-50 sm:w-96 p-4 rounded-2xl bg-[#120E22]/95 backdrop-blur-xl border border-pink-400/35 shadow-[0_20px_50px_rgba(0,0,0,0.65)] flex items-start gap-3"
+            className="fixed bottom-24 sm:bottom-24 right-3 sm:right-6 left-3 sm:left-auto z-50 sm:w-96 p-4 rounded-2xl bg-[#120E22]/95 backdrop-blur-xl border border-pink-400/35 shadow-[0_20px_50px_rgba(0,0,0,0.65)] flex items-start gap-3"
           >
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#7C3AED]/30 to-pink-500/30 border border-pink-400/30 flex items-center justify-center shrink-0">
               <Gift size={18} className="text-pink-300" />
