@@ -1,0 +1,195 @@
+name: Nexora Android TWA Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: 'Production HTTPS domain without https:// (e.g. nexora.social or your-app.up.railway.app)'
+        required: true
+        default: 'nexora.social'
+      versionName:
+        description: 'Android versionName (e.g. 1.0.0)'
+        required: false
+        default: '1.0.0'
+      versionCode:
+        description: 'Android integer versionCode (increment for each release)'
+        required: false
+        default: '1'
+      createGitHubRelease:
+        description: 'Also publish signed APK to a GitHub Release for instant HTTPS download'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-twa:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Android Signing Secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.NEXORA_ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.NEXORA_ANDROID_KEYSTORE_PASS }}
+          KEY_PASS: ${{ secrets.NEXORA_ANDROID_KEY_PASS }}
+        run: |
+          missing=0
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::Missing repository secret NEXORA_ANDROID_KEYSTORE_BASE64."
+            missing=1
+          fi
+          if [ -z "$KEYSTORE_PASS" ]; then
+            echo "::error::Missing repository secret NEXORA_ANDROID_KEYSTORE_PASS."
+            missing=1
+          fi
+          if [ -z "$KEY_PASS" ]; then
+            echo "::error::Missing repository secret NEXORA_ANDROID_KEY_PASS."
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            echo "Configure NEXORA_ANDROID_KEYSTORE_BASE64, NEXORA_ANDROID_KEYSTORE_PASS, NEXORA_ANDROID_KEY_ALIAS, and NEXORA_ANDROID_KEY_PASS in GitHub Repo -> Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Android SDK (API Level 35)
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Platform 35 and Build Tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install and Configure Bubblewrap CLI
+        run: |
+          npm install -g @bubblewrap/cli
+          mkdir -p ~/.bubblewrap
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const cfg = {
+              jdkPath: process.env.JAVA_HOME,
+              androidSdkPath: process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
+            };
+            fs.writeFileSync(path.join(process.env.HOME, '.bubblewrap', 'config.json'), JSON.stringify(cfg, null, 2));
+          "
+
+      - name: Decode Signing Keystore and Verify Public SHA-256 Fingerprint
+        env:
+          KEYSTORE_B64: ${{ secrets.NEXORA_ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.NEXORA_ANDROID_KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.NEXORA_ANDROID_KEY_ALIAS || 'nexora' }}
+        run: |
+          printf '%s' "$KEYSTORE_B64" | tr -d '\n\r ' | base64 --decode > android/nexora-release.keystore
+          if [ ! -s android/nexora-release.keystore ]; then
+            echo "::error::Decoded android/nexora-release.keystore is empty."
+            exit 1
+          fi
+          SHA256_FP=$(keytool -list -v -keystore android/nexora-release.keystore -alias "$KEY_ALIAS" -storepass "$KEYSTORE_PASS" | awk -F'SHA256: ' '/SHA256:/{print $2; exit}' | tr -d '[:space:]')
+          if [ -z "$SHA256_FP" ]; then
+            echo "::error::Could not read alias '$KEY_ALIAS' from keystore. Verify NEXORA_ANDROID_KEY_ALIAS and NEXORA_ANDROID_KEYSTORE_PASS."
+            exit 1
+          fi
+          echo "SHA256_FP=$SHA256_FP" >> "$GITHUB_ENV"
+          echo "Verified signing alias '$KEY_ALIAS' cleanly."
+
+      - name: Prepare TWA Manifest for Production Domain
+        env:
+          INPUT_HOST: ${{ inputs.host }}
+          VERSION_NAME: ${{ inputs.versionName }}
+          VERSION_CODE: ${{ inputs.versionCode }}
+          KEY_ALIAS: ${{ secrets.NEXORA_ANDROID_KEY_ALIAS || 'nexora' }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('android/twa-manifest.json', 'utf8'));
+            const host = (process.env.INPUT_HOST || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+            if (!host || host.includes('/') || host.includes(' ')) {
+              throw new Error('Invalid production host provided: ' + host);
+            }
+            m.host = host;
+            m.iconUrl = 'https://' + host + '/pwa-512x512.png';
+            m.maskableIconUrl = 'https://' + host + '/pwa-maskable-512x512.png';
+            m.webManifestUrl = 'https://' + host + '/manifest.webmanifest';
+            m.fullScopeUrl = 'https://' + host + '/';
+            m.appVersionName = (process.env.VERSION_NAME || m.appVersionName).trim();
+            m.appVersionCode = Number(process.env.VERSION_CODE || m.appVersionCode);
+            m.signingKey = { path: './nexora-release.keystore', alias: process.env.KEY_ALIAS };
+            fs.writeFileSync('android/twa-manifest.json', JSON.stringify(m, null, 2));
+          "
+
+      - name: Build Signed Android TWA APK and AAB (API 35)
+        working-directory: android
+        env:
+          BUBBLEWRAP_KEYSTORE_PASSWORD: ${{ secrets.NEXORA_ANDROID_KEYSTORE_PASS }}
+          BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.NEXORA_ANDROID_KEY_PASS }}
+        run: |
+          yes | bubblewrap update --skipPwaValidation || yes | bubblewrap init --manifest="https://${{ inputs.host }}/manifest.webmanifest" --skipPwaValidation
+          bubblewrap build --skipPwaValidation
+          mkdir -p dist-release
+          APK_SRC=$(find . -maxdepth 2 -name '*.apk' -type f | head -n 1)
+          AAB_SRC=$(find . -maxdepth 2 -name '*.aab' -type f | head -n 1)
+          if [ -z "$APK_SRC" ] || [ ! -s "$APK_SRC" ]; then
+            echo "::error::Bubblewrap completed without generating a signed .apk binary."
+            exit 1
+          fi
+          cp "$APK_SRC" "dist-release/nexora-v${{ inputs.versionName }}-release.apk"
+          if [ -n "$AAB_SRC" ] && [ -s "$AAB_SRC" ]; then
+            cp "$AAB_SRC" "dist-release/nexora-v${{ inputs.versionName }}-release.aab"
+          fi
+          ls -lh dist-release/
+
+      - name: Clean Up Decoded Keystore From Runner
+        if: always()
+        run: rm -f android/nexora-release.keystore
+
+      - name: Upload Signed Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexora-android-twa-v${{ inputs.versionName }}
+          path: android/dist-release/*
+          retention-days: 30
+
+      - name: Publish GitHub Release With Public HTTPS APK
+        if: ${{ inputs.createGitHubRelease }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-v${{ inputs.versionName }}-b${{ inputs.versionCode }}
+          name: Nexora Android v${{ inputs.versionName }} (Build ${{ inputs.versionCode }})
+          body: |
+            Signed Android TWA release for **Nexora** (`social.nexora.app`).
+            - Production Host: `https://${{ inputs.host }}`
+            - Target SDK: Android 15 (API 35) | Min SDK: Android 7.0 (API 24)
+            - SHA-256 Certificate Fingerprint (public): `${{ env.SHA256_FP }}`
+          files: |
+            android/dist-release/nexora-v${{ inputs.versionName }}-release.apk
+            android/dist-release/nexora-v${{ inputs.versionName }}-release.aab
+
+      - name: Write Build Summary
+        run: |
+          {
+            echo "### Nexora Android TWA Release Built"
+            echo "- **Version**: v${{ inputs.versionName }} (code ${{ inputs.versionCode }})"
+            echo "- **Target Host**: \`https://${{ inputs.host }}\`"
+            echo "- **Public Signing SHA-256**: \`${{ env.SHA256_FP }}\`"
+            echo ""
+            echo "Set \`ANDROID_SHA256_FINGERPRINTS=${{ env.SHA256_FP }}\` in your production server environment so Digital Asset Links verifies cleanly."
+            if [ "${{ inputs.createGitHubRelease }}" = "true" ]; then
+              echo "- **Direct APK URL**: \`https://github.com/${{ github.repository }}/releases/download/android-v${{ inputs.versionName }}-b${{ inputs.versionCode }}/nexora-v${{ inputs.versionName }}-release.apk\`"
+              echo "Set \`ANDROID_APK_DOWNLOAD_URL\` to that URL on your server to enable the **Get the Nexora App** download button immediately."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

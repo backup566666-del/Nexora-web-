@@ -581,3 +581,56 @@ export interface ContactSubmission {
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
+
+// --- Advanced Admin Presence System (Owner & Authorized Admins Only) ---
+export type AdminPresenceStatus = 'online' | 'idle' | 'dnd' | 'invisible';
+export type AdminManualMode = 'auto' | 'idle' | 'dnd' | 'invisible';
+export type PublicAdminPresenceStatus = 'online' | 'idle' | 'dnd' | 'offline';
+
+export interface AdminPresenceSession {
+  sessionId: string;
+  status: 'online' | 'idle';
+  lastSeenMs: number;
+  deviceType: 'web' | 'mobile' | 'android_twa';
+}
+
+export interface AdminPresencePublic {
+  uid: string;
+  role: InternalRole;
+  status: PublicAdminPresenceStatus;
+  updatedAt?: Timestamp;
+}
+
+export interface AdminPresencePrivate {
+  uid: string;
+  manualMode: AdminManualMode;
+  sessions: Record<string, AdminPresenceSession>;
+  updatedAt?: Timestamp;
+}
+
+// --- Private Admin System Diagnostics ---
+export type ErrorDiagnosticCategory =
+  | 'upload'
+  | 'permission'
+  | 'network'
+  | 'auth'
+  | 'validation'
+  | 'runtime'
+  | 'unknown';
+
+export interface ErrorDiagnosticEntry {
+  id: string;
+  category: ErrorDiagnosticCategory;
+  feature: string;
+  requestId: string;
+  httpStatus: number;
+  errorCode: string;
+  diagnosticMessage: string;
+  redactedStack?: string;
+  actorUid: string;
+  resolved: boolean;
+  resolvedBy?: string;
+  resolvedAt?: Timestamp;
+  createdAt?: Timestamp;
+}
+

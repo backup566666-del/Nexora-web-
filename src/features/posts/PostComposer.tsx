@@ -16,6 +16,7 @@ import {
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { createPost, searchDirectoryUsers, subscribeDirectoryUsers } from '../../services/firebase/socialService';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
 import { AudienceType, PostType, Space, UserProfile } from '../../types/nexora';
@@ -135,7 +136,11 @@ export function PostComposer({
         setMediaTypes((prev) => [...prev, res.category]);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Media upload failed.');
+      setError(
+        extractReadableErrorMessage(err, "We couldn't upload your file. Please try again.", {
+          feature: 'post:upload',
+        })
+      );
     } finally {
       setUploading(false);
       e.target.value = '';
@@ -219,7 +224,11 @@ export function PostComposer({
       setPickerSearch('');
       onCreated?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not publish post.');
+      setError(
+        extractReadableErrorMessage(err, 'Could not publish your post. Please try again.', {
+          feature: 'post:publish',
+        })
+      );
     } finally {
       setSubmitting(false);
     }

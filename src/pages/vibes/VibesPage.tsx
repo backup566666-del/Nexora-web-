@@ -200,7 +200,7 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
       const res = await uploadMediaAsset(file, `vibes/${profile.uid}`, ['video']);
       setVideoUrl(res.url);
     } catch (err) {
-      setStudioError(err instanceof Error ? err.message : 'Unable to upload video.');
+      setStudioError(extractReadableErrorMessage(err, "Your video couldn't be uploaded. Please try again."));
     } finally {
       setUploading(false);
     }
@@ -228,7 +228,7 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
           const res = await uploadBlobAsset(blob, 'recorded_vibe.webm', `vibes/${profile.uid}`, 'video');
           setVideoUrl(res.url);
         } catch (err) {
-          setStudioError(err instanceof Error ? err.message : 'Failed saving recording.');
+          setStudioError(extractReadableErrorMessage(err, "Your video couldn't be uploaded. Please try again."));
         } finally {
           setUploading(false);
         }
@@ -299,7 +299,7 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
       setActiveIndex(0);
       showToast('Vibe published');
     } catch (err) {
-      setStudioError(err instanceof Error ? err.message : 'Could not publish Vibe.');
+      setStudioError(extractReadableErrorMessage(err, 'Could not publish Vibe right now. Please try again.'));
     } finally {
       setPublishing(false);
     }
@@ -348,40 +348,42 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
   };
 
   return (
-    <div className="relative flex-1 bg-[#06060A] flex flex-col items-center justify-between px-6 py-4 overflow-hidden">
+    <div className="relative flex-1 bg-[#06060A] flex flex-col items-center justify-between px-3 sm:px-6 py-3 sm:py-4 overflow-x-hidden">
       {/* Ambient Radial Theater Illumination */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_55%_65%_at_50%_50%,rgba(109,40,217,0.22),transparent_72%)]"
       />
 
-      {/* Top Desktop Studio Bar (No Back Arrow) */}
-      <div className="relative z-20 w-full max-w-[1440px] flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      {/* Top Studio Bar */}
+      <div className="relative z-20 w-full max-w-[1440px] flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
           <NexoraLogo variant="icon" size="xs" />
-          <span className="font-display text-lg font-bold tracking-tight text-white">Vibes</span>
+          <span className="font-display text-base sm:text-lg font-bold tracking-tight text-white">Vibes</span>
           {isDemoMode && (
-            <span className="text-xs font-medium text-[#C084FC]">· Demo Showcase</span>
+            <span className="hidden xs:inline text-xs font-medium text-[#C084FC]">· Demo Showcase</span>
           )}
           {toast && (
-            <span className="text-xs font-medium text-[#C084FC] bg-[#7C3AED]/15 border border-[#8B5CF6]/30 px-3 py-1 rounded-lg">
+            <span className="text-xs font-medium text-[#C084FC] bg-[#7C3AED]/15 border border-[#8B5CF6]/30 px-2.5 py-1 rounded-lg truncate max-w-[180px] sm:max-w-xs">
               {toast}
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setShowAnalytics((v) => !v)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 text-xs font-medium text-[#E2E8F0] transition-colors whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 text-xs font-medium text-[#E2E8F0] transition-colors whitespace-nowrap min-h-[38px]"
           >
-            <BarChart3 size={14} className="text-[#A855F7]" /> Creator Analytics
+            <BarChart3 size={14} className="text-[#A855F7]" />
+            <span className="sm:hidden">Stats</span>
+            <span className="hidden sm:inline">Creator Analytics</span>
           </button>
           <button
             type="button"
             onClick={() => setShowStudio(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] hover:brightness-110 text-xs font-semibold text-white shadow-[0_4px_20px_rgba(124,58,237,0.4)] transition-all whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] hover:brightness-110 text-xs font-semibold text-white shadow-[0_4px_20px_rgba(124,58,237,0.4)] transition-all whitespace-nowrap min-h-[38px]"
           >
             <Plus size={14} /> Create Vibe
           </button>
@@ -389,12 +391,12 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
       </div>
 
       {/* Main Cinematic Viewing Stage */}
-      <div className="relative z-10 w-full max-w-[1440px] flex-1 flex items-center justify-center gap-8 py-3">
+      <div className="relative z-10 w-full max-w-[1440px] flex-1 flex items-center justify-center gap-4 lg:gap-8 py-2 sm:py-3">
         {isDemoMode ? (
           /* Clearly Distinguished Demonstration Stage when 0 real Vibes exist yet */
-          <div className="relative w-full max-w-[1100px] h-[78vh] max-h-[820px] rounded-3xl border border-[#8B5CF6]/25 bg-[#0B0914] overflow-hidden shadow-[0_24px_80px_rgba(0,0,0,0.85)] grid grid-cols-1 lg:grid-cols-12">
+          <div className="relative w-full max-w-[1100px] min-h-[520px] lg:h-[78vh] lg:max-h-[820px] rounded-3xl border border-[#8B5CF6]/25 bg-[#0B0914] overflow-hidden shadow-[0_24px_80px_rgba(0,0,0,0.85)] grid grid-cols-1 lg:grid-cols-12">
             {/* Cinematic Vertical Video Canvas */}
-            <div className="lg:col-span-7 relative bg-black flex items-center justify-center overflow-hidden">
+            <div className="lg:col-span-7 relative bg-black flex items-center justify-center overflow-hidden min-h-[360px]">
               <ResilientImage
                 src="/src/assets/images/space_cover_sound_1795066815582.jpg"
                 alt="Demo Showcase Vibe Stage"
@@ -530,7 +532,7 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
           </div>
         ) : (
           currentVibe && (
-            <div className="w-full max-w-[1160px] flex items-center justify-center gap-6">
+            <div className="w-full max-w-[1160px] flex flex-col lg:flex-row items-center justify-center gap-4 lg:gap-6">
               {/* Primary Cinematic Theater Frame */}
               <AnimatePresence mode="wait">
                 <motion.div
@@ -539,10 +541,10 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -14 }}
                   transition={{ duration: 0.22 }}
-                  className="relative w-full max-w-[980px] h-[78vh] max-h-[820px] rounded-3xl overflow-hidden border border-[#8B5CF6]/25 bg-[#0B0914] shadow-[0_24px_80px_rgba(0,0,0,0.85)] grid grid-cols-1 lg:grid-cols-12"
+                  className="relative w-full max-w-[980px] min-h-[540px] lg:h-[78vh] lg:max-h-[820px] rounded-3xl overflow-hidden border border-[#8B5CF6]/25 bg-[#0B0914] shadow-[0_24px_80px_rgba(0,0,0,0.85)] grid grid-cols-1 lg:grid-cols-12"
                 >
                   {/* LEFT / MAIN: Large Vertical Video Viewing Area */}
-                  <div className="lg:col-span-8 relative bg-black flex items-center justify-center overflow-hidden">
+                  <div className="lg:col-span-8 relative bg-black flex items-center justify-center overflow-hidden min-h-[390px] sm:min-h-[460px]">
                     <video
                       ref={videoPlayerRef}
                       key={currentVibe.id}
@@ -826,14 +828,14 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
                 </motion.div>
               </AnimatePresence>
 
-              {/* Desktop Up / Down Reel Navigation */}
+              {/* Desktop Vertical / Mobile Horizontal Reel Navigation */}
               {vibes.length > 1 && (
-                <div className="flex flex-col items-center gap-2.5 shrink-0">
+                <div className="flex flex-row lg:flex-col items-center gap-3 lg:gap-2.5 shrink-0">
                   <button
                     type="button"
                     disabled={activeIndex === 0}
                     onClick={() => setActiveIndex((i) => Math.max(0, i - 1))}
-                    className="p-3 rounded-2xl bg-[#0E0C18] border border-[#8B5CF6]/20 text-white disabled:opacity-35 hover:border-[#8B5CF6] transition-colors"
+                    className="p-2.5 sm:p-3 rounded-2xl bg-[#0E0C18] border border-[#8B5CF6]/20 text-white disabled:opacity-35 hover:border-[#8B5CF6] transition-colors min-w-[42px] min-h-[42px] flex items-center justify-center"
                     aria-label="Previous Vibe"
                   >
                     <ChevronUp size={18} />
@@ -845,7 +847,7 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
                     type="button"
                     disabled={activeIndex >= vibes.length - 1}
                     onClick={() => setActiveIndex((i) => Math.min(vibes.length - 1, i + 1))}
-                    className="p-3 rounded-2xl bg-[#0E0C18] border border-[#8B5CF6]/20 text-white disabled:opacity-35 hover:border-[#8B5CF6] transition-colors"
+                    className="p-2.5 sm:p-3 rounded-2xl bg-[#0E0C18] border border-[#8B5CF6]/20 text-white disabled:opacity-35 hover:border-[#8B5CF6] transition-colors min-w-[42px] min-h-[42px] flex items-center justify-center"
                     aria-label="Next Vibe"
                   >
                     <ChevronDown size={18} />

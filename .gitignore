@@ -6,3 +6,20 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Android signing credentials & local build outputs (never commit secrets)
+*.keystore
+*.jks
+*.pk8
+*.pem
+*.p12
+.bubblewrap/
+android/nexora-release.keystore
+android/.gradle/
+android/app/build/
+android/app-release*
+android/*.apk
+android/*.aab
+android/*.idsig
+android/dist-release/
+

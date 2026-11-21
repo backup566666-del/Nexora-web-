@@ -728,6 +728,49 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidAdminPresencePublic(data) {
+      return data.keys().hasAll(['uid', 'role', 'status', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'role', 'status', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.role in ['owner', 'administrator', 'moderator', 'verification_reviewer', 'support']
+        && data.status in ['online', 'idle', 'dnd', 'offline']
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminPresencePrivate(data) {
+      return data.keys().hasAll(['uid', 'manualMode', 'sessions', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'manualMode', 'sessions', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.manualMode in ['auto', 'idle', 'dnd', 'invisible']
+        && data.sessions is map
+        && data.sessions.size() <= 16
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidErrorDiagnostic(data) {
+      return data.keys().hasAll([
+          'category', 'feature', 'requestId', 'httpStatus',
+          'errorCode', 'diagnosticMessage', 'actorUid', 'resolved', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'category', 'feature', 'requestId', 'httpStatus',
+          'errorCode', 'diagnosticMessage', 'redactedStack',
+          'actorUid', 'resolved', 'resolvedBy', 'resolvedAt', 'createdAt'
+        ])
+        && data.category in ['upload', 'permission', 'network', 'auth', 'validation', 'runtime', 'unknown']
+        && data.feature is string && data.feature.size() >= 1 && data.feature.size() <= 80
+        && data.requestId is string && data.requestId.size() >= 1 && data.requestId.size() <= 64
+        && data.httpStatus is int && data.httpStatus >= 100 && data.httpStatus <= 599
+        && data.errorCode is string && data.errorCode.size() >= 1 && data.errorCode.size() <= 80
+        && data.diagnosticMessage is string && data.diagnosticMessage.size() >= 1 && data.diagnosticMessage.size() <= 500
+        && isOptionalString(data, 'redactedStack', 600)
+        && isValidId(data.actorUid)
+        && data.resolved is bool
+        && isOptionalString(data, 'resolvedBy', 128)
+        && (!('resolvedAt' in data) || data.resolvedAt is timestamp)
+        && data.createdAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     match /admins/{adminId} {
@@ -1648,6 +1691,91 @@ service cloud.firestore {
       allow delete: if isValidId(submissionId) && isVerified() && (
         isPlatformOwner() || hasPerm('moderate_content')
       );
+    }
+
+    // Discord-Inspired Public Admin Presence (never exposes 'invisible')
+    match /admin_presence/{userId} {
+      allow get: if isValidId(userId) && isSignedIn();
+      allow list: if isSignedIn() && existing().status in ['online', 'idle', 'dnd', 'offline'];
+
+      allow create, update: if isValidId(userId)
+        && isVerified()
+        && isOwner(userId)
+        && (isPlatformOwner() || isActiveStaff())
+        && isValidAdminPresencePublic(incoming())
+        && incoming().uid == userId
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(userId) && isVerified() && (
+        isOwner(userId) || isPlatformOwner() || hasPerm('manage_admins')
+      );
+    }
+
+    // Private Multi-Device Session & Manual Override Mode (Owner & Active Staff Only)
+    match /admin_presence_private/{userId} {
+      allow get: if isValidId(userId) && isVerified() && (
+        (isOwner(userId) && (isPlatformOwner() || isActiveStaff())) ||
+        isPlatformOwner() ||
+        hasPerm('manage_admins')
+      );
+      allow list: if false;
+
+      allow create, update: if isValidId(userId)
+        && isVerified()
+        && isOwner(userId)
+        && (isPlatformOwner() || isActiveStaff())
+        && isValidAdminPresencePrivate(incoming())
+        && incoming().uid == userId
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(userId) && isVerified() && (
+        isPlatformOwner() || hasPerm('manage_admins')
+      );
+    }
+
+    // Private Redacted System Error Diagnostics (Admin Inspection Only)
+    match /error_diagnostics/{diagId} {
+      allow get: if isValidId(diagId) && isVerified() && (
+        isPlatformOwner() ||
+        hasPerm('view_audit_logs') ||
+        hasPerm('manage_admins') ||
+        hasPerm('manage_platform')
+      );
+      allow list: if isVerified()
+        && (
+          isPlatformOwner() ||
+          hasPerm('view_audit_logs') ||
+          hasPerm('manage_admins') ||
+          hasPerm('manage_platform')
+        )
+        && existing().category in ['upload', 'permission', 'network', 'auth', 'validation', 'runtime', 'unknown'];
+
+      allow create: if isValidId(diagId)
+        && isVerified()
+        && isValidErrorDiagnostic(incoming())
+        && incoming().actorUid == request.auth.uid
+        && incoming().resolved == false
+        && !('resolvedBy' in incoming())
+        && !('resolvedAt' in incoming())
+        && incoming().createdAt == request.time;
+
+      allow update: if isValidId(diagId)
+        && isVerified()
+        && (
+          isPlatformOwner() ||
+          hasPerm('view_audit_logs') ||
+          hasPerm('manage_admins') ||
+          hasPerm('manage_platform')
+        )
+        && isValidErrorDiagnostic(incoming())
+        && incoming().actorUid == existing().actorUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().resolved == true
+        && incoming().resolvedBy == request.auth.uid
+        && incoming().resolvedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['resolved', 'resolvedBy', 'resolvedAt']);
+
+      allow delete: if false;
     }
   }
 }

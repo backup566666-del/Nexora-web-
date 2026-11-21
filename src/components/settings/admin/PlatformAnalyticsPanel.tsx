@@ -13,6 +13,7 @@ import {
   Users,
 } from 'lucide-react';
 import { fetchRealPlatformAnalytics } from '../../../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../../../services/firebase/errorHandler';
 import { PlatformAnalyticsSnapshot } from '../../../types/nexora';
 import { formatCompactCount } from '../../../utils/validation';
 
@@ -28,7 +29,11 @@ export function PlatformAnalyticsPanel() {
       const data = await fetchRealPlatformAnalytics();
       setSnapshot(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to compute Firestore metrics.');
+      setError(
+        extractReadableErrorMessage(err, 'Unable to load platform metrics right now.', {
+          feature: 'admin:analytics',
+        })
+      );
     } finally {
       setLoading(false);
     }

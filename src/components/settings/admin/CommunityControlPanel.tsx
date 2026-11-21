@@ -19,6 +19,7 @@ import {
   subscribeReports,
   updateSpaceGovernance,
 } from '../../../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../../../services/firebase/errorHandler';
 import {
   ModerationReport,
   PlatformRole,
@@ -130,7 +131,7 @@ export function CommunityControlPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to update Space status.',
+        text: extractReadableErrorMessage(err, 'Unable to update Space status.', { feature: 'admin:space-status' }),
       });
     } finally {
       setBusy(false);
@@ -155,7 +156,7 @@ export function CommunityControlPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to update Space verification.',
+        text: extractReadableErrorMessage(err, 'Unable to update Space verification.', { feature: 'admin:space-verify' }),
       });
     } finally {
       setBusy(false);
@@ -199,7 +200,7 @@ export function CommunityControlPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to reassign Space owner.',
+        text: extractReadableErrorMessage(err, 'Unable to reassign Space owner.', { feature: 'admin:space-owner' }),
       });
     } finally {
       setBusy(false);
@@ -217,7 +218,7 @@ export function CommunityControlPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to delete Space.',
+        text: extractReadableErrorMessage(err, 'Unable to delete Space.', { feature: 'admin:space-delete' }),
       });
     } finally {
       setBusy(false);

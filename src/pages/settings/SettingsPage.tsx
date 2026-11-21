@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   Award,
   BadgeCheck,
   BarChart3,
@@ -18,9 +19,12 @@ import {
   Send,
   Shield,
   ShieldCheck,
+  Smartphone,
   Upload,
 } from 'lucide-react';
 import { useBadgeModal } from '../../components/badges/BadgeContext';
+import { AdminPresenceSelector } from '../../components/common/PresenceBadge';
+import { PWAInstallButton } from '../../components/common/PWAInstallButton';
 import { BadgeStrip, VerifiedBadge } from '../../components/common/VerifiedBadge';
 import { AdminManagementPanel } from '../../components/settings/admin/AdminManagementPanel';
 import { AuditLogPanel } from '../../components/settings/admin/AuditLogPanel';
@@ -31,6 +35,7 @@ import { ModerationReportsPanel } from '../../components/settings/admin/Moderati
 import { NotificationManagementPanel } from '../../components/settings/admin/NotificationManagementPanel';
 import { PlatformAnalyticsPanel } from '../../components/settings/admin/PlatformAnalyticsPanel';
 import { PlatformManagementPanel } from '../../components/settings/admin/PlatformManagementPanel';
+import { SystemDiagnosticsPanel } from '../../components/settings/admin/SystemDiagnosticsPanel';
 import { VerificationCentrePanel } from '../../components/settings/admin/VerificationCentrePanel';
 import { useAuth } from '../../hooks/useAuth';
 import {
@@ -44,6 +49,7 @@ import {
   subscribeMyIdentityVerifications,
   subscribeMyVerificationRequests,
 } from '../../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { submitContactSubmission } from '../../services/firebase/socialService';
 import { encodeRestrictedIdentityDocument } from '../../services/storage/mediaUploadService';
 import {
@@ -86,6 +92,7 @@ type AdminSectionKey =
   | 'platform'
   | 'moderation'
   | 'notifications'
+  | 'diagnostics'
   | 'audit';
 
 const NOTIFICATION_CATEGORY_META: {
@@ -108,8 +115,20 @@ export function SettingsPage({
   spaces = [],
   initialAdminOpen = false,
 }: SettingsPageProps) {
-  const { user, profile, privateInfo, myRole, getUserBadges, refreshUserAndProfile } = useAuth();
+  const {
+    user,
+    profile,
+    privateInfo,
+    myRole,
+    myAdminManualMode,
+    myAdminSelfStatus,
+    setMyAdminStatus,
+    getUserBadges,
+    refreshUserAndProfile,
+  } = useAuth();
   const { openBadgeModal } = useBadgeModal();
+  const [presenceBusy, setPresenceBusy] = useState(false);
+  const [presenceError, setPresenceError] = useState('');
 
   const canAccessAdmin = Boolean(myRole && myRole.active);
   const [viewMode, setViewMode] = useState<'personal' | 'admin'>(
@@ -209,6 +228,13 @@ export function SettingsPage({
     }
     if (
       hasAdminPermission(myRole, 'view_audit_logs') ||
+      hasAdminPermission(myRole, 'manage_admins') ||
+      hasAdminPermission(myRole, 'manage_platform')
+    ) {
+      list.push({ key: 'diagnostics', label: 'System Diagnostics', icon: Activity });
+    }
+    if (
+      hasAdminPermission(myRole, 'view_audit_logs') ||
       hasAdminPermission(myRole, 'manage_admins')
     ) {
       list.push({ key: 'audit', label: 'Immutable Audit Trail', icon: History });
@@ -252,6 +278,18 @@ export function SettingsPage({
     });
   };
 
+  const handleChangePresence = async (mode: Parameters<typeof setMyAdminStatus>[0]) => {
+    setPresenceBusy(true);
+    setPresenceError('');
+    try {
+      await setMyAdminStatus(mode);
+    } catch (err) {
+      setPresenceError(extractReadableErrorMessage(err, 'Unable to update your presence status right now.'));
+    } finally {
+      setPresenceBusy(false);
+    }
+  };
+
   const handleSavePrivacy = async (e: React.FormEvent) => {
     e.preventDefault();
     setSavingPrivacy(true);
@@ -264,6 +302,8 @@ export function SettingsPage({
       );
       await refreshUserAndProfile();
       setPrivacyNotice('Privacy, collaboration & notification controls saved.');
+    } catch (err) {
+      setPrivacyNotice(extractReadableErrorMessage(err, 'Unable to save privacy preferences right now.'));
     } finally {
       setSavingPrivacy(false);
     }
@@ -271,9 +311,13 @@ export function SettingsPage({
 
   const handleUnblock = async (targetUid: string) => {
     if (!privateInfo) return;
-    const next = privateInfo.blockedUserIds.filter((id) => id !== targetUid);
-    await updateUserPrivacySettings(profile.uid, privacy, next);
-    await refreshUserAndProfile();
+    try {
+      const next = privateInfo.blockedUserIds.filter((id) => id !== targetUid);
+      await updateUserPrivacySettings(profile.uid, privacy, next);
+      await refreshUserAndProfile();
+    } catch (err) {
+      setPrivacyNotice(extractReadableErrorMessage(err, 'Unable to unblock account right now.'));
+    }
   };
 
   const handleApplyBadge = async (e: React.FormEvent) => {
@@ -294,7 +338,7 @@ export function SettingsPage({
       setBadgeFeedback('Badge application submitted for Nexora verification review.');
     } catch (err) {
       setBadgeFeedback(
-        err instanceof Error ? err.message : 'Unable to submit badge application.'
+        extractReadableErrorMessage(err, 'Unable to submit badge application.')
       );
     } finally {
       setSubmittingBadge(false);
@@ -324,7 +368,7 @@ export function SettingsPage({
       );
     } catch (err) {
       setIdFeedback(
-        err instanceof Error ? err.message : 'Unable to submit identity document.'
+        extractReadableErrorMessage(err, 'Unable to submit identity document.')
       );
     } finally {
       setSubmittingId(false);
@@ -352,7 +396,7 @@ export function SettingsPage({
       );
     } catch (err) {
       setSupportFeedback(
-        err instanceof Error ? err.message : 'Unable to submit support ticket.'
+        extractReadableErrorMessage(err, 'Unable to submit support ticket.')
       );
     } finally {
       setSubmittingSupport(false);
@@ -407,26 +451,38 @@ export function SettingsPage({
       {/* PRIVATE ADMINISTRATION CENTRE VIEW */}
       {viewMode === 'admin' && canAccessAdmin && myRole ? (
         <div className="space-y-6">
-          {/* Role Status Strip */}
-          <div className="p-4 rounded-2xl bg-gradient-to-r from-[#0D0B16] via-[#131126] to-[#0D0B16] border border-[#38BDF8]/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-sky-500/15 border border-sky-400/30 flex items-center justify-center text-sky-300 shrink-0">
-                <Shield size={18} />
-              </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-display text-sm font-bold text-white">
-                    {profile.displayName}
-                  </span>
-                  <BadgeStrip badges={activeBadges} size={15} max={4} />
-                  <span className="px-2.5 py-0.5 rounded-md bg-sky-500/15 border border-sky-400/30 text-[10px] font-semibold uppercase tracking-wide text-sky-200">
-                    {ROLE_LABELS[myRole.role]}
-                  </span>
+          {/* Role Status Strip + Staff Presence Control */}
+          <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-[#0D0B16] via-[#131126] to-[#0D0B16] border border-[#38BDF8]/25 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-sky-500/15 border border-sky-400/30 flex items-center justify-center text-sky-300 shrink-0">
+                  <Shield size={18} />
                 </div>
-                <p className="text-[11px] text-[#94A3B8] mt-0.5">
-                  Authenticated Staff ID: {myRole.email} • {adminSections.length} authorized module(s)
-                </p>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-display text-sm font-bold text-white">
+                      {profile.displayName}
+                    </span>
+                    <BadgeStrip badges={activeBadges} size={15} max={4} />
+                    <span className="px-2.5 py-0.5 rounded-md bg-sky-500/15 border border-sky-400/30 text-[10px] font-semibold uppercase tracking-wide text-sky-200">
+                      {ROLE_LABELS[myRole.role]}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#94A3B8] mt-0.5">
+                    Authenticated Staff ID: {myRole.email} • {adminSections.length} authorized module(s)
+                  </p>
+                </div>
               </div>
+            </div>
+
+            <div className="pt-3 border-t border-white/[0.08]">
+              <AdminPresenceSelector
+                currentMode={myAdminManualMode}
+                effectiveStatus={myAdminSelfStatus}
+                onChange={handleChangePresence}
+                busy={presenceBusy}
+              />
+              {presenceError && <p className="text-xs text-rose-400 mt-2">{presenceError}</p>}
             </div>
           </div>
 
@@ -505,6 +561,12 @@ export function SettingsPage({
                     users={users}
                   />
                 )}
+              {activeAdminTab === 'diagnostics' &&
+                (hasAdminPermission(myRole, 'view_audit_logs') ||
+                  hasAdminPermission(myRole, 'manage_admins') ||
+                  hasAdminPermission(myRole, 'manage_platform')) && (
+                  <SystemDiagnosticsPanel actor={profile} />
+                )}
               {activeAdminTab === 'audit' &&
                 (hasAdminPermission(myRole, 'view_audit_logs') ||
                   hasAdminPermission(myRole, 'manage_admins')) && <AuditLogPanel />}
@@ -557,8 +619,12 @@ export function SettingsPage({
                 type="button"
                 onClick={async () => {
                   if (!user.email) return;
-                  await sendPasswordReset(user.email);
-                  setPrivacyNotice('Password reset email dispatched.');
+                  try {
+                    await sendPasswordReset(user.email);
+                    setPrivacyNotice('Password reset email dispatched.');
+                  } catch (err) {
+                    setPrivacyNotice(extractReadableErrorMessage(err, 'Unable to send password reset email right now.'));
+                  }
                 }}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-xs font-medium text-white"
               >
@@ -571,6 +637,34 @@ export function SettingsPage({
               >
                 <LogOut size={14} /> Sign Out
               </button>
+            </div>
+          </section>
+
+          {/* Staff Presence Control (Only shown to Owner & Authorized Active Admins) */}
+          {canAccessAdmin && myRole && (
+            <section className="p-5 sm:p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/25 space-y-3">
+              <AdminPresenceSelector
+                currentMode={myAdminManualMode}
+                effectiveStatus={myAdminSelfStatus}
+                onChange={handleChangePresence}
+                busy={presenceBusy}
+              />
+              {presenceError && <p className="text-xs text-rose-400">{presenceError}</p>}
+            </section>
+          )}
+
+          {/* Install Nexora App (PWA / Android Home Screen / Desktop Standalone) */}
+          <section className="p-5 sm:p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="font-display text-base font-semibold text-white flex items-center gap-2">
+                <Smartphone size={17} className="text-[#C084FC]" /> Install Nexora App
+              </h2>
+              <p className="text-xs text-[#94A3B8]">
+                Run Nexora natively from your Android, iOS, or desktop home screen with offline resilience.
+              </p>
+            </div>
+            <div className="shrink-0">
+              <PWAInstallButton variant="card" />
             </div>
           </section>
 

@@ -283,6 +283,176 @@ export async function dispatchNexoraEmail(payload: EmailSendPayload): Promise<Em
   }
 }
 
+export interface AndroidReleaseStatus {
+  available: boolean;
+  source: 'external_https' | 'self_hosted' | 'none';
+  downloadUrl: string | null;
+  packageId: string;
+  versionName: string;
+  fileSizeBytes: number | null;
+  minAndroidVersion: string;
+  targetSdk: number;
+  assetLinksConfigured: boolean;
+  message: string;
+}
+
+const PLACEHOLDER_SHA256 =
+  '00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00';
+
+function isAllowedExternalHttpsUrl(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') return null;
+    const host = parsed.hostname.toLowerCase();
+    if (
+      !host ||
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '::1' ||
+      host.startsWith('169.254.') ||
+      host.startsWith('10.') ||
+      host.startsWith('192.168.') ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    ) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function verifyLocalApkBinary(filePath: string): number | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size < 10_000) return null;
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const header = Buffer.alloc(4);
+      const bytesRead = fs.readSync(fd, header, 0, 4, 0);
+      // Valid APK packages are ZIP archives starting with PK\x03\x04
+      if (
+        bytesRead !== 4 ||
+        header[0] !== 0x50 ||
+        header[1] !== 0x4b ||
+        header[2] !== 0x03 ||
+        header[3] !== 0x04
+      ) {
+        return null;
+      }
+      return stat.size;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+function hasConfiguredAssetLinksFingerprint(rootDir: string): boolean {
+  const envRaw = (process.env.ANDROID_SHA256_FINGERPRINTS || '').trim();
+  if (envRaw) {
+    const valid = envRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 20 && s !== PLACEHOLDER_SHA256);
+    if (valid.length > 0) return true;
+  }
+
+  for (const candidate of [
+    path.resolve(rootDir, 'public', '.well-known', 'assetlinks.json'),
+    path.resolve(rootDir, 'dist', '.well-known', 'assetlinks.json'),
+  ]) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      if (Array.isArray(parsed)) {
+        const fps: string[] = parsed.flatMap((entry) =>
+          Array.isArray(entry?.target?.sha256_cert_fingerprints)
+            ? entry.target.sha256_cert_fingerprints
+            : []
+        );
+        if (fps.some((fp) => typeof fp === 'string' && fp.trim().length >= 20 && fp.trim() !== PLACEHOLDER_SHA256)) {
+          return true;
+        }
+      }
+    } catch {
+      // Ignore unreadable assetlinks manifest
+    }
+  }
+
+  return false;
+}
+
+function findVerifiedLocalApk(rootDir: string): { path: string; sizeBytes: number } | null {
+  const candidates = [
+    path.resolve(rootDir, 'public', 'downloads', 'nexora-latest.apk'),
+    path.resolve(rootDir, 'dist', 'downloads', 'nexora-latest.apk'),
+  ];
+  for (const candidate of candidates) {
+    const size = verifyLocalApkBinary(candidate);
+    if (size !== null) {
+      return { path: candidate, sizeBytes: size };
+    }
+  }
+  return null;
+}
+
+export function getAndroidReleaseStatus(rootDir: string = __dirname): AndroidReleaseStatus {
+  const packageId = (process.env.ANDROID_PACKAGE_NAME || 'social.nexora.app').trim();
+  const versionName = (process.env.ANDROID_APK_VERSION || '1.0.0').trim();
+  const assetLinksConfigured = hasConfiguredAssetLinksFingerprint(rootDir);
+
+  const localApk = findVerifiedLocalApk(rootDir);
+  if (localApk) {
+    return {
+      available: true,
+      source: 'self_hosted',
+      downloadUrl: '/downloads/nexora-latest.apk',
+      packageId,
+      versionName,
+      fileSizeBytes: localApk.sizeBytes,
+      minAndroidVersion: 'Android 7.0+ (API 24)',
+      targetSdk: 35,
+      assetLinksConfigured,
+      message: `Signed Nexora Android APK v${versionName} is ready for direct download.`,
+    };
+  }
+
+  const externalHttpsUrl = isAllowedExternalHttpsUrl(process.env.ANDROID_APK_DOWNLOAD_URL || '');
+  if (externalHttpsUrl) {
+    return {
+      available: true,
+      source: 'external_https',
+      downloadUrl: externalHttpsUrl,
+      packageId,
+      versionName,
+      fileSizeBytes: null,
+      minAndroidVersion: 'Android 7.0+ (API 24)',
+      targetSdk: 35,
+      assetLinksConfigured,
+      message: `Signed Nexora Android APK v${versionName} is hosted at a verified HTTPS release URL.`,
+    };
+  }
+
+  return {
+    available: false,
+    source: 'none',
+    downloadUrl: null,
+    packageId,
+    versionName,
+    fileSizeBytes: null,
+    minAndroidVersion: 'Android 7.0+ (API 24)',
+    targetSdk: 35,
+    assetLinksConfigured,
+    message:
+      'Android APK signing keystore, SHA-256 Digital Asset Links, and cloud workflow build are pending. Use the live web app or browser install meanwhile.',
+  };
+}
+
 export async function createNexoraServer() {
   const app = express();
   app.use(express.json({ limit: '512kb' }));
@@ -294,6 +464,36 @@ export async function createNexoraServer() {
       service: 'nexora',
       emailConfigured: emailConfig.configured,
       emailProvider: emailConfig.provider,
+    });
+  });
+
+  app.get('/api/app/android-release', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(getAndroidReleaseStatus(__dirname));
+  });
+
+  app.get('/downloads/nexora-latest.apk', (_req: Request, res: Response) => {
+    const localApk = findVerifiedLocalApk(__dirname);
+    const status = getAndroidReleaseStatus(__dirname);
+    if (localApk) {
+      const safeVer = status.versionName.replace(/[^a-zA-Z0-9._-]/g, '') || '1.0.0';
+      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+      res.setHeader('Content-Disposition', `attachment; filename="nexora-v${safeVer}.apk"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.sendFile(localApk.path);
+      return;
+    }
+
+    if (status.source === 'external_https' && status.downloadUrl) {
+      res.redirect(302, status.downloadUrl);
+      return;
+    }
+
+    res.status(404).json({
+      available: false,
+      error:
+        'Nexora Android APK build has not been generated and published yet. Complete signing setup and run the Android TWA build workflow first.',
     });
   });
 
@@ -328,6 +528,46 @@ export async function createNexoraServer() {
     }
 
     res.status(200).json(outcome);
+  });
+
+  app.get('/.well-known/assetlinks.json', (_req: Request, res: Response) => {
+    const rawFingerprints = (process.env.ANDROID_SHA256_FINGERPRINTS || '').trim();
+    const fingerprints = rawFingerprints
+      ? rawFingerprints
+          .split(',')
+          .map((fp) => fp.trim())
+          .filter(Boolean)
+      : [];
+
+    if (fingerprints.length > 0) {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.status(200).json([
+        {
+          relation: ['delegate_permission/common.handle_all_urls'],
+          target: {
+            namespace: 'android_app',
+            package_name: (process.env.ANDROID_PACKAGE_NAME || 'social.nexora.app').trim(),
+            sha256_cert_fingerprints: fingerprints,
+          },
+        },
+      ]);
+      return;
+    }
+
+    const candidates = [
+      path.resolve(__dirname, 'public', '.well-known', 'assetlinks.json'),
+      path.resolve(__dirname, 'dist', '.well-known', 'assetlinks.json'),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        res.setHeader('Content-Type', 'application/json');
+        res.sendFile(candidate);
+        return;
+      }
+    }
+
+    res.status(404).json({ error: 'Asset links manifest not found' });
   });
 
   if (!IS_PRODUCTION) {

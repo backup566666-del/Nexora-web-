@@ -19,11 +19,26 @@ import {
   inferCategoryFromNotificationType,
   shouldAllowDedupeKey,
 } from '../src/services/notifications/notificationDispatcher';
-import { extractReadableErrorMessage } from '../src/services/firebase/errorHandler';
+import {
+  extractAdminDiagnosticMessage,
+  extractReadableErrorMessage,
+  redactSensitiveDiagnosticText,
+} from '../src/services/firebase/errorHandler';
+import {
+  computeEffectivePublicStatus,
+  computeSelfAdminStatus,
+  pruneStaleSessions,
+  SESSION_STALE_MS,
+} from '../src/services/firebase/presenceService';
 import { resolveInlineCompressionLimits } from '../src/services/storage/mediaUploadService';
 import { mapAuthErrorMessage } from '../src/services/auth/authService';
 import firebaseConfig from '../firebase-applet-config.json';
-import { getEmailProviderConfig, buildNexoraEmailHtml, dispatchNexoraEmail } from '../server';
+import {
+  getEmailProviderConfig,
+  buildNexoraEmailHtml,
+  dispatchNexoraEmail,
+  getAndroidReleaseStatus,
+} from '../server';
 
 test('20 canonical badges exist with complete metadata and legacy alias normalization', () => {
   assert.equal(ALL_CANONICAL_BADGES.length, 20);
@@ -157,29 +172,34 @@ test('server email dispatch reports not_configured honestly when provider env va
   }
 });
 
-test('extractReadableErrorMessage converts structured Firestore permission JSON into clear UI copy', () => {
+test('extractReadableErrorMessage translates technical permission/session/network JSON into friendly user-safe copy', () => {
   const unverifiedJson = JSON.stringify({
     error: '7 PERMISSION_DENIED: Missing or insufficient permissions.',
     operationType: 'write',
     path: 'users/test_uid',
     authInfo: { userId: 'test_uid', emailVerified: false },
   });
-  const readable = extractReadableErrorMessage(new Error(unverifiedJson));
+  const readable = extractReadableErrorMessage(new Error(unverifiedJson), 'Unable to save.', {
+    recordDiagnostic: false,
+  });
   assert.equal(readable.includes('{'), false);
-  assert.ok(readable.toLowerCase().includes('email verification'));
+  assert.equal(readable.toLowerCase().includes('firestore'), false);
+  assert.equal(readable.includes('users/test_uid'), false);
+  assert.equal(readable, 'You are not authorised to perform this action.');
 
-  const genericPermission = extractReadableErrorMessage(
-    new Error(
-      JSON.stringify({
-        error: 'PERMISSION_DENIED: Missing or insufficient permissions.',
-        operationType: 'update',
-        path: 'users/test_uid',
-        authInfo: { userId: 'test_uid', emailVerified: true },
-      })
-    )
+  const expiredSession = extractReadableErrorMessage(
+    { code: 'auth/id-token-expired', message: 'Firebase: Error (auth/id-token-expired).' },
+    'Fallback',
+    { recordDiagnostic: false }
   );
-  assert.equal(genericPermission.includes('{'), false);
-  assert.ok(genericPermission.toLowerCase().includes('permission denied'));
+  assert.equal(expiredSession, 'Your session has expired. Please sign in again.');
+
+  const offlineErr = extractReadableErrorMessage(
+    { code: 'unavailable', message: 'Failed to get document because client is offline.' },
+    'Fallback',
+    { recordDiagnostic: false }
+  );
+  assert.equal(offlineErr, 'Check your internet connection and try again.');
 });
 
 test('inline compression limits guarantee avatars, covers, posts, and stories fit Firestore rule caps', () => {
@@ -205,9 +225,10 @@ test('username normalization and display name sanitization satisfy Firestore rul
   assert.equal(sanitizeString('   ', 80), '');
 });
 
-test('mapAuthErrorMessage clearly surfaces Google OAuth, popup, and domain authorization errors', () => {
+test('mapAuthErrorMessage clearly surfaces Google OAuth, popup, and domain authorization errors with friendly copy', () => {
   const unauthDomain = mapAuthErrorMessage({ code: 'auth/unauthorized-domain' });
-  assert.ok(unauthDomain.toLowerCase().includes('authorized domains'));
+  assert.ok(unauthDomain.toLowerCase().includes('temporarily unavailable'));
+  assert.equal(unauthDomain.includes('auth/'), false);
 
   const popupBlocked = mapAuthErrorMessage({ code: 'auth/popup-blocked' });
   assert.ok(popupBlocked.toLowerCase().includes('popup'));
@@ -216,7 +237,7 @@ test('mapAuthErrorMessage clearly surfaces Google OAuth, popup, and domain autho
   assert.ok(diffCred.toLowerCase().includes('different sign-in method'));
 
   const cancelled = mapAuthErrorMessage({ code: 'auth/cancelled-popup-request' });
-  assert.ok(cancelled.toLowerCase().includes('superseded'));
+  assert.ok(cancelled.toLowerCase().includes('cancelled'));
 });
 
 test('existing Firebase project configuration and OAuth client remain preserved verbatim', () => {
@@ -278,7 +299,7 @@ test('firestore.rules allows verified owners to update onboarding/profile fields
   assert.ok(rules.includes('allow delete: if isValidId(username) && isVerified() && existing().uid == request.auth.uid;'));
 });
 
-test('error reporting explicitly distinguishes Firestore errors from Firebase Storage errors', async () => {
+test('error reporting shields raw technical details from users while capturing redacted diagnostics for admins', async () => {
   const { formatStorageErrorMessage } = await import('../src/services/firebase/errorHandler');
 
   const firestoreErr = extractReadableErrorMessage(
@@ -289,18 +310,71 @@ test('error reporting explicitly distinguishes Firestore errors from Firebase St
         path: 'users/test_uid_123',
         authInfo: { userId: 'test_uid_123', emailVerified: true },
       })
-    )
+    ),
+    'Fallback',
+    { recordDiagnostic: false }
   );
-  assert.ok(firestoreErr.startsWith('Firestore permission denied (update users/test_uid_123)'));
+  assert.equal(firestoreErr, 'You are not authorised to perform this action.');
+  assert.equal(firestoreErr.includes('users/test_uid_123'), false);
 
   const storageUnauth = extractReadableErrorMessage(
-    new Error(formatStorageErrorMessage({ code: 'storage/unauthorized', message: 'User does not have permission' }, 'users/test_uid_123/cover/banner.jpg'))
+    new Error(
+      formatStorageErrorMessage(
+        { code: 'storage/unauthorized', message: 'User does not have permission' },
+        'users/test_uid_123/cover/banner.jpg'
+      )
+    ),
+    'Fallback',
+    { recordDiagnostic: false }
   );
-  assert.ok(storageUnauth.startsWith('Firebase Storage permission denied (storage/unauthorized)'));
-  assert.ok(storageUnauth.includes('users/test_uid_123/cover/banner.jpg'));
+  assert.equal(storageUnauth, "We couldn't upload your file. Please try again.");
+  assert.equal(storageUnauth.includes('storage/unauthorized'), false);
+  assert.equal(storageUnauth.includes('users/test_uid_123/cover/banner.jpg'), false);
 
-  const storageBucket = extractReadableErrorMessage({ code: 'storage/bucket-not-found', message: '404 Not Found' });
-  assert.ok(storageBucket.startsWith('Firebase Storage bucket not provisioned (storage/bucket-not-found)'));
+  assert.equal(
+    extractReadableErrorMessage({ mediaKind: 'image_upload_failed' }, 'Fallback', { recordDiagnostic: false }),
+    "We couldn't upload your image. Please try again."
+  );
+
+  const storageBucket = extractReadableErrorMessage(
+    { code: 'storage/bucket-not-found', message: '404 Not Found' },
+    'Fallback',
+    { recordDiagnostic: false }
+  );
+  assert.equal(storageBucket, "We couldn't upload your file. Please try again.");
+
+  assert.equal(
+    extractReadableErrorMessage({ mediaKind: 'video_too_large' }, 'Fallback', { recordDiagnostic: false }),
+    'Your video is too large. Please upload a smaller video.'
+  );
+  assert.equal(
+    extractReadableErrorMessage({ mediaKind: 'unsupported_video' }, 'Fallback', { recordDiagnostic: false }),
+    'This video format is not supported.'
+  );
+  assert.equal(
+    extractReadableErrorMessage({ mediaKind: 'video_upload_failed' }, 'Fallback', { recordDiagnostic: false }),
+    "Your video couldn't be uploaded. Please try again."
+  );
+
+  // Redaction strips Bearer tokens, JWTs, API keys, passwords, and emails before storing diagnostics
+  const redacted = redactSensitiveDiagnosticText(
+    'Authorization: Bearer secret_tok_999 token=abc123 AIzaSyDExampleKey1234567890 user=alice@example.com eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.sig'
+  );
+  assert.equal(redacted.includes('secret_tok_999'), false);
+  assert.equal(redacted.includes('AIzaSyDExampleKey1234567890'), false);
+  assert.equal(redacted.includes('alice@example.com'), false);
+  assert.equal(redacted.includes('eyJhbGciOiJIUzI1NiJ9'), false);
+  assert.ok(redacted.includes('[REDACTED]'));
+  assert.ok(redacted.includes('[REDACTED_EMAIL]'));
+
+  const adminDiag = extractAdminDiagnosticMessage({
+    code: 'storage/unauthorized',
+    message: '403 from owner@nexora.social with Bearer supersecret123',
+  });
+  assert.equal(adminDiag.category, 'upload');
+  assert.equal(adminDiag.errorCode, 'storage/unauthorized');
+  assert.equal(adminDiag.diagnosticMessage.includes('supersecret123'), false);
+  assert.equal(adminDiag.diagnosticMessage.includes('owner@nexora.social'), false);
 });
 
 test('firebase.json targets the exact named Firestore database and storage.rules isolates user media writes', async () => {
@@ -517,5 +591,172 @@ test('rankTrendingPosts prioritizes engagement score across likes, comments, rep
   );
   assert.equal(computePostEngagementScore(pTop), 17);
 });
+
+test('Discord-inspired admin presence engine handles multi-device sessions, manual DND/Invisible, and auto-idle', () => {
+  const now = 1_700_000_000_000;
+  const freshDesktop = {
+    sessionId: 'sess_desktop',
+    status: 'online' as const,
+    lastSeenMs: now - 30_000,
+    deviceType: 'web' as const,
+  };
+  const idleMobile = {
+    sessionId: 'sess_mobile',
+    status: 'idle' as const,
+    lastSeenMs: now - 45_000,
+    deviceType: 'mobile' as const,
+  };
+  const staleLaptop = {
+    sessionId: 'sess_stale',
+    status: 'online' as const,
+    lastSeenMs: now - (SESSION_STALE_MS + 10_000),
+    deviceType: 'web' as const,
+  };
+
+  const pruned = pruneStaleSessions(
+    { sess_desktop: freshDesktop, sess_mobile: idleMobile, sess_stale: staleLaptop },
+    now
+  );
+  assert.deepEqual(Object.keys(pruned).sort(), ['sess_desktop', 'sess_mobile']);
+
+  // Auto mode with at least one active online device => online
+  assert.equal(
+    computeEffectivePublicStatus({ manualMode: 'auto', sessions: pruned, nowMs: now }),
+    'online'
+  );
+  // Auto mode when remaining sessions are idle => idle
+  assert.equal(
+    computeEffectivePublicStatus({ manualMode: 'auto', sessions: { sess_mobile: idleMobile }, nowMs: now }),
+    'idle'
+  );
+  // Manual DND remains dnd while active, drops to offline when no active sessions
+  assert.equal(
+    computeEffectivePublicStatus({ manualMode: 'dnd', sessions: pruned, nowMs: now }),
+    'dnd'
+  );
+  assert.equal(
+    computeEffectivePublicStatus({ manualMode: 'dnd', sessions: { sess_stale: staleLaptop }, nowMs: now }),
+    'offline'
+  );
+  // Invisible appears strictly offline publicly while self-status displays invisible
+  assert.equal(
+    computeEffectivePublicStatus({ manualMode: 'invisible', sessions: pruned, nowMs: now }),
+    'offline'
+  );
+  assert.equal(
+    computeSelfAdminStatus({ manualMode: 'invisible', sessions: pruned, nowMs: now }),
+    'invisible'
+  );
+});
+
+test('firestore.rules enforces staff-only presence controls and admin-only error diagnostics access', async () => {
+  const fs = await import('node:fs');
+  const rules = fs.readFileSync('firestore.rules', 'utf8');
+
+  const publicPresence = rules.match(/match \/admin_presence\/\{userId\}\s*\{([\s\S]*?)\n\s{4}\}/);
+  assert.ok(publicPresence, 'admin_presence rule block must exist');
+  assert.ok(publicPresence[1].includes('(isPlatformOwner() || isActiveStaff())'));
+  assert.ok(rules.includes("data.status in ['online', 'idle', 'dnd', 'offline']"));
+
+  const privatePresence = rules.match(/match \/admin_presence_private\/\{userId\}\s*\{([\s\S]*?)\n\s{4}\}/);
+  assert.ok(privatePresence, 'admin_presence_private rule block must exist');
+  assert.ok(privatePresence[1].includes('allow list: if false;'));
+  assert.ok(privatePresence[1].includes("hasPerm('manage_admins')"));
+
+  const diagMatch = rules.match(/match \/error_diagnostics\/\{diagId\}\s*\{([\s\S]*?)\n\s{4}\}/);
+  assert.ok(diagMatch, 'error_diagnostics rule block must exist');
+  assert.ok(diagMatch[1].includes("hasPerm('view_audit_logs')"));
+  assert.ok(diagMatch[1].includes('incoming().resolved == false'));
+  assert.ok(diagMatch[1].includes('allow delete: if false;'));
+});
+
+test('Android TWA manifest targets API Level 35 and PWA + Asset Links assets exist', async () => {
+  const fs = await import('node:fs');
+
+  const twa = JSON.parse(fs.readFileSync('android/twa-manifest.json', 'utf8'));
+  assert.equal(twa.packageId, 'social.nexora.app');
+  assert.equal(twa.targetSdkVersion, 35);
+  assert.equal(twa.compileSdkVersion, 35);
+  assert.ok(twa.minSdkVersion >= 24);
+  assert.equal(twa.display, 'standalone');
+
+  const assetLinks = JSON.parse(fs.readFileSync('public/.well-known/assetlinks.json', 'utf8'));
+  assert.ok(Array.isArray(assetLinks) && assetLinks.length >= 1);
+  assert.equal(assetLinks[0].target.package_name, 'social.nexora.app');
+
+  for (const icon of [
+    'public/pwa-192x192.png',
+    'public/pwa-512x512.png',
+    'public/pwa-maskable-512x512.png',
+    'public/apple-touch-icon.png',
+  ]) {
+    assert.ok(fs.existsSync(icon), `Missing required PWA icon asset: ${icon}`);
+  }
+});
+
+test('getAndroidReleaseStatus reports unavailable until real signed APK or valid HTTPS URL exists', async () => {
+  const prevUrl = process.env.ANDROID_APK_DOWNLOAD_URL;
+  const prevFp = process.env.ANDROID_SHA256_FINGERPRINTS;
+  delete process.env.ANDROID_APK_DOWNLOAD_URL;
+  delete process.env.ANDROID_SHA256_FINGERPRINTS;
+
+  try {
+    // Current repo has zero fake/empty APKs
+    const currentStatus = getAndroidReleaseStatus();
+    assert.equal(currentStatus.available, false);
+    assert.equal(currentStatus.source, 'none');
+    assert.equal(currentStatus.downloadUrl, null);
+    assert.equal(currentStatus.packageId, 'social.nexora.app');
+    assert.equal(currentStatus.targetSdk, 35);
+    assert.equal(currentStatus.assetLinksConfigured, false);
+
+    // Reject insecure or local URLs
+    process.env.ANDROID_APK_DOWNLOAD_URL = 'http://localhost:3000/fake.apk';
+    assert.equal(getAndroidReleaseStatus().available, false);
+
+    process.env.ANDROID_APK_DOWNLOAD_URL = 'javascript:alert(1)';
+    assert.equal(getAndroidReleaseStatus().available, false);
+
+    // Accept verified HTTPS release URL
+    process.env.ANDROID_APK_DOWNLOAD_URL =
+      'https://github.com/example/nexora/releases/download/android-v1.0.0-b1/nexora-v1.0.0-release.apk';
+    process.env.ANDROID_SHA256_FINGERPRINTS =
+      'AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89';
+    const readyStatus = getAndroidReleaseStatus();
+    assert.equal(readyStatus.available, true);
+    assert.equal(readyStatus.source, 'external_https');
+    assert.equal(readyStatus.assetLinksConfigured, true);
+    assert.ok(readyStatus.downloadUrl?.startsWith('https://'));
+  } finally {
+    if (prevUrl !== undefined) process.env.ANDROID_APK_DOWNLOAD_URL = prevUrl;
+    else delete process.env.ANDROID_APK_DOWNLOAD_URL;
+    if (prevFp !== undefined) process.env.ANDROID_SHA256_FINGERPRINTS = prevFp;
+    else delete process.env.ANDROID_SHA256_FINGERPRINTS;
+  }
+});
+
+test('Android signing credentials are ignored in Git and cloud workflow rejects missing secrets', async () => {
+  const fs = await import('node:fs');
+  const gitignore = fs.readFileSync('.gitignore', 'utf8');
+  for (const pattern of ['*.keystore', '*.jks', 'android/nexora-release.keystore', '.bubblewrap/']) {
+    assert.ok(gitignore.includes(pattern), `Expected ${pattern} in .gitignore`);
+  }
+
+  const workflow = fs.readFileSync('.github/workflows/android-twa-release.yml', 'utf8');
+  assert.ok(workflow.includes('NEXORA_ANDROID_KEYSTORE_BASE64'));
+  assert.ok(workflow.includes('NEXORA_ANDROID_KEYSTORE_PASS'));
+  assert.ok(workflow.includes('NEXORA_ANDROID_KEY_PASS'));
+  assert.ok(workflow.includes('.bubblewrap'));
+  assert.equal(workflow.includes('nexora-temp-pass'), false);
+
+  const landing = fs.readFileSync('src/pages/landing/LandingPage.tsx', 'utf8');
+  assert.ok(landing.includes('/api/app/android-release'));
+  assert.ok(landing.includes('Get the Nexora App'));
+  assert.ok(landing.includes('Sign In'));
+  assert.ok(landing.includes('Get Started'));
+  assert.ok(landing.includes('PWAInstallButton'));
+});
+
+
 
 

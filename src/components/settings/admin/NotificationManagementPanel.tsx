@@ -19,6 +19,7 @@ import {
   subscribeEmailLogs,
   toggleAnnouncementActive,
 } from '../../../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../../../services/firebase/errorHandler';
 import {
   fetchServerEmailStatus,
   ServerEmailStatus,
@@ -99,7 +100,7 @@ export function NotificationManagementPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to publish announcement.',
+        text: extractReadableErrorMessage(err, 'Unable to publish announcement.', { feature: 'admin:announcements' }),
       });
     } finally {
       setBusy(false);
@@ -133,7 +134,7 @@ export function NotificationManagementPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to dispatch notifications.',
+        text: extractReadableErrorMessage(err, 'Unable to dispatch notifications.', { feature: 'admin:notifications' }),
       });
     } finally {
       setBusy(false);
@@ -168,7 +169,7 @@ export function NotificationManagementPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to dispatch direct email.',
+        text: extractReadableErrorMessage(err, 'Unable to dispatch direct email.', { feature: 'admin:direct-email' }),
       });
     } finally {
       setBusy(false);

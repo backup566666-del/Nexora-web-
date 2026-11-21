@@ -4,6 +4,7 @@ import {
   reviewIdentityVerification,
   subscribeAllIdentityVerifications,
 } from '../../../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../../../services/firebase/errorHandler';
 import {
   IdentityVerificationRequest,
   PlatformRole,
@@ -57,7 +58,7 @@ export function IdentityVerificationPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to review identity document.',
+        text: extractReadableErrorMessage(err, 'Unable to review identity document.', { feature: 'admin:identity-review' }),
       });
     } finally {
       setBusy(false);

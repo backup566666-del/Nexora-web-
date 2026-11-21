@@ -3,6 +3,7 @@ import { Eye, Image as ImageIcon, Plus, Send, Type, Video, X } from 'lucide-reac
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import {
   createOrGetDirectConversation,
   createStory,
@@ -73,7 +74,11 @@ export function StoriesBar({ stories, users, onOpenChatThread }: StoriesBarProps
       const res = await uploadMediaAsset(file, `stories/${profile.uid}`, [...expected]);
       setStoryMediaUrl(res.url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to upload story media.');
+      setError(
+        extractReadableErrorMessage(err, "We couldn't upload your story media. Please try again.", {
+          feature: 'story:upload',
+        })
+      );
     } finally {
       setUploading(false);
     }
@@ -104,7 +109,11 @@ export function StoriesBar({ stories, users, onOpenChatThread }: StoriesBarProps
       setStoryText('');
       setStoryMediaUrl('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to publish story.');
+      setError(
+        extractReadableErrorMessage(err, 'Could not publish your story. Please try again.', {
+          feature: 'story:publish',
+        })
+      );
     } finally {
       setSubmitting(false);
     }

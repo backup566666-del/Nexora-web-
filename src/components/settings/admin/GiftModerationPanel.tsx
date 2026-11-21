@@ -6,6 +6,7 @@ import {
   subscribeAllGiftTransactionsAdmin,
   subscribeGiftCatalog,
 } from '../../../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../../../services/firebase/errorHandler';
 import {
   GiftTransaction,
   PlatformRole,
@@ -66,7 +67,7 @@ export function GiftModerationPanel({ actor, myRole }: GiftModerationPanelProps)
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to update gift catalog item.',
+        text: extractReadableErrorMessage(err, 'Unable to update gift catalog item.', { feature: 'admin:gift-catalog' }),
       });
     } finally {
       setBusy(false);
@@ -107,7 +108,7 @@ export function GiftModerationPanel({ actor, myRole }: GiftModerationPanelProps)
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to save free gift.',
+        text: extractReadableErrorMessage(err, 'Unable to save free gift.', { feature: 'admin:gift-catalog' }),
       });
     } finally {
       setBusy(false);
@@ -127,7 +128,7 @@ export function GiftModerationPanel({ actor, myRole }: GiftModerationPanelProps)
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to remove gift transaction.',
+        text: extractReadableErrorMessage(err, 'Unable to remove gift transaction.', { feature: 'admin:gift-tx' }),
       });
     } finally {
       setBusy(false);

@@ -23,6 +23,9 @@ import {
 } from 'lucide-react';
 import { NexoraLogo } from '../branding/NexoraLogo';
 import { FloatingBottomDock } from './FloatingBottomDock';
+import { OfflineIndicator } from '../common/OfflineIndicator';
+import { PresenceBadge } from '../common/PresenceBadge';
+import { PWAInstallButton } from '../common/PWAInstallButton';
 import { ResilientImage } from '../common/ResilientImage';
 import { BadgeStrip } from '../common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
@@ -130,7 +133,15 @@ export function DashboardShell({
   users,
   children,
 }: DashboardShellProps) {
-  const { profile, myRole, announcements, platformConfig, getUserBadges } = useAuth();
+  const {
+    profile,
+    myRole,
+    myAdminSelfStatus,
+    adminPresenceMap,
+    announcements,
+    platformConfig,
+    getUserBadges,
+  } = useAuth();
   const [navPhase, setNavPhase] = useState<'expanded' | 'logo-only' | 'hidden'>('expanded');
   const [dockVisible, setDockVisible] = useState(true);
   const lastScrollY = useRef(0);
@@ -431,7 +442,7 @@ export function DashboardShell({
             )}
           </div>
 
-          {/* Right: Search + Notifications + Settings + User Identity */}
+          {/* Right: PWA Install + Search + Notifications + Settings + User Identity */}
           <div
             className={`flex items-center gap-1.5 sm:gap-2.5 shrink-0 transition-opacity duration-200 ${
               navPhase === 'logo-only'
@@ -439,6 +450,9 @@ export function DashboardShell({
                 : 'opacity-100'
             }`}
           >
+            <div className="hidden sm:block">
+              <PWAInstallButton variant="compact" />
+            </div>
             {/* Mobile / Tablet / Laptop Search Button */}
             <button
               type="button"
@@ -705,11 +719,18 @@ export function DashboardShell({
                 }}
                 className="flex items-center gap-2 p-1 sm:pl-1.5 sm:pr-3 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 transition-colors min-h-[40px]"
               >
-                <ResilientImage
-                  src={profile.avatarUrl}
-                  alt={profile.displayName}
-                  className="w-7 h-7 rounded-full object-cover ring-1 ring-[#8B5CF6]/50"
-                />
+                <div className="relative shrink-0">
+                  <ResilientImage
+                    src={profile.avatarUrl}
+                    alt={profile.displayName}
+                    className="w-7 h-7 rounded-full object-cover ring-1 ring-[#8B5CF6]/50"
+                  />
+                  {isActiveStaff && (
+                    <span className="absolute -bottom-0.5 -right-0.5">
+                      <PresenceBadge status={myAdminSelfStatus} size="xs" showOffline />
+                    </span>
+                  )}
+                </div>
                 <span className="hidden sm:inline text-xs font-medium text-white max-w-[115px] truncate">
                   {profile.displayName}
                 </span>
@@ -723,6 +744,11 @@ export function DashboardShell({
                       <BadgeStrip badges={selfBadges} size={13} max={3} />
                     </p>
                     <p className="text-[11px] text-[#94A3B8] truncate">@{profile.username}</p>
+                    {isActiveStaff && (
+                      <div className="pt-1.5">
+                        <PresenceBadge status={myAdminSelfStatus} size="xs" showOffline showLabel />
+                      </div>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -1110,11 +1136,21 @@ export function DashboardShell({
                             onClick={() => onOpenUserProfile(u.uid)}
                             className="flex items-center gap-2.5 min-w-0 text-left"
                           >
-                            <ResilientImage
-                              src={u.avatarUrl}
-                              alt={u.displayName}
-                              className="w-9 h-9 rounded-full object-cover shrink-0"
-                            />
+                            <div className="relative shrink-0">
+                              <ResilientImage
+                                src={u.avatarUrl}
+                                alt={u.displayName}
+                                className="w-9 h-9 rounded-full object-cover"
+                              />
+                              {(() => {
+                                const rec = adminPresenceMap[u.uid];
+                                return rec && rec.status !== 'offline' ? (
+                                  <span className="absolute -bottom-0.5 -right-0.5">
+                                    <PresenceBadge status={rec.status} size="xs" />
+                                  </span>
+                                ) : null;
+                              })()}
+                            </div>
                             <div className="min-w-0">
                               <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
                                 <span className="truncate">{u.displayName}</span>
@@ -1198,6 +1234,9 @@ export function DashboardShell({
         unreadChatCount={unreadChatCount}
         visible={dockVisible}
       />
+
+      {/* Offline Connectivity Banner */}
+      <OfflineIndicator />
     </div>
   );
 }

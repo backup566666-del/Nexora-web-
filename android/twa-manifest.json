@@ -1,0 +1,48 @@
+{
+  "packageId": "social.nexora.app",
+  "host": "nexora.social",
+  "name": "Nexora",
+  "launcherName": "Nexora",
+  "display": "standalone",
+  "themeColor": "#06060A",
+  "themeColorDark": "#06060A",
+  "navigationColor": "#06060A",
+  "navigationColorDark": "#06060A",
+  "navigationDividerColor": "#1A1429",
+  "navigationDividerColorDark": "#1A1429",
+  "backgroundColor": "#06060A",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://nexora.social/pwa-512x512.png",
+  "maskableIconUrl": "https://nexora.social/pwa-maskable-512x512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./nexora-release.keystore",
+    "alias": "nexora"
+  },
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://nexora.social/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "features": {
+    "locationDelegation": {
+      "enabled": false
+    },
+    "playBilling": {
+      "enabled": false
+    }
+  },
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://nexora.social/",
+  "minSdkVersion": 24,
+  "targetSdkVersion": 35,
+  "compileSdkVersion": 35,
+  "orientation": "portrait"
+}

@@ -24,6 +24,7 @@ import { CoverEditorModal } from '../../components/media/CoverEditorModal';
 import { PostComposer } from '../../features/posts/PostComposer';
 import { useAuth } from '../../hooks/useAuth';
 import { updateUserProfileFields } from '../../services/auth/authService';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { createStory, createVibe, updateSpaceCover } from '../../services/firebase/socialService';
 import { uploadBlobAsset, uploadMediaAsset } from '../../services/storage/mediaUploadService';
 import { Space, StoryPrivacy, UserProfile } from '../../types/nexora';
@@ -116,6 +117,7 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
   const [storyPrivacy, setStoryPrivacy] = useState<StoryPrivacy>('public');
   const [storySaving, setStorySaving] = useState(false);
   const [storyUploading, setStoryUploading] = useState(false);
+  const [storyError, setStoryError] = useState('');
   const storyFileRef = useRef<HTMLInputElement>(null);
 
   // Vibe Video Studio state
@@ -310,7 +312,11 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
       setAttachedPostMediaUrl(url);
       setMode('post');
     } catch (err) {
-      setPhotoError(err instanceof Error ? err.message : 'Export failed.');
+      setPhotoError(
+        extractReadableErrorMessage(err, "We couldn't save your edited photo. Please try again.", {
+          feature: 'create:photo-export',
+        })
+      );
     } finally {
       setExportingPhoto(false);
     }
@@ -330,7 +336,11 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
       });
       onDone('home');
     } catch (err) {
-      setPhotoError(err instanceof Error ? err.message : 'Could not publish story.');
+      setPhotoError(
+        extractReadableErrorMessage(err, 'Could not publish your story. Please try again.', {
+          feature: 'create:photo-story',
+        })
+      );
     } finally {
       setExportingPhoto(false);
     }
@@ -345,7 +355,11 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
       const res = await uploadMediaAsset(file, `vibes/${profile.uid}`, ['video']);
       setVibeUrl(res.url);
     } catch (err) {
-      setVibeError(err instanceof Error ? err.message : 'Video upload failed.');
+      setVibeError(
+        extractReadableErrorMessage(err, "Your video couldn't be uploaded. Please try again.", {
+          feature: 'create:vibe-upload',
+        })
+      );
     } finally {
       setUploadingVibe(false);
       e.target.value = '';
@@ -381,7 +395,11 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
             setVibeMusic('Studio Voiceover Track');
           }
         } catch (err) {
-          setVibeError(err instanceof Error ? err.message : 'Voiceover upload failed.');
+          setVibeError(
+            extractReadableErrorMessage(err, "We couldn't upload your voiceover. Please try again.", {
+              feature: 'create:voiceover',
+            })
+          );
         }
       };
       voRecorderRef.current = recorder;
@@ -411,7 +429,11 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
       });
       onDone('vibes');
     } catch (err) {
-      setVibeError(err instanceof Error ? err.message : 'Could not publish Vibe.');
+      setVibeError(
+        extractReadableErrorMessage(err, 'Could not publish your Vibe. Please try again.', {
+          feature: 'create:vibe-publish',
+        })
+      );
     } finally {
       setPublishingVibe(false);
     }
@@ -420,6 +442,7 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
   const handleStoryMediaSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setStoryError('');
     setStoryUploading(true);
     try {
       const res = await uploadMediaAsset(
@@ -428,6 +451,12 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
         storyMode === 'video' ? ['video'] : ['image']
       );
       setStoryMediaUrl(res.url);
+    } catch (err) {
+      setStoryError(
+        extractReadableErrorMessage(err, "We couldn't upload your story media. Please try again.", {
+          feature: 'create:story-upload',
+        })
+      );
     } finally {
       setStoryUploading(false);
       e.target.value = '';
@@ -444,18 +473,18 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
       : 'none';
 
   return (
-    <div className="w-full space-y-6">
+    <div className="w-full space-y-5 sm:space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-1">
-          <h1 className="font-display text-2xl font-bold text-white">Create Studio</h1>
-          <p className="text-sm text-[#94A3B8]">
+          <h1 className="font-display text-xl sm:text-2xl font-bold text-white">Create Studio</h1>
+          <p className="text-xs sm:text-sm text-[#94A3B8]">
             Create posts, polls, community threads, edited photography, Stories, and Vibes.
           </p>
         </div>
       </div>
 
       {/* Mode Switcher */}
-      <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-[#0D0B16] border border-[#8B5CF6]/20 rounded-2xl">
+      <div className="flex items-center gap-1.5 p-1.5 bg-[#0D0B16] border border-[#8B5CF6]/20 rounded-2xl overflow-x-auto no-scrollbar">
         {[
           { id: 'post', label: 'Post, Poll & Community', icon: Type },
           { id: 'photo-editor', label: 'Photo Studio', icon: Sliders },
@@ -469,7 +498,7 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
               key={tab.id}
               type="button"
               onClick={() => setMode(tab.id as StudioMode)}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
+              className={`shrink-0 inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
                 mode === tab.id
                   ? 'bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-white shadow-[0_4px_16px_rgba(124,58,237,0.35)]'
                   : 'text-[#94A3B8] hover:text-white hover:bg-white/[0.04]'
@@ -535,7 +564,7 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
             {/* Live Canvas Preview */}
             <div className="xl:col-span-7 space-y-3">
-              <div className="min-h-[380px] rounded-2xl bg-[#06060A] border border-white/10 flex items-center justify-center p-4 overflow-hidden">
+              <div className="min-h-[260px] sm:min-h-[380px] rounded-2xl bg-[#06060A] border border-white/10 flex items-center justify-center p-3 sm:p-4 overflow-hidden">
                 {sourceImageObj ? (
                   <canvas
                     ref={previewCanvasRef}
@@ -1020,6 +1049,7 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
             e.preventDefault();
             if (storyMode === 'text' && !storyText.trim()) return;
             if (storyMode !== 'text' && !storyMediaUrl) return;
+            setStoryError('');
             setStorySaving(true);
             try {
               await createStory({
@@ -1031,11 +1061,17 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
                 privacy: storyPrivacy,
               });
               onDone('home');
+            } catch (err) {
+              setStoryError(
+                extractReadableErrorMessage(err, 'Could not publish your story. Please try again.', {
+                  feature: 'create:story-publish',
+                })
+              );
             } finally {
               setStorySaving(false);
             }
           }}
-          className="max-w-2xl p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-4"
+          className="max-w-2xl p-4 sm:p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-4"
         >
           <div className="flex items-center justify-between">
             <h2 className="font-display text-base font-semibold text-white">Create 24-Hour Story</h2>
@@ -1141,6 +1177,7 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
               {storySaving ? 'Publishing...' : 'Publish Story'}
             </button>
           </div>
+          {storyError && <p className="text-xs text-rose-400">{storyError}</p>}
         </form>
       )}
 

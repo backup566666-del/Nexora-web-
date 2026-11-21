@@ -18,6 +18,7 @@ import {
   toggleStaffActiveStatus,
   updateStaffRoleAndPermissions,
 } from '../../../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../../../services/firebase/errorHandler';
 import {
   AdminPermission,
   AuditLogEntry,
@@ -145,7 +146,7 @@ export function AdminManagementPanel({ actor, myRole, users }: AdminManagementPa
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to appoint staff member.',
+        text: extractReadableErrorMessage(err, 'Unable to appoint staff member.', { feature: 'admin:staff-appoint' }),
       });
     } finally {
       setBusy(false);
@@ -176,7 +177,7 @@ export function AdminManagementPanel({ actor, myRole, users }: AdminManagementPa
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Failed to update staff permissions.',
+        text: extractReadableErrorMessage(err, 'Failed to update staff permissions.', { feature: 'admin:staff-edit' }),
       });
     } finally {
       setBusy(false);
@@ -197,7 +198,7 @@ export function AdminManagementPanel({ actor, myRole, users }: AdminManagementPa
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to change staff status.',
+        text: extractReadableErrorMessage(err, 'Unable to change staff status.', { feature: 'admin:staff-status' }),
       });
     } finally {
       setBusy(false);
@@ -214,7 +215,7 @@ export function AdminManagementPanel({ actor, myRole, users }: AdminManagementPa
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to revoke staff access.',
+        text: extractReadableErrorMessage(err, 'Unable to revoke staff access.', { feature: 'admin:staff-revoke' }),
       });
     } finally {
       setBusy(false);

@@ -257,9 +257,7 @@ export async function setFollowRelationship(
   }
   if (auth.currentUser) {
     if (auth.currentUser.uid !== currentUser.uid) {
-      throw new Error(
-        `Firestore permission guard: signed-in user (${auth.currentUser.uid}) cannot modify follow edges for ${currentUser.uid}.`
-      );
+      throw new Error('You are not authorised to perform this action.');
     }
     await ensureVerifiedTokenClaims(auth.currentUser);
   }
@@ -1710,11 +1708,13 @@ export async function markConversationRead(convId: string, uid: string): Promise
 export async function setConversationTyping(
   convId: string,
   uid: string,
-  isTyping: boolean
+  isTyping: boolean,
+  options?: { suppressTyping?: boolean }
 ): Promise<void> {
   try {
+    const effectiveTyping = options?.suppressTyping ? false : isTyping;
     await updateDoc(doc(db, 'conversations', convId), {
-      [`typingBy.${uid}`]: isTyping ? Timestamp.now() : Timestamp.fromMillis(0),
+      [`typingBy.${uid}`]: effectiveTyping ? Timestamp.now() : Timestamp.fromMillis(0),
     });
   } catch {
     // Non-blocking typing indicator

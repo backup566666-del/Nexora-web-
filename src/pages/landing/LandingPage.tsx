@@ -1,17 +1,22 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Bookmark,
+  CheckCircle2,
   Compass,
+  Download,
   Film,
+  Globe,
   Heart,
   Home,
   Lock,
   MessageCircle,
   MessageSquare,
+  MonitorSmartphone,
   Play,
   PlusSquare,
   Repeat2,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   User as UserIcon,
   Users,
@@ -19,13 +24,58 @@ import {
   Zap,
 } from 'lucide-react';
 import { NexoraLogo } from '../../components/branding/NexoraLogo';
+import { PWAInstallButton } from '../../components/common/PWAInstallButton';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { VerifiedBadge } from '../../components/common/VerifiedBadge';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { submitContactSubmission } from '../../services/firebase/socialService';
 import { ContactSubmission } from '../../types/nexora';
 
 interface LandingPageProps {
   onOpenAuth: (mode: 'login' | 'register') => void;
+}
+
+interface AndroidReleaseInfo {
+  available: boolean;
+  source: 'external_https' | 'self_hosted' | 'none';
+  downloadUrl: string | null;
+  packageId: string;
+  versionName: string;
+  fileSizeBytes: number | null;
+  minAndroidVersion: string;
+  targetSdk: number;
+  assetLinksConfigured: boolean;
+  message: string;
+}
+
+const DEFAULT_ANDROID_RELEASE: AndroidReleaseInfo = {
+  available: false,
+  source: 'none',
+  downloadUrl: null,
+  packageId: 'social.nexora.app',
+  versionName: '1.0.0',
+  fileSizeBytes: null,
+  minAndroidVersion: 'Android 7.0+ (API 24)',
+  targetSdk: 35,
+  assetLinksConfigured: false,
+  message: 'Signed Android APK build pending.',
+};
+
+function resolveSafeApkUrl(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (trimmed.startsWith('/downloads/') && trimmed.endsWith('.apk')) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'https:') {
+      return parsed.toString();
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 type PhoneTab = 'home' | 'vibes' | 'chat' | 'spaces' | 'profile';
@@ -55,13 +105,49 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
   const [supportMessage, setSupportMessage] = useState('');
   const [supportSending, setSupportSending] = useState(false);
   const [supportFeedback, setSupportFeedback] = useState('');
+  const [androidRelease, setAndroidRelease] = useState<AndroidReleaseInfo>(DEFAULT_ANDROID_RELEASE);
 
-  const handleNavClick = (target: 'home' | 'features' | 'spaces' | 'creators' | 'plans' | 'support') => {
+  useEffect(() => {
+    let active = true;
+    fetch('/api/app/android-release', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: AndroidReleaseInfo | null) => {
+        if (active && data && typeof data.available === 'boolean') {
+          setAndroidRelease(data);
+        }
+      })
+      .catch(() => {
+        // Keep conservative coming-soon fallback if release metadata endpoint is unavailable
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const devicePlatform = useMemo<'android' | 'ios' | 'desktop'>(() => {
+    if (typeof navigator === 'undefined') return 'desktop';
+    const ua = navigator.userAgent || '';
+    if (/android/i.test(ua)) return 'android';
+    if (/iPad|iPhone|iPod/.test(ua)) return 'ios';
+    return 'desktop';
+  }, []);
+
+  const safeApkDownloadUrl = useMemo(
+    () => (androidRelease.available ? resolveSafeApkUrl(androidRelease.downloadUrl) : null),
+    [androidRelease]
+  );
+  const isApkReady = Boolean(androidRelease.available && safeApkDownloadUrl);
+
+  const handleNavClick = (
+    target: 'home' | 'features' | 'spaces' | 'creators' | 'get-app' | 'plans' | 'support'
+  ) => {
     if (target === 'home') {
       setPhoneTab('home');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } else if (target === 'features') {
       document.getElementById('feature-shortcuts')?.scrollIntoView({ behavior: 'smooth' });
+    } else if (target === 'get-app') {
+      document.getElementById('get-nexora-app')?.scrollIntoView({ behavior: 'smooth' });
     } else if (target === 'spaces') {
       setPhoneTab('spaces');
     } else if (target === 'creators') {
@@ -83,7 +169,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
 
       {/* 1. TOP HEADER */}
       <header className="relative z-30 border-b border-white/[0.08] bg-[#06050B]/80 backdrop-blur-xl">
-        <div className="max-w-[1440px] mx-auto px-6 lg:px-12 h-20 flex items-center justify-between gap-8">
+        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-12 h-16 sm:h-20 flex items-center justify-between gap-3 sm:gap-6">
           {/* Far Left: Nexora Logo */}
           <button
             type="button"
@@ -96,7 +182,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           {/* Centre: Navigation Links */}
           <nav
             aria-label="Primary navigation"
-            className="hidden lg:flex items-center gap-8 text-sm font-medium text-[#CBD5E1]"
+            className="hidden lg:flex items-center gap-7 text-sm font-medium text-[#CBD5E1]"
           >
             <button
               type="button"
@@ -128,6 +214,13 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
             </button>
             <button
               type="button"
+              onClick={() => handleNavClick('get-app')}
+              className="hover:text-white transition-colors whitespace-nowrap shrink-0 text-[#D8B4FE]"
+            >
+              Get App
+            </button>
+            <button
+              type="button"
               onClick={() => handleNavClick('plans')}
               className="hover:text-white transition-colors whitespace-nowrap shrink-0"
             >
@@ -142,19 +235,26 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
             </button>
           </nav>
 
-          {/* Right: Sign In & Get Started */}
-          <div className="flex items-center gap-3 shrink-0">
+          {/* Right: Sign In, Get App (mobile quick jump) & Get Started */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleNavClick('get-app')}
+              className="lg:hidden px-2.5 py-2 text-xs font-medium text-[#D8B4FE] hover:text-white transition-colors whitespace-nowrap shrink-0"
+            >
+              Get App
+            </button>
             <button
               type="button"
               onClick={() => onOpenAuth('login')}
-              className="px-4 py-2 text-sm font-medium text-[#E2E8F0] hover:text-white transition-colors whitespace-nowrap shrink-0"
+              className="px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-[#E2E8F0] hover:text-white transition-colors whitespace-nowrap shrink-0"
             >
               Sign In
             </button>
             <button
               type="button"
               onClick={() => onOpenAuth('register')}
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] hover:from-[#A855F7] hover:to-[#7C3AED] text-white text-sm font-semibold transition-all whitespace-nowrap shrink-0 shadow-[0_0_28px_rgba(139,92,246,0.4)]"
+              className="px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-xl bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] hover:from-[#A855F7] hover:to-[#7C3AED] text-white text-xs sm:text-sm font-semibold transition-all whitespace-nowrap shrink-0 shadow-[0_0_28px_rgba(139,92,246,0.4)]"
             >
               Get Started
             </button>
@@ -180,21 +280,59 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
                 Vibes, private messaging, and visual Spaces inside one focused experience.
               </p>
 
-              <div className="flex flex-wrap items-center gap-4 pt-1">
+              <div className="flex flex-wrap items-center gap-3 pt-1">
                 <button
                   type="button"
                   onClick={() => onOpenAuth('register')}
-                  className="px-7 py-3.5 rounded-xl bg-gradient-to-r from-[#8B5CF6] via-[#7C3AED] to-[#5B21B6] hover:from-[#A855F7] hover:to-[#6D28D9] text-white text-sm font-semibold transition-all shadow-[0_10px_34px_rgba(124,58,237,0.42)] whitespace-nowrap"
+                  className="px-6 py-3.5 rounded-xl bg-gradient-to-r from-[#8B5CF6] via-[#7C3AED] to-[#5B21B6] hover:from-[#A855F7] hover:to-[#6D28D9] text-white text-sm font-semibold transition-all shadow-[0_10px_34px_rgba(124,58,237,0.42)] whitespace-nowrap"
                 >
                   Get Started Free
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveModal('demo')}
-                  className="inline-flex items-center gap-2.5 px-6 py-3.5 rounded-xl border border-white/15 bg-white/[0.04] hover:bg-white/[0.09] text-white text-sm font-medium transition-colors whitespace-nowrap"
+                  onClick={() => onOpenAuth('login')}
+                  className="px-5 py-3.5 rounded-xl border border-white/15 bg-white/[0.04] hover:bg-white/[0.09] text-white text-sm font-semibold transition-colors whitespace-nowrap"
                 >
-                  <Play size={15} className="text-[#C084FC]" />
-                  Watch Demo
+                  Sign In
+                </button>
+                {isApkReady && safeApkDownloadUrl ? (
+                  <a
+                    href={safeApkDownloadUrl}
+                    download
+                    className="inline-flex items-center gap-2 px-5 py-3.5 rounded-xl border border-[#A855F7]/50 bg-[#7C3AED]/20 hover:bg-[#7C3AED]/30 text-white text-sm font-semibold transition-colors whitespace-nowrap"
+                  >
+                    <Download size={15} className="text-[#D8B4FE]" />
+                    <span>Get the Nexora App</span>
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    disabled
+                    aria-disabled="true"
+                    title="Signed Android APK release is pending cloud build"
+                    className="inline-flex items-center gap-2 px-5 py-3.5 rounded-xl border border-white/10 bg-white/[0.02] text-[#94A3B8] text-sm font-medium opacity-70 cursor-not-allowed whitespace-nowrap"
+                  >
+                    <Smartphone size={15} className="text-[#94A3B8]" />
+                    <span>Get the Nexora App · APK Coming Soon</span>
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-5 text-xs text-[#CBD5E1]">
+                <button
+                  type="button"
+                  onClick={() => setActiveModal('demo')}
+                  className="inline-flex items-center gap-1.5 hover:text-white transition-colors"
+                >
+                  <Play size={13} className="text-[#C084FC]" />
+                  <span>Watch Demo</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleNavClick('get-app')}
+                  className="inline-flex items-center gap-1.5 text-[#D8B4FE] hover:text-white transition-colors"
+                >
+                  <MonitorSmartphone size={13} />
+                  <span>Android, iPhone &amp; Desktop options</span>
                 </button>
               </div>
             </div>
@@ -521,6 +659,189 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
           </div>
         </div>
 
+        {/* GET THE NEXORA APP — MULTI-DEVICE DOWNLOAD & ACCESS SECTION */}
+        <section
+          id="get-nexora-app"
+          aria-labelledby="get-nexora-app-heading"
+          className="pt-8 border-t border-white/[0.08] space-y-6"
+        >
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+            <div className="space-y-1.5 max-w-2xl">
+              <h2
+                id="get-nexora-app-heading"
+                className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight"
+              >
+                Get the Nexora App
+              </h2>
+              <p className="text-sm text-[#CBD5E1] leading-relaxed">
+                Access Nexora cleanly across Android, iPhone, iPad, and desktop computers. Every
+                platform connects to the exact same live account, messages, Spaces, and profile.
+              </p>
+            </div>
+            <p className="text-xs text-[#94A3B8]">
+              Detected device:{' '}
+              <span className="text-white font-medium capitalize">
+                {devicePlatform === 'ios'
+                  ? 'iPhone / iPad'
+                  : devicePlatform === 'android'
+                  ? 'Android'
+                  : 'Desktop / Web'}
+              </span>
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Android APK Card */}
+            <div
+              className={`rounded-2xl p-6 bg-[#0B0914]/90 border space-y-5 transition-colors ${
+                devicePlatform === 'android'
+                  ? 'border-[#A855F7]/55 shadow-[0_0_40px_rgba(124,58,237,0.16)]'
+                  : 'border-white/[0.09]'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/40 flex items-center justify-center shrink-0">
+                    <Smartphone size={20} className="text-[#C084FC]" />
+                  </div>
+                  <div>
+                    <h3 className="font-display text-base font-bold text-white">
+                      Nexora for Android (APK)
+                    </h3>
+                    <p className="text-xs text-[#94A3B8] font-mono-tabular">
+                      {androidRelease.packageId} · {androidRelease.minAndroidVersion}
+                    </p>
+                  </div>
+                </div>
+                <span
+                  className={`text-xs font-medium px-2.5 py-1 rounded-lg border shrink-0 ${
+                    isApkReady
+                      ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-300'
+                      : 'bg-white/[0.04] border-white/10 text-[#CBD5E1]'
+                  }`}
+                >
+                  {isApkReady ? `v${androidRelease.versionName} Ready` : 'Coming Soon'}
+                </span>
+              </div>
+
+              <p className="text-xs text-[#CBD5E1] leading-relaxed">
+                Install the signed Nexora Android package for a full-screen home-screen experience
+                powered by Trusted Web Activity (Android API 35).
+              </p>
+
+              {isApkReady && safeApkDownloadUrl ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <a
+                    href={safeApkDownloadUrl}
+                    download
+                    className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] hover:from-[#A855F7] hover:to-[#7C3AED] text-white text-xs sm:text-sm font-semibold transition-all shadow-[0_6px_24px_rgba(124,58,237,0.35)]"
+                  >
+                    <Download size={15} />
+                    <span>
+                      Download Nexora APK (v{androidRelease.versionName}
+                      {androidRelease.fileSizeBytes
+                        ? ` · ${(androidRelease.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`
+                        : ''}
+                      )
+                    </span>
+                  </a>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  <button
+                    type="button"
+                    disabled
+                    aria-disabled="true"
+                    className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl border border-white/10 bg-white/[0.03] text-[#94A3B8] text-xs sm:text-sm font-medium opacity-75 cursor-not-allowed"
+                  >
+                    <Download size={15} />
+                    <span>Download Android APK · Coming Soon</span>
+                  </button>
+                  <p className="text-[11px] text-[#94A3B8] leading-relaxed">
+                    The APK download unlocks automatically as soon as the signed Android release is
+                    built and hosted. In the meantime, Android Chrome users can use{' '}
+                    <span className="text-white font-medium">Install App</span> or{' '}
+                    <span className="text-white font-medium">Continue on Website</span>.
+                  </p>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-white/[0.07] space-y-2">
+                <p className="text-xs font-semibold text-white">Android APK Install Steps</p>
+                <ol className="space-y-1.5 text-xs text-[#CBD5E1] list-decimal list-inside leading-relaxed">
+                  <li>Tap <strong className="text-white">Download Nexora APK</strong> once released.</li>
+                  <li>Open the <code className="text-[#D8B4FE]">nexora.apk</code> file from Chrome Downloads or Files.</li>
+                  <li>If Android asks for permission, enable installs from your browser, then tap <strong className="text-white">Install</strong>.</li>
+                  <li>Launch Nexora from your home screen and sign in with your account.</li>
+                </ol>
+              </div>
+            </div>
+
+            {/* iPhone, iPad & Desktop Website + PWA Card */}
+            <div
+              className={`rounded-2xl p-6 bg-[#0B0914]/90 border space-y-5 transition-colors ${
+                devicePlatform === 'ios'
+                  ? 'border-[#A855F7]/55 shadow-[0_0_40px_rgba(124,58,237,0.16)]'
+                  : 'border-white/[0.09]'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/40 flex items-center justify-center shrink-0">
+                    <Globe size={20} className="text-[#C084FC]" />
+                  </div>
+                  <div>
+                    <h3 className="font-display text-base font-bold text-white">
+                      iPhone, iPad &amp; Desktop (Website + Web App)
+                    </h3>
+                    <p className="text-xs text-[#94A3B8]">
+                      Safari · Chrome · Edge · Instant browser &amp; Home Screen app
+                    </p>
+                  </div>
+                </div>
+                <span className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-lg border bg-emerald-500/15 border-emerald-500/35 text-emerald-300 shrink-0">
+                  <CheckCircle2 size={12} />
+                  Live Now
+                </span>
+              </div>
+
+              <p className="text-xs text-[#CBD5E1] leading-relaxed">
+                On iOS, macOS, Windows, or any Android browser, you can use the full Nexora web
+                platform right away or install it to your Home Screen / Dock as an app.
+              </p>
+
+              <div className="space-y-3">
+                <PWAInstallButton variant="card" />
+                <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => onOpenAuth('login')}
+                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#8B5CF6] to-[#6D28D9] hover:from-[#A855F7] hover:to-[#7C3AED] text-xs font-semibold text-white transition-all"
+                  >
+                    Sign In on Website
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenAuth('register')}
+                    className="px-4 py-2.5 rounded-xl border border-white/15 bg-white/[0.04] hover:bg-white/[0.08] text-xs font-semibold text-white transition-colors"
+                  >
+                    Create Free Account
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-white/[0.07] space-y-2">
+                <p className="text-xs font-semibold text-white">Why Website &amp; App Work Together</p>
+                <ul className="space-y-1.5 text-xs text-[#CBD5E1] leading-relaxed">
+                  <li>• Identical real-time feed, Vibes, private chat, virtual gifts, and Spaces.</li>
+                  <li>• No separate account needed — sign in once across web and mobile.</li>
+                  <li>• Responsive layout tuned for phones, tablets, laptops, and desktops.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* 6. BOTTOM BENEFITS STRIP */}
         <section className="pt-4 border-t border-white/[0.08]">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -702,7 +1023,9 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
                   setSupportFeedback('Ticket submitted. Our Nexora Support team will respond shortly.');
                 } catch (err) {
                   setSupportFeedback(
-                    err instanceof Error ? err.message : 'Unable to send support request.'
+                    extractReadableErrorMessage(err, 'Unable to send support request right now.', {
+                      feature: 'landing:support',
+                    })
                   );
                 } finally {
                   setSupportSending(false);

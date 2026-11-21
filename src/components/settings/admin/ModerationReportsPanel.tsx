@@ -21,6 +21,7 @@ import {
   suspendOrRestoreUser,
   updateContactSubmission,
 } from '../../../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../../../services/firebase/errorHandler';
 import {
   AuditLogEntry,
   ContactSubmission,
@@ -167,7 +168,9 @@ export function ModerationReportsPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to resolve report.',
+        text: extractReadableErrorMessage(err, 'Unable to resolve report.', {
+          feature: 'admin:moderation',
+        }),
       });
     } finally {
       setBusy(false);
@@ -204,7 +207,9 @@ export function ModerationReportsPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to delete reported content.',
+        text: extractReadableErrorMessage(err, 'Unable to delete reported content.', {
+          feature: 'admin:moderation',
+        }),
       });
     } finally {
       setBusy(false);
@@ -231,7 +236,9 @@ export function ModerationReportsPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to clear post tags/collaborations.',
+        text: extractReadableErrorMessage(err, 'Unable to clear post tags/collaborations.', {
+          feature: 'admin:moderation',
+        }),
       });
     } finally {
       setBusy(false);
@@ -259,7 +266,9 @@ export function ModerationReportsPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to change account suspension state.',
+        text: extractReadableErrorMessage(err, 'Unable to change account suspension state.', {
+          feature: 'admin:moderation',
+        }),
       });
     } finally {
       setBusy(false);
@@ -287,7 +296,9 @@ export function ModerationReportsPanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to update support ticket.',
+        text: extractReadableErrorMessage(err, 'Unable to update support ticket.', {
+          feature: 'admin:support-tickets',
+        }),
       });
     } finally {
       setBusy(false);

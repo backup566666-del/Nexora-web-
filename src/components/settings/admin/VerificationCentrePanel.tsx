@@ -20,6 +20,7 @@ import {
   subscribeAllVerificationRequests,
   subscribeBadgeConfigs,
 } from '../../../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../../../services/firebase/errorHandler';
 import {
   BadgeConfig,
   PlatformRole,
@@ -120,7 +121,7 @@ export function VerificationCentrePanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to save badges.',
+        text: extractReadableErrorMessage(err, 'Unable to save badges.', { feature: 'admin:badges' }),
       });
     } finally {
       setBusy(false);
@@ -144,7 +145,7 @@ export function VerificationCentrePanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to revoke badges.',
+        text: extractReadableErrorMessage(err, 'Unable to revoke badges.', { feature: 'admin:badges' }),
       });
     } finally {
       setBusy(false);
@@ -172,7 +173,7 @@ export function VerificationCentrePanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to submit review decision.',
+        text: extractReadableErrorMessage(err, 'Unable to submit review decision.', { feature: 'admin:verification-review' }),
       });
     } finally {
       setBusy(false);
@@ -195,7 +196,7 @@ export function VerificationCentrePanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to update badge criteria.',
+        text: extractReadableErrorMessage(err, 'Unable to update badge criteria.', { feature: 'admin:badge-config' }),
       });
     } finally {
       setBusy(false);
@@ -220,7 +221,7 @@ export function VerificationCentrePanel({
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Achievement evaluation failed.',
+        text: extractReadableErrorMessage(err, 'Achievement evaluation failed.', { feature: 'admin:achievements' }),
       });
     } finally {
       setBusy(false);

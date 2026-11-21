@@ -14,6 +14,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { PresenceBadge } from '../../components/common/PresenceBadge';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { PostCard } from '../../features/posts/PostCard';
@@ -85,7 +86,7 @@ export function HomePage({
   onNavigate,
   onOpenVibes,
 }: HomePageProps) {
-  const { profile, privateInfo, platformConfig, getUserBadges } = useAuth();
+  const { profile, privateInfo, platformConfig, adminPresenceMap, getUserBadges } = useAuth();
   const [filter, setFilter] = useState<
     'all' | 'trending' | 'media' | 'discussions' | 'polls'
   >('all');
@@ -123,6 +124,14 @@ export function HomePage({
     [unreadNotifications]
   );
 
+  const getCreatorBadgeStatus = (u: UserProfile) => {
+    const adminRec = adminPresenceMap[u.uid];
+    if (adminRec) {
+      return adminRec.status === 'offline' ? null : adminRec.status;
+    }
+    return isUserOnlineNow(u) ? 'online' : null;
+  };
+
   const recommendedUsers = useMemo(() => {
     if (!profile) return [];
     return users
@@ -133,13 +142,16 @@ export function HomePage({
           !blockedSet.has(u.uid)
       )
       .sort((a, b) => {
-        const onlineDiff =
-          Number(isUserOnlineNow(b)) - Number(isUserOnlineNow(a));
+        const aAdmin = adminPresenceMap[a.uid];
+        const bAdmin = adminPresenceMap[b.uid];
+        const aOnline = aAdmin ? aAdmin.status !== 'offline' : isUserOnlineNow(a);
+        const bOnline = bAdmin ? bAdmin.status !== 'offline' : isUserOnlineNow(b);
+        const onlineDiff = Number(bOnline) - Number(aOnline);
         if (onlineDiff !== 0) return onlineDiff;
         return (b.followersCount || 0) - (a.followersCount || 0);
       })
       .slice(0, 8);
-  }, [users, profile, blockedSet]);
+  }, [users, profile, blockedSet, adminPresenceMap]);
 
   const suggestedSpaces = useMemo(() => {
     return spaces
@@ -444,7 +456,7 @@ export function HomePage({
             {recommendedUsers.map((u) => {
               const isFollowed = Boolean(followedUids[u.uid]);
               const isBusy = Boolean(followBusyUids[u.uid]);
-              const online = isUserOnlineNow(u);
+              const presenceStatus = getCreatorBadgeStatus(u);
               return (
                 <div
                   key={u.uid}
@@ -461,8 +473,10 @@ export function HomePage({
                         alt={u.displayName}
                         className="w-10 h-10 rounded-full object-cover ring-1 ring-[#8B5CF6]/35"
                       />
-                      {online && (
-                        <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-[#08070F]" />
+                      {presenceStatus && (
+                        <span className="absolute -bottom-0.5 -right-0.5">
+                          <PresenceBadge status={presenceStatus} size="xs" />
+                        </span>
                       )}
                     </div>
                     <div className="min-w-0">

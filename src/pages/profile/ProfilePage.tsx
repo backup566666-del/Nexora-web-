@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { resolveAssetUrl } from '../../assets/defaultAssets';
+import { AdminPresenceSelector, PresenceBadge } from '../../components/common/PresenceBadge';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip, VerifiedBadge } from '../../components/common/VerifiedBadge';
 import { GiftPickerModal } from '../../components/gifts/GiftPickerModal';
@@ -82,9 +83,15 @@ export function ProfilePage({
     user: firebaseUser,
     profile: currentUser,
     privateInfo,
+    myRole,
+    myAdminManualMode,
+    myAdminSelfStatus,
     getUserBadges,
+    getAdminEffectiveStatus,
+    setMyAdminStatus,
     refreshUserAndProfile,
   } = useAuth();
+  const [presenceBusy, setPresenceBusy] = useState(false);
   const [viewedProfile, setViewedProfile] = useState<UserProfile | null>(null);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followLoading, setFollowLoading] = useState(false);
@@ -282,6 +289,13 @@ export function ProfilePage({
   if (!currentUser || !activeProfile) return null;
 
   const activeBadges = getUserBadges(activeProfile.uid, activeProfile.verified);
+  const canSwitchOwnPresence = isOwnProfile && Boolean(myRole && myRole.active);
+  const publicAdminStatus = getAdminEffectiveStatus(activeProfile.uid);
+  const viewedAdminBadgeStatus = canSwitchOwnPresence
+    ? myAdminSelfStatus
+    : publicAdminStatus && publicAdminStatus !== 'offline'
+    ? publicAdminStatus
+    : null;
 
   const isBlocked = (privateInfo?.blockedUserIds || []).includes(activeProfile.uid);
   const avatarInitial = (activeProfile.displayName || activeProfile.username || 'N')
@@ -516,6 +530,14 @@ export function ProfilePage({
                     {activeProfile.displayName}
                   </h1>
                   <BadgeStrip badges={activeBadges} size={20} max={6} />
+                  {viewedAdminBadgeStatus && (
+                    <PresenceBadge
+                      status={viewedAdminBadgeStatus}
+                      size="md"
+                      showOffline={canSwitchOwnPresence}
+                      showLabel
+                    />
+                  )}
                 </div>
 
                 <p className="text-sm font-medium text-[#A855F7]">@{activeProfile.username}</p>
@@ -588,14 +610,14 @@ export function ProfilePage({
                     <button
                       type="button"
                       onClick={openEditProfileModal}
-                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] hover:brightness-110 text-xs font-semibold text-white shadow-[0_4px_18px_rgba(124,58,237,0.4)] transition-all whitespace-nowrap"
+                      className="inline-flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] hover:brightness-110 text-xs font-semibold text-white shadow-[0_4px_18px_rgba(124,58,237,0.4)] transition-all whitespace-nowrap"
                     >
                       <Edit3 size={14} /> Edit Profile
                     </button>
                     <button
                       type="button"
                       onClick={handleShareProfile}
-                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-[#8B5CF6]/25 bg-[#0D0B16] hover:border-[#8B5CF6]/60 text-xs font-semibold text-white transition-colors whitespace-nowrap"
+                      className="inline-flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl border border-[#8B5CF6]/25 bg-[#0D0B16] hover:border-[#8B5CF6]/60 text-xs font-semibold text-white transition-colors whitespace-nowrap"
                     >
                       <Share2 size={14} /> Share Profile
                     </button>
@@ -675,6 +697,28 @@ export function ProfilePage({
                   </>
                 )}
               </div>
+
+              {canSwitchOwnPresence && (
+                <div className="rounded-2xl bg-[#0D0B16]/90 border border-[#8B5CF6]/25 p-3.5">
+                  <AdminPresenceSelector
+                    currentMode={myAdminManualMode}
+                    effectiveStatus={myAdminSelfStatus}
+                    busy={presenceBusy}
+                    compact
+                    onChange={async (mode) => {
+                      setPresenceBusy(true);
+                      try {
+                        await setMyAdminStatus(mode);
+                      } catch (err) {
+                        setShareToast(extractReadableErrorMessage(err, 'Unable to update status.'));
+                        setTimeout(() => setShareToast(''), 3000);
+                      } finally {
+                        setPresenceBusy(false);
+                      }
+                    }}
+                  />
+                </div>
+              )}
 
               {shareToast && (
                 <p className="inline-flex items-center gap-1.5 text-xs text-[#C084FC]">

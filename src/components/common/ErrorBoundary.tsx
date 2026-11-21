@@ -1,9 +1,9 @@
 import React from 'react';
 import { NexoraLogo } from '../branding/NexoraLogo';
+import { recordErrorDiagnostic } from '../../services/firebase/errorHandler';
 
 interface ErrorBoundaryState {
   hasError: boolean;
-  errorMessage: string;
 }
 
 export class ErrorBoundary extends React.Component<
@@ -12,18 +12,25 @@ export class ErrorBoundary extends React.Component<
 > {
   constructor(props: { children: React.ReactNode }) {
     super(props);
-    this.state = { hasError: false, errorMessage: '' };
+    this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(): ErrorBoundaryState {
     return {
       hasError: true,
-      errorMessage: error?.message || 'An unexpected application error occurred.',
     };
   }
 
   override componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error('Nexora ErrorBoundary caught:', error, info);
+    console.error('Nexora ErrorBoundary caught:', error?.name || 'Error');
+    void recordErrorDiagnostic({
+      category: 'runtime',
+      feature: 'ui:error-boundary',
+      err: {
+        message: error?.message || 'UI render failure',
+        stack: `${error?.stack || ''}\n${info?.componentStack || ''}`,
+      },
+    });
   }
 
   override render() {
@@ -37,7 +44,7 @@ export class ErrorBoundary extends React.Component<
                 Something interrupted this view
               </h1>
               <p className="text-sm text-[#94A3B8] leading-relaxed">
-                {this.state.errorMessage}
+                We ran into an unexpected issue loading this screen. Reload Nexora to get back to where you left off.
               </p>
             </div>
             <button

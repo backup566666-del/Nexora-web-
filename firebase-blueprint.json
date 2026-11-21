@@ -611,6 +611,50 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["name", "email", "category", "subject", "message", "status", "createdAt", "updatedAt"]
+    },
+    "AdminPresencePublic": {
+      "title": "AdminPresencePublic",
+      "description": "Public Discord-inspired presence state for Nexora owner and active staff (never exposes invisible).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "role": { "type": "string", "enum": ["owner", "administrator", "moderator", "verification_reviewer", "support"] },
+        "status": { "type": "string", "enum": ["online", "idle", "dnd", "offline"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "role", "status", "updatedAt"]
+    },
+    "AdminPresencePrivate": {
+      "title": "AdminPresencePrivate",
+      "description": "Restricted multi-device sessions and manual presence mode (including invisible) for staff only.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "manualMode": { "type": "string", "enum": ["auto", "idle", "dnd", "invisible"] },
+        "sessions": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "manualMode", "sessions", "updatedAt"]
+    },
+    "ErrorDiagnostic": {
+      "title": "ErrorDiagnostic",
+      "description": "Redacted operational error diagnostics restricted exclusively to Owner and authorized administrators.",
+      "type": "object",
+      "properties": {
+        "category": { "type": "string", "enum": ["upload", "permission", "network", "auth", "validation", "runtime", "unknown"] },
+        "feature": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "requestId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "httpStatus": { "type": "number" },
+        "errorCode": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "diagnosticMessage": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "redactedStack": { "type": "string", "maxLength": 600 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "resolved": { "type": "boolean" },
+        "resolvedBy": { "type": "string", "maxLength": 128 },
+        "resolvedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["category", "feature", "requestId", "httpStatus", "errorCode", "diagnosticMessage", "actorUid", "resolved", "createdAt"]
     }
   },
   "firestore": {
@@ -753,6 +797,18 @@
     "/contact_submissions/{submissionId}": {
       "schema": { "$ref": "#/entities/ContactSubmission" },
       "description": "Support tickets, verification questions, and moderation appeals."
+    },
+    "/admin_presence/{userId}": {
+      "schema": { "$ref": "#/entities/AdminPresencePublic" },
+      "description": "Public effective presence indicator for verified Nexora owner and staff."
+    },
+    "/admin_presence_private/{userId}": {
+      "schema": { "$ref": "#/entities/AdminPresencePrivate" },
+      "description": "Private multi-device session map and manual override mode restricted to staff owner and manage_admins."
+    },
+    "/error_diagnostics/{diagId}": {
+      "schema": { "$ref": "#/entities/ErrorDiagnostic" },
+      "description": "Private redacted error diagnostics accessible only to Owner and authorized administrators."
     }
   }
 }

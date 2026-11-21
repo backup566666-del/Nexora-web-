@@ -47,6 +47,7 @@ function NexoraAppContent() {
     profile,
     myRole,
     platformConfig,
+    isAdminDndActive,
     loading,
     authReady,
     emailVerified,
@@ -106,7 +107,9 @@ function NexoraAppContent() {
       );
       if (freshGift) {
         seenGiftNotifIdsRef.current.add(freshGift.id);
-        setIncomingGiftToast(freshGift);
+        if (!isAdminDndActive) {
+          setIncomingGiftToast(freshGift);
+        }
       }
     });
     const u6 = subscribeSavedPostIds(user.uid, setSavedPostIds);
@@ -121,7 +124,7 @@ function NexoraAppContent() {
       u6();
       u7();
     };
-  }, [authReady, user?.uid, emailVerified, profile?.uid]);
+  }, [authReady, user?.uid, emailVerified, profile?.uid, isAdminDndActive]);
 
   useEffect(() => {
     if (!incomingGiftToast) return;

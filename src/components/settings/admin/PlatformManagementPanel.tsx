@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Globe, Save, Sliders, Wrench } from 'lucide-react';
 import { useAuth } from '../../../hooks/useAuth';
 import { savePlatformConfig } from '../../../services/firebase/adminService';
+import { extractReadableErrorMessage } from '../../../services/firebase/errorHandler';
 import { PlatformConfig, PlatformRole, UserProfile } from '../../../types/nexora';
 
 interface PlatformManagementPanelProps {
@@ -70,7 +71,7 @@ export function PlatformManagementPanel({ actor, myRole }: PlatformManagementPan
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Unable to save platform configuration.',
+        text: extractReadableErrorMessage(err, 'Unable to save platform configuration.', { feature: 'admin:platform-config' }),
       });
     } finally {
       setBusy(false);

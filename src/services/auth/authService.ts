@@ -23,7 +23,13 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
-import { extractReadableErrorMessage, handleFirestoreError, OperationType } from '../firebase/errorHandler';
+import {
+  extractReadableErrorMessage,
+  handleFirestoreError,
+  OperationType,
+  recordErrorDiagnostic,
+} from '../firebase/errorHandler';
+import { clearDeviceSession } from '../firebase/presenceService';
 import { dispatchDualNotification } from '../notifications/notificationDispatcher';
 import { PrivacySettings, UserPrivate, UserProfile } from '../../types/nexora';
 import {
@@ -93,20 +99,17 @@ export async function ensureVerifiedTokenClaims(user: User, forceRefresh = false
 
 export function mapAuthErrorMessage(err: unknown): string {
   const code = (err as { code?: string })?.code ?? '';
+  void recordErrorDiagnostic({ feature: 'auth', err, category: 'auth', errorCode: code || 'auth/error' });
+
   switch (code) {
     case 'auth/operation-not-allowed':
-      return 'This sign-in provider is not currently enabled in Firebase Console (Authentication -> Sign-in method).';
-    case 'auth/unauthorized-domain': {
-      const host =
-        typeof window !== 'undefined' && window.location?.hostname
-          ? ` (${window.location.hostname})`
-          : '';
-      return `This domain${host} is not allowlisted in Firebase Authentication Authorized Domains. Add the exact hostname under Authentication -> Settings -> Authorized domains.`;
-    }
+      return 'This sign-in method is currently unavailable. Please try another option.';
+    case 'auth/unauthorized-domain':
+      return 'Sign-in is temporarily unavailable from this address. Please contact support if this continues.';
     case 'auth/popup-blocked':
-      return 'Your browser blocked the Google sign-in popup. Please allow popups for this site and click Continue with Google again.';
+      return 'Your browser blocked the Google sign-in window. Please allow popups and try again.';
     case 'auth/cancelled-popup-request':
-      return 'Google sign-in popup was superseded by another request. Please try again.';
+      return 'Google sign-in was cancelled before finishing. Please try again.';
     case 'auth/account-exists-with-different-credential':
       return 'An account already exists with this email using a different sign-in method. Sign in with your original method first.';
     case 'auth/email-already-in-use':
@@ -116,19 +119,26 @@ export function mapAuthErrorMessage(err: unknown): string {
     case 'auth/weak-password':
       return 'Password must be at least 6 characters long.';
     case 'auth/user-disabled':
-      return 'This account has been disabled in Firebase Authentication.';
+      return 'This account has been suspended or disabled. Please contact Nexora support.';
     case 'auth/user-not-found':
     case 'auth/wrong-password':
     case 'auth/invalid-credential':
-      return 'Incorrect email or password. If you originally registered with Google, click "Continue with Google" above or use "Forgot password?" to set a password.';
+      return 'Incorrect email or password. If you joined with Google, continue with Google or use Forgot password.';
     case 'auth/popup-closed-by-user':
       return 'Google sign-in window was closed before completing authorization.';
+    case 'auth/id-token-expired':
+    case 'auth/user-token-expired':
+    case 'auth/requires-recent-login':
+      return 'Your session has expired. Please sign in again.';
     case 'auth/network-request-failed':
-      return 'Network error while contacting authentication servers. Please check your connection and retry.';
+      return 'Check your internet connection and try again.';
     case 'auth/too-many-requests':
-      return 'Too many attempts. Please wait a moment before trying again.';
+      return 'Too many attempts right now. Please wait a moment and try again.';
     default:
-      return extractReadableErrorMessage(err, 'Authentication failed. Please try again.');
+      return extractReadableErrorMessage(err, 'Sign-in could not be completed. Please try again.', {
+        feature: 'auth',
+        recordDiagnostic: false,
+      });
   }
 }
 
@@ -248,13 +258,18 @@ export async function sendPasswordReset(email: string, actor?: UserProfile | nul
 export async function logoutUser(uid?: string): Promise<void> {
   if (uid && auth.currentUser?.emailVerified) {
     try {
-      await updateDoc(doc(db, 'users', uid), {
-        isOnline: false,
-        lastActiveAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      await clearDeviceSession(uid);
     } catch {
-      // Proceed with signOut even if offline status update fails
+      // Fallback to direct user offline marker if presence doc not present
+      try {
+        await updateDoc(doc(db, 'users', uid), {
+          isOnline: false,
+          lastActiveAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } catch {
+        // Proceed with signOut even if offline status update fails
+      }
     }
   }
   await signOut(auth);
@@ -463,7 +478,7 @@ export async function updateUserProfileFields(
 ): Promise<void> {
   if (auth.currentUser) {
     if (auth.currentUser.uid !== uid) {
-      throw new Error(`Firestore permission guard: signed-in user (${auth.currentUser.uid}) cannot modify profile users/${uid}.`);
+      throw new Error('You are not authorised to perform this action.');
     }
     await ensureVerifiedTokenClaims(auth.currentUser);
   }

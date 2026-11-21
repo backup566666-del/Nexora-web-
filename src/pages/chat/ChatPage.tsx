@@ -28,6 +28,11 @@ import {
   Video,
   X,
 } from 'lucide-react';
+import {
+  AnyPresenceDisplayStatus,
+  PresenceBadge,
+  TypingWithPresence,
+} from '../../components/common/PresenceBadge';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
@@ -73,7 +78,7 @@ interface CallLogEntry {
 const QUICK_EMOJIS = ['💜', '🔥', '👏', '😂', '😮', '🙌', '✨', '👍'];
 
 export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatPageProps) {
-  const { profile, privateInfo, getUserBadges } = useAuth();
+  const { profile, privateInfo, adminPresenceMap, isAdminInvisibleActive, getUserBadges, getAdminEffectiveStatus } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConvId, setSelectedConvId] = useState<string | null>(initialConvId || null);
   const [mobileShowThread, setMobileShowThread] = useState<boolean>(Boolean(initialConvId));
@@ -195,6 +200,14 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
     return () => window.clearInterval(timer);
   }, [recordingVoice]);
 
+  // Clear active conversation typing immediately when admin switches to Invisible
+  useEffect(() => {
+    if (isAdminInvisibleActive && selectedConvId && profile?.uid) {
+      if (typingTimeoutRef.current) window.clearTimeout(typingTimeoutRef.current);
+      void setConversationTyping(selectedConvId, profile.uid, false);
+    }
+  }, [isAdminInvisibleActive, selectedConvId, profile?.uid]);
+
   // Clean up mic/camera streams if ChatPage unmounts
   useEffect(() => {
     return () => {
@@ -288,9 +301,26 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
     return allKnownUsersMap.get(otherId) || null;
   };
 
+  const getMemberBadgeStatus = (
+    uid?: string | null,
+    fallbackUser?: UserProfile | null
+  ): AnyPresenceDisplayStatus | null => {
+    if (!uid) return null;
+    const adminRec = adminPresenceMap[uid];
+    if (adminRec) {
+      return adminRec.status === 'offline' ? null : adminRec.status;
+    }
+    return isUserOnlineNow(fallbackUser) ? 'online' : null;
+  };
+
+  const getOtherPresenceStatus = (c: Conversation): AnyPresenceDisplayStatus | null => {
+    if (c.isGroup) return null;
+    const otherId = getOtherUid(c);
+    return getMemberBadgeStatus(otherId, getOtherPartnerProfile(c));
+  };
+
   const getOtherOnline = (c: Conversation) => {
-    if (c.isGroup) return false;
-    return isUserOnlineNow(getOtherPartnerProfile(c));
+    return getOtherPresenceStatus(c) !== null;
   };
 
   const getOtherBadges = (c: Conversation) => {
@@ -308,13 +338,25 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
     return lastMsgMs > myLastRead;
   };
 
-  const getOtherTypingNames = (c: Conversation) => {
+  const getOtherTypingEntries = (c: Conversation) => {
     if (!c.typingBy) return [];
     const now = Date.now();
     return Object.entries(c.typingBy)
-      .filter(([uid, ts]) => uid !== profile.uid && now - (ts?.toMillis?.() ?? 0) < 7000)
-      .map(([uid]) => c.participantNames?.[uid] || 'Someone');
+      .filter(([uid, ts]) => {
+        if (uid === profile.uid) return false;
+        if (now - (ts?.toMillis?.() ?? 0) >= 7000) return false;
+        const adminRec = adminPresenceMap[uid];
+        if (adminRec && adminRec.status === 'offline') return false;
+        return true;
+      })
+      .map(([uid]) => ({
+        uid,
+        name: c.participantNames?.[uid] || 'Someone',
+        adminStatus: getAdminEffectiveStatus(uid),
+      }));
   };
+
+  const getOtherTypingNames = (c: Conversation) => getOtherTypingEntries(c).map((entry) => entry.name);
 
   const isMessageReadByOther = (m: ChatMessage, c: Conversation) => {
     if (!c.readBy || m.senderId !== profile.uid) return false;
@@ -353,8 +395,10 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
     setMessageText(val);
     if (!activeConv) return;
     if (typingTimeoutRef.current) window.clearTimeout(typingTimeoutRef.current);
-    void setConversationTyping(activeConv.id, profile.uid, val.trim().length > 0);
-    if (val.trim().length > 0) {
+    void setConversationTyping(activeConv.id, profile.uid, val.trim().length > 0, {
+      suppressTyping: isAdminInvisibleActive,
+    });
+    if (val.trim().length > 0 && !isAdminInvisibleActive) {
       typingTimeoutRef.current = window.setTimeout(() => {
         void setConversationTyping(activeConv.id, profile.uid, false);
       }, 3500);
@@ -573,8 +617,12 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
     }
   };
 
-  const activeTypingUsers = activeConv ? getOtherTypingNames(activeConv) : [];
-  const activePartnerOnline = activeConv ? getOtherOnline(activeConv) : false;
+  const activeTypingEntries = activeConv ? getOtherTypingEntries(activeConv) : [];
+  const activeTypingUsers = activeTypingEntries.map((entry) => entry.name);
+  const activeTypingAdminStatus =
+    activeTypingEntries.find((e) => e.adminStatus && e.adminStatus !== 'offline')?.adminStatus || null;
+  const activePartnerStatus = activeConv ? getOtherPresenceStatus(activeConv) : null;
+  const activePartnerOnline = activePartnerStatus !== null;
 
   return (
     <div className="h-[calc(100dvh-10.75rem)] md:h-[calc(100vh-11.25rem)] min-h-[380px] rounded-2xl border border-[#8B5CF6]/20 bg-[#0B0A13] overflow-hidden grid grid-cols-1 lg:grid-cols-12 shadow-[0_20px_70px_rgba(0,0,0,0.65)]">
@@ -770,9 +818,15 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
           ) : (
             filteredConversations.map((c) => {
               const selected = c.id === selectedConvId;
-              const online = getOtherOnline(c);
+              const partnerStatus = getOtherPresenceStatus(c);
               const unread = isConversationUnread(c);
-              const typingNames = getOtherTypingNames(c);
+              const typingEntries = getOtherTypingEntries(c);
+              const typingNames = typingEntries.map((entry) => entry.name);
+              const typingStatus =
+                typingEntries.find((entry) => entry.adminStatus && entry.adminStatus !== 'offline')?.adminStatus ||
+                (partnerStatus && partnerStatus !== 'offline' && partnerStatus !== 'invisible'
+                  ? partnerStatus
+                  : null);
               return (
                 <button
                   key={c.id}
@@ -790,11 +844,10 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                       alt={getConvTitle(c)}
                       className="w-12 h-12 rounded-full object-cover border border-white/10"
                     />
-                    {online && (
-                      <span
-                        title="Online"
-                        className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-400 border-2 border-[#0D0B16]"
-                      />
+                    {partnerStatus && (
+                      <span className="absolute bottom-0 right-0">
+                        <PresenceBadge status={partnerStatus} size="sm" />
+                      </span>
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -802,25 +855,24 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                       <p className="text-sm font-semibold text-white truncate inline-flex items-center gap-1.5">
                         <span className="truncate">{getConvTitle(c)}</span>
                         <BadgeStrip badges={getOtherBadges(c)} size={13} max={2} interactive={false} />
+                        {partnerStatus && <PresenceBadge status={partnerStatus} size="xs" />}
                       </p>
                       <span className="text-[11px] font-mono-tabular text-[#64748B] shrink-0">
                         {formatRelativeTime(c.updatedAt)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-2 mt-1">
-                      <p
-                        className={`text-xs truncate ${
-                          typingNames.length > 0
-                            ? 'text-[#C084FC] font-medium'
-                            : unread
-                            ? 'text-white font-medium'
-                            : 'text-[#94A3B8]'
-                        }`}
-                      >
-                        {typingNames.length > 0
-                          ? `${typingNames[0]} is typing...`
-                          : c.lastMessageText || 'Conversation started'}
-                      </p>
+                      {typingNames.length > 0 ? (
+                        <TypingWithPresence status={typingStatus} label={`${typingNames[0]} is typing`} />
+                      ) : (
+                        <p
+                          className={`text-xs truncate ${
+                            unread ? 'text-white font-medium' : 'text-[#94A3B8]'
+                          }`}
+                        >
+                          {c.lastMessageText || 'Conversation started'}
+                        </p>
+                      )}
                       {unread && (
                         <span
                           aria-label="Unread message"
@@ -874,30 +926,38 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                       alt={getConvTitle(activeConv)}
                       className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover border border-[#8B5CF6]/40 group-hover:border-[#C084FC] transition-colors"
                     />
-                    {activePartnerOnline && (
-                      <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-400 border-2 border-[#0D0B16]" />
+                    {activePartnerStatus && (
+                      <span className="absolute bottom-0 right-0">
+                        <PresenceBadge status={activePartnerStatus} size="sm" />
+                      </span>
                     )}
                   </div>
                   <div className="min-w-0">
-                    <h2 className="font-display text-sm sm:text-base font-semibold text-white group-hover:text-[#C084FC] transition-colors truncate inline-flex items-center gap-1.5">
+                    <h2 className="font-display text-sm sm:text-base font-semibold text-white group-hover:text-[#C084FC] transition-colors truncate inline-flex items-center gap-1.5 max-w-full">
                       <span className="truncate">{getConvTitle(activeConv)}</span>
                       <BadgeStrip badges={getOtherBadges(activeConv)} size={14} max={3} />
                     </h2>
-                    <p className="text-[11px] sm:text-xs text-[#94A3B8] truncate">
+                    <div className="text-[11px] sm:text-xs text-[#94A3B8] truncate">
                       {activeTypingUsers.length > 0 ? (
-                        <span className="text-[#C084FC] font-medium">
-                          {activeTypingUsers.join(', ')} typing...
-                        </span>
+                        <TypingWithPresence
+                          status={
+                            activeTypingAdminStatus ||
+                            (activePartnerStatus && activePartnerStatus !== 'offline' && activePartnerStatus !== 'invisible'
+                              ? activePartnerStatus
+                              : null)
+                          }
+                          label={`${activeTypingUsers.join(', ')} typing`}
+                        />
                       ) : activeConv.isGroup ? (
                         `${activeConv.participantIds.length} participants · tap to inspect`
-                      ) : activePartnerOnline ? (
-                        <span className="text-emerald-300">Online</span>
-                      ) : activePartner?.lastActiveAt ? (
+                      ) : activePartnerStatus ? (
+                        <PresenceBadge status={activePartnerStatus} size="xs" showLabel />
+                      ) : activePartner?.lastActiveAt && !(activeOtherUid && adminPresenceMap[activeOtherUid]?.status === 'offline') ? (
                         `Last active ${formatRelativeTime(activePartner.lastActiveAt)}`
                       ) : (
                         'Offline · tap to view profile'
                       )}
-                    </p>
+                    </div>
                   </div>
                 </button>
               </div>
@@ -1071,9 +1131,16 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                         <button
                           type="button"
                           onClick={() => onOpenProfile(m.senderId)}
-                          className="text-[11px] font-semibold text-[#C084FC] hover:underline text-left"
+                          className="text-[11px] font-semibold text-[#C084FC] hover:underline text-left inline-flex items-center gap-1.5"
                         >
-                          {m.senderName}
+                          <span>{m.senderName}</span>
+                          <PresenceBadge
+                            status={(() => {
+                              const adminRec = adminPresenceMap[m.senderId];
+                              return adminRec && adminRec.status !== 'offline' ? adminRec.status : null;
+                            })()}
+                            size="xs"
+                          />
                         </button>
                       )}
                       {m.replyToText && (
@@ -1229,8 +1296,16 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
 
               {activeTypingUsers.length > 0 && (
                 <div className="flex items-start">
-                  <div className="px-4 py-2 rounded-2xl bg-[#161423] border border-[#8B5CF6]/20 text-xs text-[#C084FC]">
-                    {activeTypingUsers.join(', ')} is typing...
+                  <div className="px-4 py-2 rounded-2xl bg-[#161423] border border-[#8B5CF6]/20">
+                    <TypingWithPresence
+                      status={
+                        activeTypingAdminStatus ||
+                        (activePartnerStatus && activePartnerStatus !== 'offline' && activePartnerStatus !== 'invisible'
+                          ? activePartnerStatus
+                          : null)
+                      }
+                      label={`${activeTypingUsers.join(', ')} is typing`}
+                    />
                   </div>
                 </div>
               )}
@@ -1457,6 +1532,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                 const member = allKnownUsersMap.get(uid);
                 const displayName = member?.displayName || activeConv.participantNames?.[uid] || 'Member';
                 const avatar = member?.avatarUrl || activeConv.participantAvatars?.[uid] || '';
+                const memberStatus = getMemberBadgeStatus(uid, member);
                 return (
                   <button
                     key={uid}
@@ -1468,14 +1544,24 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                     className="w-full flex items-center justify-between p-3 rounded-xl bg-[#06060A] border border-white/10 hover:border-[#8B5CF6] text-left"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <ResilientImage
-                        src={avatar}
-                        alt={displayName}
-                        className="w-9 h-9 rounded-full object-cover shrink-0"
-                      />
+                      <div className="relative shrink-0">
+                        <ResilientImage
+                          src={avatar}
+                          alt={displayName}
+                          className="w-9 h-9 rounded-full object-cover"
+                        />
+                        {memberStatus && (
+                          <span className="absolute bottom-0 right-0">
+                            <PresenceBadge status={memberStatus} size="xs" />
+                          </span>
+                        )}
+                      </div>
                       <div className="min-w-0">
-                        <p className="text-xs font-semibold text-white truncate">
-                          {displayName} {uid === profile.uid ? '(You)' : ''}
+                        <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1.5">
+                          <span className="truncate">
+                            {displayName} {uid === profile.uid ? '(You)' : ''}
+                          </span>
+                          {memberStatus && <PresenceBadge status={memberStatus} size="xs" />}
                         </p>
                         {member?.username && (
                           <p className="text-[11px] text-[#94A3B8] truncate">@{member.username}</p>
@@ -1620,7 +1706,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
               ) : (
                 otherUsers.map((u) => {
                   const picked = selectedMemberIds.includes(u.uid);
-                  const online = isUserOnlineNow(u);
+                  const memberStatus = getMemberBadgeStatus(u.uid, u);
                   return (
                     <div
                       key={u.uid}
@@ -1651,12 +1737,17 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                             alt={u.displayName}
                             className="w-9 h-9 rounded-full object-cover"
                           />
-                          {online && (
-                            <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-[#06060A]" />
+                          {memberStatus && (
+                            <span className="absolute bottom-0 right-0">
+                              <PresenceBadge status={memberStatus} size="xs" />
+                            </span>
                           )}
                         </div>
                         <div className="min-w-0">
-                          <p className="text-xs font-semibold text-white truncate">{u.displayName}</p>
+                          <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1.5">
+                            <span className="truncate">{u.displayName}</span>
+                            {memberStatus && <PresenceBadge status={memberStatus} size="xs" />}
+                          </p>
                           <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
                         </div>
                       </button>

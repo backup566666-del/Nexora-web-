@@ -23,6 +23,7 @@ import {
   Volume2,
   X,
 } from 'lucide-react';
+import { PresenceBadge } from '../../components/common/PresenceBadge';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip, VerifiedBadge } from '../../components/common/VerifiedBadge';
 import { CoverEditorModal } from '../../components/media/CoverEditorModal';
@@ -45,6 +46,7 @@ import {
   updateSpaceCover,
   updateSpaceMemberRole,
 } from '../../services/firebase/socialService';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
 import {
   NotificationItem,
@@ -90,7 +92,7 @@ export function SpacesPage({
   initialSpaceId,
   onOpenProfile,
 }: SpacesPageProps) {
-  const { profile, myRole, platformConfig, getUserBadges } = useAuth();
+  const { profile, myRole, platformConfig, getUserBadges, getAdminEffectiveStatus } = useAuth();
   const [sidebarTab, setSidebarTab] = useState<'discover' | 'mine' | 'invites' | 'joined' | 'create'>('discover');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showMoreCategories, setShowMoreCategories] = useState(false);
@@ -185,7 +187,7 @@ export function SpacesPage({
       const res = await uploadMediaAsset(file, `spaces/drafts/${profile.uid}`, ['image']);
       setCoverUrl(res.url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to upload cover.');
+      setError(extractReadableErrorMessage(err, 'We couldn’t upload your image. Please try again.'));
     } finally {
       setUploadingCover(false);
     }
@@ -214,7 +216,7 @@ export function SpacesPage({
       setSidebarTab('discover');
       setActiveSpaceId(id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to create Space.');
+      setError(extractReadableErrorMessage(err, 'Unable to create Space right now. Please try again.'));
     } finally {
       setCreating(false);
     }
@@ -256,14 +258,14 @@ export function SpacesPage({
           <ArrowLeft size={15} /> Back to Explore Spaces
         </button>
 
-        <div className="relative rounded-3xl overflow-hidden border border-[#8B5CF6]/25 aspect-[16/5] min-h-[240px]">
+        <div className="relative rounded-3xl overflow-hidden border border-[#8B5CF6]/25 min-h-[220px] sm:aspect-[16/5]">
           <ResilientImage
             src={activeSpace.coverUrl}
             alt={activeSpace.name}
             style={{ objectPosition: `50% ${activeSpace.coverPositionY ?? 50}%` }}
             className="w-full h-full object-cover"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/55 to-black/20 p-6 lg:p-9 flex flex-col justify-end">
+          <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/25 p-4 sm:p-6 lg:p-9 flex flex-col justify-end">
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
               <div className="space-y-2 max-w-2xl">
                 <p className="text-xs font-medium text-[#C084FC]">
@@ -326,7 +328,7 @@ export function SpacesPage({
         </div>
 
         {/* Inner Space Navigation */}
-        <div className="flex flex-wrap items-center gap-2 border-b border-white/[0.08] pb-3.5">
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar border-b border-white/[0.08] pb-3.5">
           {[
             { id: 'posts', label: 'Community Posts' },
             { id: 'discussions', label: 'Discussions' },
@@ -394,27 +396,39 @@ export function SpacesPage({
                       Start a community discussion thread below.
                     </p>
                   ) : (
-                    discussions.map((d) => (
-                      <div key={d.id} className="flex items-start gap-3">
-                        <ResilientImage
-                          src={d.authorAvatar}
-                          alt={d.authorName}
-                          className="w-8 h-8 rounded-full object-cover shrink-0"
-                        />
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="font-semibold text-white inline-flex items-center gap-1">
-                              {d.authorName}
-                              <BadgeStrip badges={getUserBadges(d.authorId)} size={12} max={2} />
-                            </span>
-                            <span className="text-[#64748B]">
-                              {formatRelativeTime(d.createdAt)}
-                            </span>
+                    discussions.map((d) => {
+                      const adminStatus = getAdminEffectiveStatus(d.authorId);
+                      const badgeStatus = adminStatus && adminStatus !== 'offline' ? adminStatus : null;
+                      return (
+                        <div key={d.id} className="flex items-start gap-3">
+                          <div className="relative shrink-0">
+                            <ResilientImage
+                              src={d.authorAvatar}
+                              alt={d.authorName}
+                              className="w-8 h-8 rounded-full object-cover"
+                            />
+                            {badgeStatus && (
+                              <span className="absolute -bottom-0.5 -right-0.5">
+                                <PresenceBadge status={badgeStatus} size="xs" />
+                              </span>
+                            )}
                           </div>
-                          <p className="text-sm text-[#CBD5E1]">{d.text}</p>
+                          <div className="space-y-0.5 min-w-0">
+                            <div className="flex items-center gap-2 text-xs flex-wrap">
+                              <span className="font-semibold text-white inline-flex items-center gap-1">
+                                {d.authorName}
+                                <BadgeStrip badges={getUserBadges(d.authorId)} size={12} max={2} />
+                                {badgeStatus && <PresenceBadge status={badgeStatus} size="xs" />}
+                              </span>
+                              <span className="text-[#64748B]">
+                                {formatRelativeTime(d.createdAt)}
+                              </span>
+                            </div>
+                            <p className="text-sm text-[#CBD5E1] break-words">{d.text}</p>
+                          </div>
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
                 <form
@@ -453,33 +467,45 @@ export function SpacesPage({
 
         {spaceInnerTab === 'members' && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {spaceMembers.map((m) => (
-              <div
-                key={m.uid}
-                className="p-4 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 flex items-center justify-between gap-3"
-              >
-                <button
-                  type="button"
-                  onClick={() => onOpenProfile(m.uid)}
-                  className="flex items-center gap-3 text-left min-w-0"
+            {spaceMembers.map((m) => {
+              const adminStatus = getAdminEffectiveStatus(m.uid);
+              const badgeStatus = adminStatus && adminStatus !== 'offline' ? adminStatus : null;
+              return (
+                <div
+                  key={m.uid}
+                  className="p-4 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 flex items-center justify-between gap-3"
                 >
-                  <ResilientImage
-                    src={m.avatarUrl}
-                    alt={m.displayName}
-                    className="w-11 h-11 rounded-full object-cover shrink-0"
-                  />
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
-                      <span className="truncate">{m.displayName}</span>
-                      <BadgeStrip badges={getUserBadges(m.uid)} size={12} max={2} interactive={false} />
-                    </p>
-                    <p className="text-[11px] text-[#94A3B8] truncate">
-                      @{m.username} · {m.role}
-                    </p>
-                  </div>
-                </button>
-              </div>
-            ))}
+                  <button
+                    type="button"
+                    onClick={() => onOpenProfile(m.uid)}
+                    className="flex items-center gap-3 text-left min-w-0"
+                  >
+                    <div className="relative shrink-0">
+                      <ResilientImage
+                        src={m.avatarUrl}
+                        alt={m.displayName}
+                        className="w-11 h-11 rounded-full object-cover"
+                      />
+                      {badgeStatus && (
+                        <span className="absolute -bottom-0.5 -right-0.5">
+                          <PresenceBadge status={badgeStatus} size="xs" />
+                        </span>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1 max-w-full">
+                        <span className="truncate">{m.displayName}</span>
+                        <BadgeStrip badges={getUserBadges(m.uid)} size={12} max={2} interactive={false} />
+                        {badgeStatus && <PresenceBadge status={badgeStatus} size="xs" />}
+                      </p>
+                      <p className="text-[11px] text-[#94A3B8] truncate">
+                        @{m.username} · {m.role}
+                      </p>
+                    </div>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -792,7 +818,7 @@ export function SpacesPage({
         {sidebarTab === 'create' ? (
           <form
             onSubmit={handleCreateSpace}
-            className="max-w-3xl p-7 rounded-3xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-6"
+            className="max-w-3xl p-4 sm:p-7 rounded-3xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-6"
           >
             <div>
               <h1 className="font-display text-2xl font-bold text-white">Create a Space</h1>
@@ -984,8 +1010,8 @@ export function SpacesPage({
                   </p>
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <div className="relative w-64">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-3 w-full md:w-auto">
+                  <div className="relative w-full sm:w-64">
                     <Search
                       size={14}
                       className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7C6E9B]"
@@ -995,13 +1021,13 @@ export function SpacesPage({
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       placeholder="Filter spaces..."
-                      className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#0D0B16] border border-[#8B5CF6]/20 focus:border-[#8B5CF6] text-xs text-white outline-none"
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#0D0B16] border border-[#8B5CF6]/20 focus:border-[#8B5CF6] text-xs text-white outline-none min-h-[42px]"
                     />
                   </div>
                   <button
                     type="button"
                     onClick={() => setSidebarTab('create')}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-xs font-semibold text-white whitespace-nowrap"
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-xs font-semibold text-white whitespace-nowrap min-h-[42px]"
                   >
                     <Plus size={14} /> Create Space
                   </button>
@@ -1077,7 +1103,7 @@ export function SpacesPage({
                     <div
                       key={space.id}
                       onClick={() => setActiveSpaceId(space.id)}
-                      className="group relative rounded-3xl overflow-hidden border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/60 aspect-[16/10] bg-[#0D0B16] cursor-pointer shadow-[0_12px_40px_rgba(0,0,0,0.55)] transition-all"
+                      className="group relative rounded-3xl overflow-hidden border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/60 min-h-[240px] sm:aspect-[16/10] bg-[#0D0B16] cursor-pointer shadow-[0_12px_40px_rgba(0,0,0,0.55)] transition-all"
                     >
                       <ResilientImage
                         src={space.coverUrl}
@@ -1087,7 +1113,7 @@ export function SpacesPage({
                       />
 
                       {/* Measured contrast scrim: ALL community information integrated directly ON THE COVER IMAGE */}
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/25 p-6 flex flex-col justify-between">
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/25 p-4 sm:p-6 flex flex-col justify-between">
                         {/* Top metadata strip */}
                         <div className="flex items-center justify-between text-xs text-white/85">
                           <span className="font-medium inline-flex items-center gap-1.5">
