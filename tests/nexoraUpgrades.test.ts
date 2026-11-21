@@ -745,7 +745,15 @@ test('Android signing credentials are ignored in Git and cloud workflow rejects 
   const workflow = fs.readFileSync('.github/workflows/android-twa-release.yml', 'utf8');
   assert.ok(workflow.includes('NEXORA_ANDROID_KEYSTORE_BASE64'));
   assert.ok(workflow.includes('NEXORA_ANDROID_KEYSTORE_PASS'));
+  assert.ok(workflow.includes('NEXORA_ANDROID_KEY_ALIAS'));
   assert.ok(workflow.includes('NEXORA_ANDROID_KEY_PASS'));
+  assert.ok(workflow.includes('android-actions/setup-android@v4'));
+  assert.equal(workflow.includes('android-actions/setup-android@v3'), false);
+  assert.ok(workflow.includes('cmdline-tools;latest'));
+  assert.ok(workflow.includes('platform-tools'));
+  assert.ok(workflow.includes('platforms;android-35'));
+  assert.ok(workflow.includes('build-tools;35.0.0'));
+  assert.equal(/\b"tools"\b|'\btools\b'/.test(workflow), false);
   assert.ok(workflow.includes('.bubblewrap'));
   assert.equal(workflow.includes('nexora-temp-pass'), false);
 
