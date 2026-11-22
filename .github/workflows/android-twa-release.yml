@@ -96,7 +96,79 @@ jobs:
           KEYSTORE_PASS: ${{ secrets.NEXORA_ANDROID_KEYSTORE_PASS }}
           KEY_ALIAS: ${{ secrets.NEXORA_ANDROID_KEY_ALIAS || 'nexora' }}
         run: |
-          printf '%s' "$KEYSTORE_B64" | tr -d '\n\r ' | base64 --decode > android/nexora-release.keystore
+          node - << 'EOF'
+            const fs = require('fs');
+            const raw = process.env.KEYSTORE_B64 || '';
+            let cleaned = raw.replace(/^\uFEFF/, '').replace(/\s+/g, '');
+            if (
+              (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+              (cleaned.startsWith("'") && cleaned.endsWith("'"))
+            ) {
+              cleaned = cleaned.slice(1, -1);
+            }
+            const dataUriMatch = cleaned.match(/^data:[^;,]+;base64,(.+)$/i);
+            if (dataUriMatch) {
+              cleaned = dataUriMatch[1];
+            }
+            if (!cleaned) {
+              console.error('::error::NEXORA_ANDROID_KEYSTORE_BASE64 is empty after removing whitespace.');
+              process.exit(1);
+            }
+
+            const usedBase64Url = /[-_]/.test(cleaned);
+            let standard = cleaned.replace(/-/g, '+').replace(/_/g, '/');
+
+            if (!/^[A-Za-z0-9+/]+={0,2}$/.test(standard)) {
+              const invalidCount = (standard.match(/[^A-Za-z0-9+/=]/g) || []).length;
+              console.error(
+                `::error::NEXORA_ANDROID_KEYSTORE_BASE64 contains invalid non-Base64 characters (length=${standard.length}, invalidChars=${invalidCount}).`
+              );
+              process.exit(1);
+            }
+
+            const unpadded = standard.replace(/=+$/, '');
+            if (unpadded.length % 4 === 1) {
+              console.error(
+                `::error::NEXORA_ANDROID_KEYSTORE_BASE64 appears truncated (unpaddedLength=${unpadded.length}, mod4=1).`
+              );
+              process.exit(1);
+            }
+
+            const mod = standard.length % 4;
+            if (mod === 2) standard += '==';
+            else if (mod === 3) standard += '=';
+
+            const decoded = Buffer.from(standard, 'base64');
+            if (decoded.length < 512) {
+              console.error(
+                `::error::Decoded keystore is smaller than a valid Android keystore (${decoded.length} bytes). Secret appears truncated or incorrect.`
+              );
+              process.exit(1);
+            }
+
+            const isJks =
+              decoded[0] === 0xfe &&
+              decoded[1] === 0xed &&
+              decoded[2] === 0xfe &&
+              decoded[3] === 0xed;
+            const isPkcs12 =
+              decoded[0] === 0x30 &&
+              (decoded[1] === 0x82 || decoded[1] === 0x80 || decoded[1] === 0x83 || decoded[1] === 0x84);
+
+            if (!isJks && !isPkcs12) {
+              console.error(
+                `::error::Decoded payload (${decoded.length} bytes) lacks a valid JKS or PKCS12 keystore header.`
+              );
+              process.exit(1);
+            }
+
+            fs.mkdirSync('android', { recursive: true });
+            fs.writeFileSync('android/nexora-release.keystore', decoded, { mode: 0o600 });
+            console.log(
+              `Decoded ${isPkcs12 ? 'PKCS12' : 'JKS'} keystore (${decoded.length} bytes${usedBase64Url ? ', normalized from Base64URL' : ''}).`
+            );
+          EOF
+
           if [ ! -s android/nexora-release.keystore ]; then
             echo "::error::Decoded android/nexora-release.keystore is empty."
             exit 1

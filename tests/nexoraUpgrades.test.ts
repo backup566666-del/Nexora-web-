@@ -756,6 +756,8 @@ test('Android signing credentials are ignored in Git and cloud workflow rejects 
   assert.equal(/\b"tools"\b|'\btools\b'/.test(workflow), false);
   assert.ok(workflow.includes('.bubblewrap'));
   assert.equal(workflow.includes('nexora-temp-pass'), false);
+  assert.equal(workflow.includes('base64 --decode'), false);
+  assert.ok(workflow.includes('keytool -list -v -keystore android/nexora-release.keystore'));
 
   const landing = fs.readFileSync('src/pages/landing/LandingPage.tsx', 'utf8');
   assert.ok(landing.includes('/api/app/android-release'));
@@ -764,6 +766,92 @@ test('Android signing credentials are ignored in Git and cloud workflow rejects 
   assert.ok(landing.includes('Get Started'));
   assert.ok(landing.includes('PWAInstallButton'));
 });
+
+test('workflow keystore decoder handles standard Base64/Base64URL while rejecting truncated or corrupted keystores', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+
+  const workflow = fs.readFileSync('.github/workflows/android-twa-release.yml', 'utf8');
+  const match = workflow.match(/node - << 'EOF'\n([\s\S]*?)\n\s+EOF/);
+  assert.ok(match, 'Workflow must include Node.js keystore decoder heredoc');
+  const decoderScript = match[1];
+
+  const runDecoder = (b64Value: string) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexora-ks-test-'));
+    try {
+      const result = spawnSync(process.execPath, ['-e', decoderScript], {
+        cwd: tmpDir,
+        env: { ...process.env, KEYSTORE_B64: b64Value },
+        encoding: 'utf8',
+      });
+      const outPath = path.join(tmpDir, 'android', 'nexora-release.keystore');
+      const written = fs.existsSync(outPath) ? fs.readFileSync(outPath) : null;
+      return { status: result.status, stdout: result.stdout, stderr: result.stderr, written };
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  };
+
+  // 1. Standard Base64 PKCS12 keystore (>= 512 bytes) succeeds
+  const pkcs12Buf = Buffer.alloc(1024, 0xab);
+  pkcs12Buf[0] = 0x30;
+  pkcs12Buf[1] = 0x82;
+  const stdRes = runDecoder(pkcs12Buf.toString('base64'));
+  assert.equal(stdRes.status, 0);
+  assert.ok(stdRes.written && stdRes.written.equals(pkcs12Buf));
+  assert.ok(stdRes.stdout.includes('Decoded PKCS12 keystore'));
+
+  // 2. Base64URL without '=' padding + line wraps/spaces/quotes + JKS header succeeds
+  const jksBuf = Buffer.alloc(1024);
+  jksBuf[0] = 0xfe;
+  jksBuf[1] = 0xed;
+  jksBuf[2] = 0xfe;
+  jksBuf[3] = 0xed;
+  for (let i = 4; i < jksBuf.length; i++) {
+    jksBuf[i] = (i * 31 + 7) & 0xff;
+  }
+  const base64UrlUnpadded = jksBuf
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  const wrappedB64Url = `"${base64UrlUnpadded.slice(0, 80)}\n  ${base64UrlUnpadded.slice(80, 160)}\r\t${base64UrlUnpadded.slice(160)}"`;
+  const urlRes = runDecoder(wrappedB64Url);
+  assert.equal(urlRes.status, 0);
+  assert.ok(urlRes.written && urlRes.written.equals(jksBuf));
+  assert.ok(urlRes.stdout.includes('normalized from Base64URL'));
+
+  // 3. Truncated Base64 (unpadded length % 4 === 1) must fail and never leak secret content
+  const truncated = pkcs12Buf.toString('base64').replace(/=+$/, '').slice(0, 601); // 601 % 4 === 1
+  const truncRes = runDecoder(truncated);
+  assert.notEqual(truncRes.status, 0);
+  assert.equal(truncRes.written, null);
+  assert.ok(truncRes.stderr.includes('appears truncated'));
+  assert.equal(truncRes.stderr.includes(truncated.slice(0, 20)), false);
+
+  // 4. Corrupted non-Base64 text must fail and never leak secret content
+  const corrupt = 'NOT_VALID_SECRET_$$$###@@@';
+  const corruptRes = runDecoder(corrupt);
+  assert.notEqual(corruptRes.status, 0);
+  assert.equal(corruptRes.written, null);
+  assert.equal(corruptRes.stderr.includes('NOT_VALID_SECRET'), false);
+
+  // 5. Valid Base64 of too-small payload (< 512 bytes) must fail
+  const tiny = Buffer.from('0x3082tiny', 'utf8').toString('base64');
+  const tinyRes = runDecoder(tiny);
+  assert.notEqual(tinyRes.status, 0);
+  assert.equal(tinyRes.written, null);
+
+  // 6. Valid Base64 (>= 512 bytes) lacking JKS or PKCS12 magic header must fail
+  const bogus = Buffer.alloc(1024, 0x41).toString('base64');
+  const bogusRes = runDecoder(bogus);
+  assert.notEqual(bogusRes.status, 0);
+  assert.equal(bogusRes.written, null);
+  assert.ok(bogusRes.stderr.includes('lacks a valid JKS or PKCS12 keystore header'));
+});
+
 
 
 

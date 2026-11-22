@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import fs from 'fs';
+import http from 'http';
 import nodemailer from 'nodemailer';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -453,7 +454,7 @@ export function getAndroidReleaseStatus(rootDir: string = __dirname): AndroidRel
   };
 }
 
-export async function createNexoraServer() {
+export async function createNexoraServer(httpServer?: http.Server) {
   const app = express();
   app.use(express.json({ limit: '512kb' }));
 
@@ -573,7 +574,10 @@ export async function createNexoraServer() {
   if (!IS_PRODUCTION) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: httpServer ? { server: httpServer } : process.env.DISABLE_HMR === 'true' ? false : true,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -601,9 +605,11 @@ const isDirectEntry =
   process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
 
 if (isDirectEntry) {
-  createNexoraServer()
+  const httpServer = http.createServer();
+  createNexoraServer(httpServer)
     .then((app) => {
-      app.listen(PORT, '0.0.0.0', () => {
+      httpServer.on('request', app);
+      httpServer.listen(PORT, '0.0.0.0', () => {
         console.log(`Nexora server running on http://0.0.0.0:${PORT}`);
       });
     })
