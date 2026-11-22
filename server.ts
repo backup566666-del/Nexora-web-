@@ -571,7 +571,95 @@ export async function createNexoraServer(httpServer?: http.Server) {
     res.status(404).json({ error: 'Asset links manifest not found' });
   });
 
+  const isAssetLikePath = (reqPath: string) =>
+    reqPath.startsWith('/api/') ||
+    reqPath.startsWith('/assets/') ||
+    reqPath.startsWith('/downloads/') ||
+    /^\/workbox-[^/]+\.js$/i.test(reqPath) ||
+    /\.(?:js|mjs|css|map|json|png|jpg|jpeg|webp|svg|ico|woff2?)$/i.test(reqPath);
+
   if (!IS_PRODUCTION) {
+    const publicDir = path.resolve(__dirname, 'public');
+    const devDistDir = path.resolve(__dirname, 'dev-dist');
+
+    // In dev mode, prevent stale browser registrations of /sw.js from receiving index.html
+    // (which triggers "Uncaught SyntaxError: Unexpected token '<'"). Serve a clean JS unregister script.
+    app.get('/sw.js', (_req: Request, res: Response) => {
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(200).send(
+        "self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',(e)=>e.waitUntil(caches.keys().then((ks)=>Promise.all(ks.map((k)=>caches.delete(k)))).then(()=>self.registration.unregister())));"
+      );
+    });
+
+    // Ensure /registerSW.js always returns valid JavaScript in dev mode (never SPA index.html)
+    app.get('/registerSW.js', (_req: Request, res: Response) => {
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      const devRegisterSw = path.join(devDistDir, 'registerSW.js');
+      if (fs.existsSync(devRegisterSw)) {
+        res.sendFile(devRegisterSw);
+        return;
+      }
+      res
+        .status(200)
+        .send(
+          "if('serviceWorker' in navigator) navigator.serviceWorker.register('/dev-sw.js?dev-sw', { scope: '/', type: 'classic' });"
+        );
+    });
+
+    // Block Vite SPA HTML fallback for missing built /assets/*, /workbox-*.js, or missing JS/CSS chunks
+    app.use((req: Request, res: Response, next) => {
+      if (req.path.startsWith('/api/')) {
+        res.status(404).json({ error: 'API route not found' });
+        return;
+      }
+
+      if (/^\/workbox-[^/]+\.js$/i.test(req.path) || req.path === '/suppress-warnings.js') {
+        const relPath = req.path.replace(/^\/+/, '');
+        const resolvedDev = path.resolve(devDistDir, relPath);
+        if (resolvedDev.startsWith(devDistDir + path.sep) && fs.existsSync(resolvedDev)) {
+          res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+          res.sendFile(resolvedDev);
+          return;
+        }
+        if (req.path === '/suppress-warnings.js') {
+          res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+          res.status(200).send('');
+          return;
+        }
+        const resolvedPublic = path.resolve(publicDir, relPath);
+        if (resolvedPublic.startsWith(publicDir + path.sep) && fs.existsSync(resolvedPublic)) {
+          next();
+          return;
+        }
+        res.status(404).json({ error: 'Workbox script not found in dev mode' });
+        return;
+      }
+
+      const isViteModulePath =
+        req.path.startsWith('/src/') ||
+        req.path.startsWith('/node_modules/') ||
+        req.path.startsWith('/@') ||
+        req.path === '/dev-sw.js';
+
+      if (
+        !isViteModulePath &&
+        (req.path.startsWith('/assets/') || /\.(?:js|mjs|css|map)$/i.test(req.path))
+      ) {
+        const relPath = req.path.replace(/^\/+/, '');
+        const resolvedPublic = path.resolve(publicDir, relPath);
+        if (resolvedPublic.startsWith(publicDir + path.sep) && fs.existsSync(resolvedPublic)) {
+          next();
+          return;
+        }
+        res.status(404).json({ error: 'Asset not found in dev mode' });
+        return;
+      }
+
+      next();
+    });
+
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
@@ -585,8 +673,8 @@ export async function createNexoraServer(httpServer?: http.Server) {
     const distDir = path.resolve(__dirname, 'dist');
     app.use(express.static(distDir));
     app.get('*', (req: Request, res: Response) => {
-      if (req.path.startsWith('/api/')) {
-        res.status(404).json({ error: 'API route not found' });
+      if (isAssetLikePath(req.path)) {
+        res.status(404).json({ error: 'Resource not found' });
         return;
       }
       const indexHtml = path.join(distDir, 'index.html');

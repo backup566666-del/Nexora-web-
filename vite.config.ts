@@ -12,6 +12,7 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        injectRegister: 'inline',
         includeAssets: [
           'favicon.ico',
           'favicon.svg',
@@ -57,12 +58,19 @@ export default defineConfig(() => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//, /^\/\.well-known\//, /^\/downloads\//],
+          navigateFallbackDenylist: [
+            /^\/api\//,
+            /^\/\.well-known\//,
+            /^\/downloads\//,
+            /^\/assets\//,
+            /\.(?:js|mjs|css|map|json|png|jpg|jpeg|webp|svg|ico|woff2?)$/i,
+          ],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         },
         devOptions: {
           enabled: true,
-          type: 'module',
+          type: 'classic',
+          suppressWarnings: true,
         },
       }),
       // Copies src/assets into dist/ so root-relative URLs like
