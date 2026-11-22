@@ -141,7 +141,7 @@ jobs:
             const decoded = Buffer.from(standard, 'base64');
             if (decoded.length < 512) {
               console.error(
-                `::error::Decoded keystore is smaller than a valid Android keystore (${decoded.length} bytes). Secret appears truncated or incorrect.`
+                `::error::Decoded keystore is smaller than a valid Android keystore (${decoded.length} bytes from ${cleaned.length} Base64 chars). Secret appears truncated during copy/paste.`
               );
               process.exit(1);
             }
@@ -173,6 +173,7 @@ jobs:
             echo "::error::Decoded android/nexora-release.keystore is empty."
             exit 1
           fi
+          set -o pipefail
           SHA256_FP=$(keytool -list -v -keystore android/nexora-release.keystore -alias "$KEY_ALIAS" -storepass "$KEYSTORE_PASS" | awk -F'SHA256: ' '/SHA256:/{print $2; exit}' | tr -d '[:space:]')
           if [ -z "$SHA256_FP" ]; then
             echo "::error::Could not read alias '$KEY_ALIAS' from keystore. Verify NEXORA_ANDROID_KEY_ALIAS and NEXORA_ANDROID_KEYSTORE_PASS."
@@ -215,19 +216,21 @@ jobs:
           yes | bubblewrap update --skipVersionUpgrade --skipPwaValidation || yes | bubblewrap init --manifest="https://${{ inputs.host }}/manifest.webmanifest" --skipPwaValidation
           bubblewrap build --skipVersionUpgrade --skipPwaValidation
           mkdir -p dist-release
-          APK_SRC=$(find . -maxdepth 2 -name '*-signed.apk' -type f | head -n 1)
+          APK_SRC=$(find . -maxdepth 3 -name '*-signed.apk' -type f | head -n 1)
           if [ -z "$APK_SRC" ]; then
-            APK_SRC=$(find . -maxdepth 2 -name '*.apk' ! -name '*unsigned*' -type f | head -n 1)
+            APK_SRC=$(find . -maxdepth 5 -name '*.apk' ! -name '*unsigned*' -type f | head -n 1)
           fi
-          AAB_SRC=$(find . -maxdepth 2 -name '*.aab' -type f | head -n 1)
+          AAB_SRC=$(find . -maxdepth 5 -name '*.aab' -type f | head -n 1)
           if [ -z "$APK_SRC" ] || [ ! -s "$APK_SRC" ]; then
             echo "::error::Bubblewrap completed without generating a signed .apk binary."
             exit 1
           fi
-          cp "$APK_SRC" "dist-release/nexora-v${{ inputs.versionName }}-release.apk"
-          if [ -n "$AAB_SRC" ] && [ -s "$AAB_SRC" ]; then
-            cp "$AAB_SRC" "dist-release/nexora-v${{ inputs.versionName }}-release.aab"
+          if [ -z "$AAB_SRC" ] || [ ! -s "$AAB_SRC" ]; then
+            echo "::error::Bubblewrap completed without generating a signed .aab bundle."
+            exit 1
           fi
+          cp "$APK_SRC" "dist-release/nexora-v${{ inputs.versionName }}-release.apk"
+          cp "$AAB_SRC" "dist-release/nexora-v${{ inputs.versionName }}-release.aab"
           ls -lh dist-release/
 
       - name: Clean Up Decoded Keystore From Runner

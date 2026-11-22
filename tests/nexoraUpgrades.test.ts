@@ -757,7 +757,10 @@ test('Android signing credentials are ignored in Git and cloud workflow rejects 
   assert.ok(workflow.includes('.bubblewrap'));
   assert.equal(workflow.includes('nexora-temp-pass'), false);
   assert.equal(workflow.includes('base64 --decode'), false);
+  assert.ok(workflow.includes('set -o pipefail'));
   assert.ok(workflow.includes('keytool -list -v -keystore android/nexora-release.keystore'));
+  assert.ok(workflow.includes('Bubblewrap completed without generating a signed .apk binary.'));
+  assert.ok(workflow.includes('Bubblewrap completed without generating a signed .aab bundle.'));
 
   const landing = fs.readFileSync('src/pages/landing/LandingPage.tsx', 'utf8');
   assert.ok(landing.includes('/api/app/android-release'));
