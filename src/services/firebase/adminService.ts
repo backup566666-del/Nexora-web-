@@ -40,7 +40,9 @@ import {
   PlatformRole,
   Space,
   SpaceMember,
+  SubscriptionTier,
   UserProfile,
+  UserSubscription,
   VerificationRequest,
   VerifiedBadgeRecord,
   VerifiedBadgeType,
@@ -58,6 +60,7 @@ import {
   FREE_GIFT_CATALOG,
   normalizeBadgeList,
   normalizeBadgeType,
+  resolveEffectiveSubscriptionTier,
   ROLE_DEFAULT_PERMISSIONS,
   sanitizeString,
 } from '../../utils/validation';
@@ -104,6 +107,8 @@ export function subscribeAuditLogs(callback: (logs: AuditLogEntry[]) => void): U
       'platform',
       'moderation',
       'notification',
+      'billing',
+      'customisation',
     ]),
     limit(120)
   );
@@ -131,12 +136,14 @@ export async function bootstrapFounderGovernance(
   const badgeRef = doc(db, 'verified_badges', firebaseUser.uid);
   const userRef = doc(db, 'users', firebaseUser.uid);
   const configRef = doc(db, 'platform_config', 'global');
+  const subscriptionRef = doc(db, 'user_subscriptions', firebaseUser.uid);
 
   try {
-    const [roleSnap, badgeSnap, configSnap] = await Promise.all([
+    const [roleSnap, badgeSnap, configSnap, subscriptionSnap] = await Promise.all([
       getDoc(roleRef),
       getDoc(badgeRef),
       getDoc(configRef),
+      getDoc(subscriptionRef),
     ]);
 
     const now = serverTimestamp();
@@ -195,11 +202,42 @@ export async function bootstrapFounderGovernance(
       });
     }
 
-    if (!profile.verified) {
-      await updateDoc(userRef, {
-        verified: true,
+    // Grant highest premium package (Nexora Pro) permanently to the Founder/Owner
+    const existingSub = subscriptionSnap.exists()
+      ? (subscriptionSnap.data() as UserSubscription)
+      : null;
+    const effectiveOwnerTier = resolveEffectiveSubscriptionTier(existingSub);
+    const needsOwnerProGrant =
+      !existingSub ||
+      effectiveOwnerTier !== 'pro' ||
+      existingSub.status !== 'active' ||
+      existingSub.cancelAtPeriodEnd === true;
+
+    if (needsOwnerProGrant) {
+      await setDoc(subscriptionRef, {
+        uid: firebaseUser.uid,
+        tier: 'pro' satisfies SubscriptionTier,
+        billingCycle: 'yearly',
+        status: 'active',
+        cancelAtPeriodEnd: false,
+        provider: 'admin',
+        receiptRef: 'FOUNDER-OWNER-PRO',
+        verifiedByServer: false,
+        startedAt: existingSub?.startedAt || now,
         updatedAt: now,
       });
+    }
+
+    const userPatch: Record<string, unknown> = {};
+    if (!profile.verified) {
+      userPatch.verified = true;
+    }
+    if (profile.subscriptionTier !== 'pro') {
+      userPatch.subscriptionTier = 'pro' satisfies SubscriptionTier;
+    }
+    if (Object.keys(userPatch).length > 0) {
+      userPatch.updatedAt = now;
+      await updateDoc(userRef, userPatch);
     }
 
     if (!configSnap.exists()) {

@@ -84,6 +84,9 @@ test('privacy defaults include tagging, collaboration & dual notification channe
     emailNotifications: {
       account: true,
       social: false,
+      messages: true,
+      spaces: true,
+      subscriptions: true,
       badges: true,
       gifts: false,
       admin: true,
@@ -199,7 +202,7 @@ test('extractReadableErrorMessage translates technical permission/session/networ
     'Fallback',
     { recordDiagnostic: false }
   );
-  assert.equal(offlineErr, 'Check your internet connection and try again.');
+  assert.equal(offlineErr, "You're offline. Check your internet connection and try again.");
 });
 
 test('inline compression limits guarantee avatars, covers, posts, and stories fit Firestore rule caps', () => {

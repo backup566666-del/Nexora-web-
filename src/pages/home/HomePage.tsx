@@ -14,9 +14,12 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { FriendlyErrorBanner } from '../../components/common/FriendlyErrorBanner';
 import { PresenceBadge } from '../../components/common/PresenceBadge';
 import { ResilientImage } from '../../components/common/ResilientImage';
+import { TierBadge } from '../../components/common/TierBadge';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
+import { CustomisedAvatar } from '../../components/profile/CustomisedAvatar';
 import { PostCard } from '../../features/posts/PostCard';
 import { PostComposer } from '../../features/posts/PostComposer';
 import { StoriesBar } from '../../features/stories/StoriesBar';
@@ -86,7 +89,7 @@ export function HomePage({
   onNavigate,
   onOpenVibes,
 }: HomePageProps) {
-  const { profile, privateInfo, platformConfig, adminPresenceMap, getUserBadges } = useAuth();
+  const { profile, privateInfo, platformConfig, adminPresenceMap, getUserBadges, getUserTier } = useAuth();
   const [filter, setFilter] = useState<
     'all' | 'trending' | 'media' | 'discussions' | 'polls'
   >('all');
@@ -273,7 +276,7 @@ export function HomePage({
                   } else if (latest.type === 'space_invite' && latest.targetId) {
                     onNavigate?.('spaces', latest.targetId);
                   } else {
-                    onNavigate?.('settings');
+                    onNavigate?.('notifications');
                   }
                 }}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/35 text-xs font-semibold text-[#E9D5FF] hover:bg-[#7C3AED]/30 transition-colors whitespace-nowrap min-h-[38px]"
@@ -468,10 +471,11 @@ export function HomePage({
                     className="flex items-center gap-2.5 text-left min-w-0"
                   >
                     <div className="relative shrink-0">
-                      <ResilientImage
+                      <CustomisedAvatar
                         src={u.avatarUrl}
                         alt={u.displayName}
-                        className="w-10 h-10 rounded-full object-cover ring-1 ring-[#8B5CF6]/35"
+                        sizeClass="w-10 h-10"
+                        customisation={u.profileCustomisation}
                       />
                       {presenceStatus && (
                         <span className="absolute -bottom-0.5 -right-0.5">
@@ -488,6 +492,7 @@ export function HomePage({
                           max={2}
                           interactive={false}
                         />
+                        <TierBadge tier={getUserTier(u.uid, u.subscriptionTier)} showFree={false} />
                       </p>
                       <p className="text-[11px] text-[#94A3B8] truncate">
                         @{u.username}
@@ -516,9 +521,7 @@ export function HomePage({
           </div>
 
           {followError && (
-            <p className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/25 rounded-lg px-2.5 py-1.5">
-              {followError}
-            </p>
+            <FriendlyErrorBanner message={followError} onDismiss={() => setFollowError('')} />
           )}
         </section>
       )}
@@ -670,6 +673,7 @@ export function HomePage({
               isSaved={savedPostIds.includes(post.id)}
               onOpenProfile={onOpenProfile}
               onHashtagClick={(tag) => setSelectedHashtag(tag)}
+              usersDirectory={users}
             />
           ))
         )}

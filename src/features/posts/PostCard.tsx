@@ -15,10 +15,15 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
+import { FriendlyErrorBanner } from '../../components/common/FriendlyErrorBanner';
 import { ResilientImage } from '../../components/common/ResilientImage';
+import { TierBadge } from '../../components/common/TierBadge';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { GiftPickerModal } from '../../components/gifts/GiftPickerModal';
+import { CustomisedAvatar } from '../../components/profile/CustomisedAvatar';
 import { useAuth } from '../../hooks/useAuth';
+import { recordPostImpression } from '../../services/firebase/analyticsService';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import {
   addPostComment,
   checkPostLiked,
@@ -32,7 +37,7 @@ import {
   toggleSavePost,
   voteOnPoll,
 } from '../../services/firebase/socialService';
-import { Post, PostComment } from '../../types/nexora';
+import { Post, PostComment, ProfileCustomisation, SubscriptionTier, UserProfile } from '../../types/nexora';
 import { formatCompactCount, formatRelativeTime } from '../../utils/validation';
 
 interface PostCardProps {
@@ -40,11 +45,35 @@ interface PostCardProps {
   isSaved: boolean;
   onOpenProfile: (uid: string) => void;
   onHashtagClick?: (tag: string) => void;
+  usersDirectory?: UserProfile[];
+  authorTier?: SubscriptionTier;
+  authorCustomisation?: ProfileCustomisation | null;
 }
 
-export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostCardProps) {
-  const { profile, getUserBadges } = useAuth();
+export function PostCard({
+  post,
+  isSaved,
+  onOpenProfile,
+  onHashtagClick,
+  usersDirectory = [],
+  authorTier,
+  authorCustomisation,
+}: PostCardProps) {
+  const { profile, effectiveTier, getUserBadges, getUserTier } = useAuth();
   const postBadges = getUserBadges(post.authorId, post.authorVerified);
+  const directoryAuthor = usersDirectory.find((u) => u.uid === post.authorId);
+  const resolvedAuthorTier =
+    authorTier ||
+    (profile?.uid === post.authorId
+      ? effectiveTier
+      : getUserTier(post.authorId, directoryAuthor?.subscriptionTier));
+  const resolvedAuthorCustomisation =
+    authorCustomisation ??
+    (profile?.uid === post.authorId
+      ? profile.profileCustomisation
+      : directoryAuthor?.profileCustomisation) ??
+    null;
+
   const [liked, setLiked] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [comments, setComments] = useState<PostComment[]>([]);
@@ -52,6 +81,7 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
   const [replyTo, setReplyTo] = useState<PostComment | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [shareToast, setShareToast] = useState('');
+  const [actionError, setActionError] = useState('');
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportTargetType, setReportTargetType] = useState<'post' | 'collab'>('post');
   const [reportReason, setReportReason] = useState('');
@@ -61,7 +91,8 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
   useEffect(() => {
     if (!profile) return;
     void checkPostLiked(post.id, profile.uid).then(setLiked);
-  }, [post.id, profile]);
+    void recordPostImpression(post.authorId, post.id, profile.uid);
+  }, [post.id, post.authorId, profile?.uid]);
 
   useEffect(() => {
     if (!showComments) return;
@@ -83,8 +114,13 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
   const isTaggedUser = taggedUids.includes(profile.uid);
 
   const handleLike = async () => {
-    const next = await togglePostLike(post, profile);
-    setLiked(next);
+    setActionError('');
+    try {
+      const next = await togglePostLike(post, profile);
+      setLiked(next);
+    } catch (err) {
+      setActionError(extractReadableErrorMessage(err, 'Unable to update like right now.'));
+    }
   };
 
   const handleShare = async () => {
@@ -101,33 +137,45 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
   const handleCommentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!commentText.trim()) return;
-    await addPostComment({
-      post,
-      author: profile,
-      text: commentText,
-      parentCommentId: replyTo?.id || '',
-    });
-    setCommentText('');
-    setReplyTo(null);
+    setActionError('');
+    try {
+      await addPostComment({
+        post,
+        author: profile,
+        text: commentText,
+        parentCommentId: replyTo?.id || '',
+        replyToUid: replyTo?.authorId,
+      });
+      setCommentText('');
+      setReplyTo(null);
+    } catch (err) {
+      setActionError(extractReadableErrorMessage(err, 'Your reply could not be posted. Please try again.'));
+    }
   };
 
   const handleReport = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reportReason.trim()) return;
-    await submitModerationReport({
-      reporterId: profile.uid,
-      targetType: reportTargetType,
-      targetId: post.id,
-      reason: reportReason,
-    });
-    setReportReason('');
-    setReportModalOpen(false);
-    setShareToast('Report submitted');
-    setTimeout(() => setShareToast(''), 2000);
+    setActionError('');
+    try {
+      await submitModerationReport({
+        reporterId: profile.uid,
+        targetType: reportTargetType,
+        targetId: post.id,
+        reason: reportReason,
+      });
+      setReportReason('');
+      setReportModalOpen(false);
+      setShareToast('Report submitted');
+      setTimeout(() => setShareToast(''), 2000);
+    } catch (err) {
+      setActionError(extractReadableErrorMessage(err, 'Unable to submit report right now.'));
+    }
   };
 
   const handleCollabResponse = async (decision: 'accept' | 'decline') => {
     setCollabBusy(true);
+    setActionError('');
     try {
       await respondToCollaborationInvite({
         post,
@@ -136,21 +184,31 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
       });
       setShareToast(decision === 'accept' ? 'Collaboration accepted' : 'Invite declined');
       setTimeout(() => setShareToast(''), 2000);
+    } catch (err) {
+      setActionError(extractReadableErrorMessage(err, 'Unable to update collaboration invite.'));
     } finally {
       setCollabBusy(false);
     }
   };
 
   const handleSelfUntag = async () => {
-    await removeSelfTagFromPost({ post, user: profile });
-    setShareToast('Tag removed');
-    setTimeout(() => setShareToast(''), 1800);
+    setActionError('');
+    try {
+      await removeSelfTagFromPost({ post, user: profile });
+      setShareToast('Tag removed');
+      setTimeout(() => setShareToast(''), 1800);
+    } catch (err) {
+      setActionError(extractReadableErrorMessage(err, 'Unable to remove tag right now.'));
+    }
   };
 
   const totalVotes = (post.pollCounts || []).reduce((acc, n) => acc + n, 0);
 
   return (
     <article className="p-4 sm:p-5 rounded-2xl bg-[#0D0B16]/75 hover:bg-[#0D0B16] transition-colors border border-white/[0.06] hover:border-[#8B5CF6]/20 space-y-3.5">
+      {actionError && (
+        <FriendlyErrorBanner message={actionError} onDismiss={() => setActionError('')} />
+      )}
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
@@ -159,10 +217,11 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
             onClick={() => onOpenProfile(post.authorId)}
             className="shrink-0"
           >
-            <ResilientImage
+            <CustomisedAvatar
               src={post.authorAvatar}
               alt={post.authorName}
-              className="w-10 h-10 rounded-full object-cover ring-1 ring-[#8B5CF6]/35"
+              sizeClass="w-10 h-10"
+              customisation={resolvedAuthorCustomisation}
             />
           </button>
           <div className="min-w-0">
@@ -175,6 +234,7 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
                 {post.authorName}
               </button>
               <BadgeStrip badges={postBadges} size={14} max={3} />
+              <TierBadge tier={resolvedAuthorTier} showFree={false} />
               <span className="text-xs text-[#64748B] truncate">@{post.authorUsername}</span>
               {acceptedCollabUids.length > 0 && (
                 <span className="inline-flex items-center gap-1 text-xs text-[#CBD5E1] flex-wrap">
@@ -231,9 +291,13 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
               {post.authorId === profile.uid ? (
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     setShowMenu(false);
-                    void deletePost(post.id, profile.uid);
+                    try {
+                      await deletePost(post.id, profile.uid);
+                    } catch (err) {
+                      setActionError(extractReadableErrorMessage(err, 'Unable to delete post right now.'));
+                    }
                   }}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-rose-400 hover:bg-rose-500/10 text-left"
                 >
@@ -402,7 +466,13 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
               <button
                 key={idx}
                 type="button"
-                onClick={() => void voteOnPoll(post, profile.uid, idx)}
+                onClick={async () => {
+                  try {
+                    await voteOnPoll(post, profile.uid, idx);
+                  } catch (err) {
+                    setActionError(extractReadableErrorMessage(err, 'Unable to submit your vote right now.'));
+                  }
+                }}
                 className="relative w-full text-left px-4 py-2.5 rounded-xl border border-[#8B5CF6]/20 bg-[#08070F] hover:border-[#8B5CF6]/55 overflow-hidden transition-colors"
               >
                 <div
@@ -447,7 +517,13 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
 
           <button
             type="button"
-            onClick={() => void repostPost(post, profile)}
+            onClick={async () => {
+              try {
+                await repostPost(post, profile);
+              } catch (err) {
+                setActionError(extractReadableErrorMessage(err, 'Unable to repost right now.'));
+              }
+            }}
             className="inline-flex items-center gap-1.5 py-1.5 px-1 rounded-lg hover:text-white transition-colors min-h-[36px]"
           >
             <Repeat2 size={16} />
@@ -489,7 +565,13 @@ export function PostCard({ post, isSaved, onOpenProfile, onHashtagClick }: PostC
 
         <button
           type="button"
-          onClick={() => void toggleSavePost(post, profile.uid)}
+          onClick={async () => {
+            try {
+              await toggleSavePost(post, profile.uid);
+            } catch (err) {
+              setActionError(extractReadableErrorMessage(err, 'Unable to update saved posts right now.'));
+            }
+          }}
           className={`inline-flex items-center justify-center p-2 rounded-lg transition-colors min-w-[36px] min-h-[36px] ${
             isSaved ? 'text-[#C084FC]' : 'hover:text-white'
           }`}

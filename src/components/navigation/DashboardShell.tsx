@@ -2,8 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Award,
+  BarChart3,
   Bell,
   Compass,
+  CreditCard,
   Film,
   Gift,
   Heart,
@@ -11,6 +13,7 @@ import {
   LogOut,
   Megaphone,
   MessageSquare,
+  Palette,
   PlusSquare,
   Search,
   Settings,
@@ -27,7 +30,9 @@ import { OfflineIndicator } from '../common/OfflineIndicator';
 import { PresenceBadge } from '../common/PresenceBadge';
 import { PWAInstallButton } from '../common/PWAInstallButton';
 import { ResilientImage } from '../common/ResilientImage';
+import { TierBadge } from '../common/TierBadge';
 import { BadgeStrip } from '../common/VerifiedBadge';
+import { CustomisedAvatar } from '../profile/CustomisedAvatar';
 import { useAuth } from '../../hooks/useAuth';
 import { logoutUser } from '../../services/auth/authService';
 import {
@@ -57,6 +62,7 @@ type ProfileTab = 'posts' | 'videos' | 'photos' | 'tagged' | 'collabs' | 'gifts'
 interface DashboardShellProps {
   activeSection: NavSection;
   onNavigate: (section: NavSection, targetId?: string, profileTab?: ProfileTab) => void;
+  onOpenSearch?: (query?: string) => void;
   onOpenAdminSettings?: () => void;
   onOpenUserProfile: (uid: string) => void;
   notifications: NotificationItem[];
@@ -87,6 +93,11 @@ const SECTION_LABELS: Record<NavSection, string> = {
   spaces: 'Spaces',
   profile: 'Profile',
   settings: 'Settings',
+  search: 'Search & Discovery',
+  notifications: 'Notification Centre',
+  analytics: 'Creator Analytics',
+  subscriptions: 'Nexora Membership',
+  studio: 'Profile Studio',
 };
 
 const NOTIF_FILTERS: { id: 'all' | 'unread' | NotificationCategory; label: string }[] = [
@@ -125,6 +136,7 @@ function NotificationGlyph({ type }: { type: NotificationItem['type'] }) {
 export function DashboardShell({
   activeSection,
   onNavigate,
+  onOpenSearch,
   onOpenAdminSettings,
   onOpenUserProfile,
   notifications,
@@ -140,7 +152,9 @@ export function DashboardShell({
     adminPresenceMap,
     announcements,
     platformConfig,
+    effectiveTier,
     getUserBadges,
+    getUserTier,
   } = useAuth();
   const [navPhase, setNavPhase] = useState<'expanded' | 'logo-only' | 'hidden'>('expanded');
   const [dockVisible, setDockVisible] = useState(true);
@@ -479,6 +493,17 @@ export function DashboardShell({
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setTimeout(() => setSearchFocused(false), 180)}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    setSearchFocused(false);
+                    if (onOpenSearch) {
+                      onOpenSearch(searchQuery.trim());
+                    } else {
+                      onNavigate('search', searchQuery.trim());
+                    }
+                  }
+                }}
                 placeholder="Search people, spaces, posts..."
                 className="w-full pl-9 pr-8 py-2 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 focus:border-[#8B5CF6] outline-none text-xs text-white placeholder:text-[#64748B] transition-colors"
               />
@@ -583,6 +608,21 @@ export function DashboardShell({
                       )}
                     </>
                   )}
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setSearchFocused(false);
+                      if (onOpenSearch) {
+                        onOpenSearch(searchQuery.trim());
+                      } else {
+                        onNavigate('search', searchQuery.trim());
+                      }
+                    }}
+                    className="w-full py-2 px-3 rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/30 text-xs font-semibold text-[#E9D5FF] hover:bg-[#7C3AED]/30 transition-colors"
+                  >
+                    Explore full results in Search & Discovery
+                  </button>
                 </div>
               )}
             </div>
@@ -691,6 +731,19 @@ export function DashboardShell({
                       ))
                     )}
                   </div>
+
+                  <div className="px-4 py-2.5 border-t border-white/10 bg-[#0A0812] flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNotifs(false);
+                        onNavigate('notifications');
+                      }}
+                      className="w-full py-2 rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/30 text-xs font-semibold text-[#E9D5FF] hover:bg-[#7C3AED]/30 transition-colors"
+                    >
+                      Open Notification Centre
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -738,10 +791,11 @@ export function DashboardShell({
 
               {showAccountMenu && (
                 <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-1.5rem)] bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-2 space-y-1 z-50">
-                  <div className="px-3 py-2.5 border-b border-white/10">
+                    <div className="px-3 py-2.5 border-b border-white/10">
                     <p className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
                       <span className="truncate">{profile.displayName}</span>
                       <BadgeStrip badges={selfBadges} size={13} max={3} />
+                      <TierBadge tier={effectiveTier} showFree={false} size="xs" />
                     </p>
                     <p className="text-[11px] text-[#94A3B8] truncate">@{profile.username}</p>
                     {isActiveStaff && (
@@ -764,11 +818,69 @@ export function DashboardShell({
                     type="button"
                     onClick={() => {
                       setShowAccountMenu(false);
+                      if (onOpenSearch) onOpenSearch('');
+                      else onNavigate('search');
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                  >
+                    <Search size={14} /> Search & Discovery
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAccountMenu(false);
+                      onNavigate('notifications');
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <Bell size={14} /> Notification Centre
+                    </span>
+                    {unreadCount > 0 && (
+                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded bg-[#7C3AED] text-white font-semibold">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAccountMenu(false);
+                      onNavigate('analytics');
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                  >
+                    <BarChart3 size={14} /> Creator Analytics
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAccountMenu(false);
+                      onNavigate('studio');
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                  >
+                    <Palette size={14} /> Profile Customisation Studio
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAccountMenu(false);
+                      onNavigate('subscriptions');
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E9D5FF] hover:bg-[#7C3AED]/15 text-left font-medium"
+                  >
+                    <CreditCard size={14} className="text-[#C084FC]" /> Nexora Membership
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAccountMenu(false);
                       onNavigate('settings');
                     }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
                   >
-                    <Settings size={14} /> Account, Privacy & Notifications
+                    <Settings size={14} /> Account, Privacy & Settings
                   </button>
                   {isActiveStaff && (
                     <button
@@ -821,6 +933,14 @@ export function DashboardShell({
                   autoFocus
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      setShowMobileSearch(false);
+                      if (onOpenSearch) onOpenSearch(searchQuery.trim());
+                      else onNavigate('search', searchQuery.trim());
+                    }
+                  }}
                   placeholder="Search people, spaces, posts..."
                   className="w-full pl-9 pr-8 py-2.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/25 focus:border-[#8B5CF6] outline-none text-sm text-white placeholder:text-[#64748B]"
                 />
@@ -939,6 +1059,17 @@ export function DashboardShell({
                 Type a name, @username, space, or keyword to search Nexora.
               </p>
             )}
+            <button
+              type="button"
+              onClick={() => {
+                setShowMobileSearch(false);
+                if (onOpenSearch) onOpenSearch(searchQuery.trim());
+                else onNavigate('search', searchQuery.trim());
+              }}
+              className="w-full min-h-[40px] rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/30 text-xs font-semibold text-[#E9D5FF]"
+            >
+              Open Full Search & Discovery
+            </button>
           </div>
         </div>
       )}
@@ -1011,7 +1142,12 @@ export function DashboardShell({
         </main>
       )}
 
-      {activeSection === 'settings' && (
+      {(activeSection === 'settings' ||
+        activeSection === 'search' ||
+        activeSection === 'notifications' ||
+        activeSection === 'analytics' ||
+        activeSection === 'subscriptions' ||
+        activeSection === 'studio') && (
         <main className="relative z-10 flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28">
           {children}
         </main>
@@ -1025,10 +1161,11 @@ export function DashboardShell({
               {/* Identity Summary */}
               <div className="p-5 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 space-y-4">
                 <div className="flex items-center gap-3.5">
-                  <ResilientImage
+                  <CustomisedAvatar
                     src={profile.avatarUrl}
                     alt={profile.displayName}
-                    className="w-12 h-12 rounded-full object-cover shrink-0 ring-2 ring-[#7C3AED]/50"
+                    sizeClass="w-12 h-12"
+                    customisation={profile.profileCustomisation}
                   />
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5 min-w-0">
@@ -1039,7 +1176,8 @@ export function DashboardShell({
                       >
                         {profile.displayName}
                       </button>
-                      <BadgeStrip badges={selfBadges} size={13} max={3} />
+                      <BadgeStrip badges={selfBadges} size={13} max={2} />
+                      <TierBadge tier={effectiveTier} showFree={false} size="xs" />
                     </div>
                     <p className="text-xs text-[#94A3B8] truncate">@{profile.username}</p>
                   </div>
@@ -1064,6 +1202,37 @@ export function DashboardShell({
                     </p>
                     <p className="text-[11px] text-[#94A3B8]">Following</p>
                   </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/[0.08]">
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('analytics')}
+                    className="min-h-[36px] px-2.5 rounded-xl bg-[#120F1E] border border-white/10 hover:border-[#8B5CF6]/40 text-[11px] font-semibold text-[#CBD5E1] hover:text-white inline-flex items-center justify-center gap-1.5"
+                  >
+                    <BarChart3 size={13} className="text-[#C084FC]" /> Analytics
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('studio')}
+                    className="min-h-[36px] px-2.5 rounded-xl bg-[#120F1E] border border-white/10 hover:border-[#8B5CF6]/40 text-[11px] font-semibold text-[#CBD5E1] hover:text-white inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Palette size={13} className="text-[#C084FC]" /> Studio
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('notifications')}
+                    className="min-h-[36px] px-2.5 rounded-xl bg-[#120F1E] border border-white/10 hover:border-[#8B5CF6]/40 text-[11px] font-semibold text-[#CBD5E1] hover:text-white inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Bell size={13} className="text-[#C084FC]" /> Alerts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('subscriptions')}
+                    className="min-h-[36px] px-2.5 rounded-xl bg-[#7C3AED]/15 border border-[#8B5CF6]/30 hover:bg-[#7C3AED]/25 text-[11px] font-semibold text-[#E9D5FF] inline-flex items-center justify-center gap-1.5"
+                  >
+                    <CreditCard size={13} className="text-[#C084FC]" /> Plans
+                  </button>
                 </div>
               </div>
 
@@ -1137,10 +1306,11 @@ export function DashboardShell({
                             className="flex items-center gap-2.5 min-w-0 text-left"
                           >
                             <div className="relative shrink-0">
-                              <ResilientImage
+                              <CustomisedAvatar
                                 src={u.avatarUrl}
                                 alt={u.displayName}
-                                className="w-9 h-9 rounded-full object-cover"
+                                sizeClass="w-9 h-9"
+                                customisation={u.profileCustomisation}
                               />
                               {(() => {
                                 const rec = adminPresenceMap[u.uid];
@@ -1160,6 +1330,7 @@ export function DashboardShell({
                                   max={2}
                                   interactive={false}
                                 />
+                                <TierBadge tier={getUserTier(u.uid, u.subscriptionTier)} showFree={false} size="xs" />
                               </p>
                               <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
                             </div>

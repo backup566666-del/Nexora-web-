@@ -343,8 +343,10 @@ function containsTechnicalLeak(message: string): boolean {
   const trimmed = message.trim();
   if (!trimmed) return true;
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) return true;
-  if (/\n\s*at\s+/i.test(trimmed)) return true;
-  return /firestore|firebase|storage\/|auth\/|permission_denied|permission-denied|insufficient permissions|error\s*\(|status\s*\d{3}|ai-studio-bf321206|firestore\.rules|storage\.rules|\/users\/|\/posts\/|\/vibes\/|\/spaces\/|\/conversations\/|cors|xmlhttprequest/i.test(
+  if (/\n\s*at\s+/i.test(trimmed) || /\bat\s+[A-Za-z0-9_.$]+\s*\([^)]+:\d+:\d+\)/.test(trimmed)) return true;
+  if (/\b\d{6,}\b/.test(trimmed)) return true;
+  if (/\b(?:http|status(?:\s*code)?)\s*[:=]?\s*[45]\d{2}\b/i.test(trimmed)) return true;
+  return /firestore|firebase|storage\/|auth\/|stripe_|pi_[a-zA-Z0-9]+|cs_(?:test|live)_|permission_denied|permission-denied|insufficient permissions|error\s*\(|status\s*\d{3}|ai-studio-bf321206|firestore\.rules|storage\.rules|\/users\/|\/posts\/|\/vibes\/|\/spaces\/|\/conversations\/|\/notifications\/|\/user_subscriptions\/|cors|xmlhttprequest|econnrefused|enotfound/i.test(
     trimmed
   );
 }
@@ -355,6 +357,10 @@ export function extractReadableErrorMessage(
   context?: { feature?: string; recordDiagnostic?: boolean }
 ): string {
   if (!err) return fallback;
+
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return "You're offline. Check your internet connection and try again.";
+  }
 
   const mediaKind = (err as { mediaKind?: string })?.mediaKind;
   if (mediaKind === 'video_too_large') {
@@ -385,7 +391,7 @@ export function extractReadableErrorMessage(
     return 'This file is too large. Please choose a smaller file.';
   }
   if (mediaKind === 'unsupported_file') {
-    return 'This file format is not supported.';
+    return 'This file format is not supported. Please choose another file.';
   }
 
   const errCode = String((err as { code?: string })?.code || '').toLowerCase();
@@ -422,6 +428,7 @@ export function extractReadableErrorMessage(
   }
 
   const combined = `${errCode} ${structuredUnderlying} ${rawMessage}`.toLowerCase();
+  const featureHint = (context?.feature || '').toLowerCase();
 
   // Record diagnostic silently when an infrastructure or unexpected error occurs
   if (context?.recordDiagnostic !== false && (isStructuredFirestore || isStructuredStorage || errCode)) {
@@ -442,7 +449,11 @@ export function extractReadableErrorMessage(
     (combined.includes('video') || combined.includes('mp4') || combined.includes('quicktime') || combined.includes('webm')) &&
     (combined.includes('unsupported') || combined.includes('format') || combined.includes('file type'))
   ) {
-    return 'This video format is not supported.';
+    return 'This video format is not supported. Please choose another file.';
+  }
+
+  if (combined.includes('unsupported file') || combined.includes('unsupported format')) {
+    return 'This file format is not supported. Please choose another file.';
   }
 
   // Storage failure friendly translation
@@ -450,10 +461,20 @@ export function extractReadableErrorMessage(
     if (combined.includes('video') || structuredPath.includes('vibe')) {
       return "Your video couldn't be uploaded. Please try again.";
     }
-    if (combined.includes('image') || structuredPath.includes('avatar') || structuredPath.includes('cover') || structuredPath.includes('photo')) {
-      return "We couldn't upload your image. Please try again.";
-    }
     return "We couldn't upload your file. Please try again.";
+  }
+
+  // Payment & Subscription errors
+  if (featureHint.includes('billing') || featureHint.includes('subscription') || combined.includes('stripe') || combined.includes('payment')) {
+    if (combined.includes('not configured') || combined.includes('unavailable') || combined.includes('pricing')) {
+      return 'Online checkout is not available right now. Please contact support or try again shortly.';
+    }
+    return 'Your payment couldn\'t be completed. Please check your payment method.';
+  }
+
+  // Suspended / restricted account
+  if (combined.includes('suspended') || combined.includes('restricted')) {
+    return 'This action is currently unavailable for your account.';
   }
 
   // Expired / invalid session
@@ -481,38 +502,46 @@ export function extractReadableErrorMessage(
     return 'You are not authorised to perform this action.';
   }
 
-  // Network & timeout errors
+  // Network & offline errors
+  if (
+    errCode === 'auth/network-request-failed' ||
+    combined.includes('offline') ||
+    combined.includes('network') ||
+    combined.includes('failed to fetch')
+  ) {
+    return "You're offline. Check your internet connection and try again.";
+  }
+
+  // Server unavailable / timeout errors
   if (
     errCode === 'unavailable' ||
     errCode === 'firestore/unavailable' ||
-    errCode === 'auth/network-request-failed' ||
-    combined.includes('network') ||
-    combined.includes('failed to fetch') ||
     combined.includes('unavailable') ||
-    combined.includes('offline') ||
     combined.includes('timed out') ||
-    combined.includes('timeout')
+    combined.includes('timeout') ||
+    combined.includes('503') ||
+    combined.includes('502') ||
+    combined.includes('500')
   ) {
-    return 'Check your internet connection and try again.';
+    return 'Nexora is temporarily unavailable. Please try again shortly.';
   }
 
   // Quota / rate limits
   if (combined.includes('resource-exhausted') || combined.includes('quota') || combined.includes('too-many-requests')) {
-    return 'This service is busy right now. Please try again in a moment.';
+    return 'Nexora is temporarily busy right now. Please try again shortly.';
   }
 
-  // Image size/compression errors
-  if (combined.includes('image') && (combined.includes('large') || combined.includes('complex'))) {
-    return 'This image is too large. Please choose a smaller image.';
+  // Feature-specific clean fallbacks when technical details leak
+  if (containsTechnicalLeak(rawMessage)) {
+    if (context?.recordDiagnostic !== false) {
+      void recordErrorDiagnostic({ feature: context?.feature || 'app', err });
+    }
+    if (featureHint.includes('post')) return "Your post couldn't be published. Please try again.";
+    if (featureHint.includes('chat') || featureHint.includes('message')) return "Your message wasn't sent. Please try again.";
+    if (featureHint.includes('profile')) return "We couldn't save your profile changes. Please try again.";
+    return fallback;
   }
 
-  // If clean validation/business message without technical leaks, surface it directly
-  if (!containsTechnicalLeak(rawMessage)) {
-    return rawMessage;
-  }
-
-  if (context?.recordDiagnostic !== false) {
-    void recordErrorDiagnostic({ feature: context?.feature || 'app', err });
-  }
-  return fallback;
+  return rawMessage;
 }
+

@@ -97,6 +97,28 @@ service cloud.firestore {
       ];
     }
 
+    function isValidProfileCustomisation(custom) {
+      return custom is map
+        && custom.keys().hasOnly([
+          'themeId', 'backgroundColor', 'accentColor', 'gradientId',
+          'bannerPresetId', 'bannerImageUrl', 'avatarFrameId',
+          'staticDecorationId', 'animatedDecorationId', 'effectId',
+          'layoutVariant', 'cardOpacity', 'updatedAt'
+        ])
+        && isOptionalString(custom, 'themeId', 64)
+        && isOptionalString(custom, 'backgroundColor', 16)
+        && isOptionalString(custom, 'accentColor', 16)
+        && isOptionalString(custom, 'gradientId', 64)
+        && isOptionalString(custom, 'bannerPresetId', 64)
+        && isOptionalString(custom, 'bannerImageUrl', 400000)
+        && isOptionalString(custom, 'avatarFrameId', 64)
+        && isOptionalString(custom, 'staticDecorationId', 64)
+        && isOptionalString(custom, 'animatedDecorationId', 64)
+        && isOptionalString(custom, 'effectId', 64)
+        && (!('layoutVariant' in custom) || custom.layoutVariant in ['classic', 'spotlight', 'compact', 'showcase'])
+        && (!('cardOpacity' in custom) || (custom.cardOpacity is number && custom.cardOpacity >= 50 && custom.cardOpacity <= 100));
+    }
+
     // --- Validation Blueprints ---
     function isValidUserProfile(data) {
       return data.keys().hasAll([
@@ -109,7 +131,9 @@ service cloud.firestore {
           'coverPositionY', 'website', 'location', 'interests', 'verified',
           'suspended', 'suspendedReason', 'suspendedAt',
           'onboardingCompleted', 'followersCount', 'followingCount', 'postsCount',
-          'likesCount', 'isOnline', 'lastActiveAt', 'createdAt', 'updatedAt'
+          'likesCount', 'isOnline', 'lastActiveAt',
+          'subscriptionTier', 'profileCustomisation',
+          'createdAt', 'updatedAt'
         ])
         && isValidId(data.uid)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
@@ -132,6 +156,8 @@ service cloud.firestore {
         && data.likesCount is int && data.likesCount >= 0
         && data.isOnline is bool
         && (!('lastActiveAt' in data) || data.lastActiveAt is timestamp)
+        && (!('subscriptionTier' in data) || data.subscriptionTier in ['free', 'plus', 'pro'])
+        && (!('profileCustomisation' in data) || isValidProfileCustomisation(data.profileCustomisation))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -156,6 +182,16 @@ service cloud.firestore {
         && (!('allowCollaborations' in data.privacySettings) || data.privacySettings.allowCollaborations in ['everyone', 'followers', 'nobody'])
         && (!('emailNotifications' in data.privacySettings) || data.privacySettings.emailNotifications is map)
         && (!('inAppNotifications' in data.privacySettings) || data.privacySettings.inAppNotifications is map)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPreferences(data) {
+      return data.keys().hasAll(['uid', 'pinnedConvIds', 'mutedConvIds', 'recentSearches', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'pinnedConvIds', 'mutedConvIds', 'recentSearches', 'updatedAt'])
+        && isValidId(data.uid)
+        && isBoundedStringList(data.pinnedConvIds, 30, 128)
+        && isBoundedStringList(data.mutedConvIds, 100, 128)
+        && isBoundedStringList(data.recentSearches, 20, 80)
         && data.updatedAt is timestamp;
     }
 
@@ -334,7 +370,7 @@ service cloud.firestore {
         && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80
         && data.actorRole is string && data.actorRole.size() >= 1 && data.actorRole.size() <= 40
         && data.action is string && data.action.size() >= 1 && data.action.size() <= 100
-        && data.category in ['admin', 'community', 'verification', 'identity', 'platform', 'moderation', 'notification']
+        && data.category in ['admin', 'community', 'verification', 'identity', 'platform', 'moderation', 'notification', 'billing', 'customisation']
         && data.targetType is string && data.targetType.size() >= 1 && data.targetType.size() <= 40
         && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
         && isOptionalString(data, 'targetLabel', 120)
@@ -600,20 +636,28 @@ service cloud.firestore {
 
     function isValidNotification(data) {
       return data.keys().hasAll(['recipientId', 'actorId', 'actorName', 'type', 'read', 'createdAt'])
-        && data.keys().hasOnly(['recipientId', 'actorId', 'actorName', 'actorAvatar', 'type', 'category', 'targetId', 'preview', 'read', 'createdAt'])
+        && data.keys().hasOnly([
+          'recipientId', 'actorId', 'actorName', 'actorAvatar', 'type', 'category',
+          'title', 'targetType', 'targetId', 'dedupeKey', 'preview', 'read', 'createdAt'
+        ])
         && isValidId(data.recipientId)
         && isValidId(data.actorId)
         && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80
         && isOptionalString(data, 'actorAvatar', 200000)
         && data.type in [
-          'like', 'comment', 'follow', 'repost', 'space_invite', 'message',
-          'announcement', 'security_alert', 'admin_notice',
-          'badge_awarded', 'badge_revoked', 'identity_decision', 'staff_role_change',
-          'community_status', 'verification_decision', 'collab_invite', 'collab_response',
-          'post_tag', 'gift_received', 'support_ticket'
+          'like', 'comment', 'reply', 'mention', 'follow', 'repost', 'space_invite',
+          'space_announcement', 'event_reminder', 'message', 'announcement',
+          'security_alert', 'admin_notice', 'badge_awarded', 'badge_revoked',
+          'identity_decision', 'staff_role_change', 'community_status',
+          'verification_decision', 'collab_invite', 'collab_response',
+          'post_tag', 'gift_received', 'support_ticket',
+          'subscription_notice', 'subscription_renewal', 'system_update'
         ]
-        && (!('category' in data) || data.category in ['account', 'social', 'badges', 'gifts', 'admin', 'security'])
+        && (!('category' in data) || data.category in ['account', 'social', 'badges', 'gifts', 'admin', 'security', 'messages', 'spaces', 'subscriptions'])
+        && isOptionalString(data, 'title', 120)
+        && (!('targetType' in data) || data.targetType in ['post', 'vibe', 'profile', 'chat', 'space', 'subscription', 'settings', 'system'])
         && isOptionalString(data, 'targetId', 128)
+        && isOptionalString(data, 'dedupeKey', 128)
         && isOptionalString(data, 'preview', 200)
         && data.read is bool
         && data.createdAt is timestamp;
@@ -623,7 +667,7 @@ service cloud.firestore {
       return data.keys().hasAll(['reporterId', 'targetType', 'targetId', 'reason', 'createdAt'])
         && data.keys().hasOnly(['reporterId', 'targetType', 'targetId', 'reason', 'status', 'resolutionNote', 'resolvedBy', 'resolvedAt', 'createdAt'])
         && isValidId(data.reporterId)
-        && data.targetType in ['post', 'user', 'space', 'vibe', 'gift', 'collab']
+        && data.targetType in ['post', 'user', 'space', 'vibe', 'gift', 'collab', 'message']
         && isValidId(data.targetId)
         && data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 300
         && (!('status' in data) || data.status in ['open', 'resolved', 'dismissed'])
@@ -696,7 +740,7 @@ service cloud.firestore {
         && isOptionalString(data, 'recipientUid', 128)
         && data.recipientEmailMasked is string && data.recipientEmailMasked.size() >= 1 && data.recipientEmailMasked.size() <= 120
         && data.eventType is string && data.eventType.size() >= 1 && data.eventType.size() <= 60
-        && data.category in ['account', 'social', 'badges', 'gifts', 'admin', 'security']
+        && data.category in ['account', 'social', 'badges', 'gifts', 'admin', 'security', 'messages', 'spaces', 'subscriptions']
         && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 160
         && data.provider in ['resend', 'smtp', 'none']
         && data.status in ['sent', 'not_configured', 'skipped', 'failed']
@@ -769,6 +813,117 @@ service cloud.firestore {
         && isOptionalString(data, 'resolvedBy', 128)
         && (!('resolvedAt' in data) || data.resolvedAt is timestamp)
         && data.createdAt is timestamp;
+    }
+
+    function isValidCreatorAnalyticsDaily(data) {
+      return data.keys().hasAll(['uid', 'dateKey', 'profileVisits', 'postImpressions', 'vibeViews', 'followersDelta', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'dateKey', 'profileVisits', 'postImpressions', 'vibeViews', 'followersDelta', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.dateKey is string && data.dateKey.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.profileVisits is int && data.profileVisits >= 0
+        && data.postImpressions is int && data.postImpressions >= 0
+        && data.vibeViews is int && data.vibeViews >= 0
+        && data.followersDelta is int && data.followersDelta >= -100000 && data.followersDelta <= 100000
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSubscriptionPlan(data) {
+      return data.keys().hasAll(['id', 'name', 'enabled', 'pricingConfigured', 'benefits', 'sortOrder', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'name', 'tagline', 'badgeLabel', 'badgeColor',
+          'monthlyPriceCents', 'yearlyPriceCents', 'currency',
+          'stripeMonthlyPriceId', 'stripeYearlyPriceId',
+          'enabled', 'pricingConfigured', 'benefits', 'sortOrder',
+          'updatedBy', 'updatedAt'
+        ])
+        && data.id in ['free', 'plus', 'pro']
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 60
+        && isOptionalString(data, 'tagline', 160)
+        && isOptionalString(data, 'badgeLabel', 40)
+        && isOptionalString(data, 'badgeColor', 24)
+        && (!('monthlyPriceCents' in data) || data.monthlyPriceCents == null || (data.monthlyPriceCents is int && data.monthlyPriceCents >= 0))
+        && (!('yearlyPriceCents' in data) || data.yearlyPriceCents == null || (data.yearlyPriceCents is int && data.yearlyPriceCents >= 0))
+        && isOptionalString(data, 'currency', 10)
+        && isOptionalString(data, 'stripeMonthlyPriceId', 128)
+        && isOptionalString(data, 'stripeYearlyPriceId', 128)
+        && data.enabled is bool
+        && data.pricingConfigured is bool
+        && isBoundedStringList(data.benefits, 12, 160)
+        && data.sortOrder is int && data.sortOrder >= 0
+        && isOptionalString(data, 'updatedBy', 128)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserSubscription(data) {
+      return data.keys().hasAll(['uid', 'tier', 'billingCycle', 'status', 'cancelAtPeriodEnd', 'provider', 'verifiedByServer', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'tier', 'billingCycle', 'status', 'cancelAtPeriodEnd', 'provider',
+          'stripeCustomerId', 'stripeSubscriptionId', 'lastSessionId', 'receiptRef',
+          'verifiedByServer', 'startedAt', 'currentPeriodEnd', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.tier in ['free', 'plus', 'pro']
+        && data.billingCycle in ['monthly', 'yearly', 'none']
+        && data.status in ['active', 'canceled', 'past_due', 'expired', 'free']
+        && data.cancelAtPeriodEnd is bool
+        && data.provider in ['stripe', 'admin', 'free']
+        && isOptionalString(data, 'stripeCustomerId', 128)
+        && isOptionalString(data, 'stripeSubscriptionId', 128)
+        && isOptionalString(data, 'lastSessionId', 160)
+        && isOptionalString(data, 'receiptRef', 120)
+        && data.verifiedByServer is bool
+        && (!('startedAt' in data) || data.startedAt is timestamp)
+        && (!('currentPeriodEnd' in data) || data.currentPeriodEnd is timestamp)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPaymentTransaction(data) {
+      return data.keys().hasAll(['uid', 'planId', 'billingCycle', 'amountCents', 'currency', 'status', 'provider', 'receiptNumber', 'createdAt'])
+        && data.keys().hasOnly([
+          'uid', 'userDisplayName', 'userUsername', 'planId', 'billingCycle',
+          'amountCents', 'currency', 'status', 'provider',
+          'stripeSessionId', 'stripePaymentIntentId', 'receiptNumber',
+          'errorMessage', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && isOptionalString(data, 'userDisplayName', 80)
+        && isOptionalString(data, 'userUsername', 30)
+        && data.planId in ['free', 'plus', 'pro']
+        && data.billingCycle in ['monthly', 'yearly']
+        && data.amountCents is int && data.amountCents >= 0
+        && data.currency is string && data.currency.size() >= 3 && data.currency.size() <= 10
+        && data.status in ['paid', 'pending', 'failed', 'refunded', 'canceled']
+        && data.provider in ['stripe', 'admin']
+        && isOptionalString(data, 'stripeSessionId', 160)
+        && isOptionalString(data, 'stripePaymentIntentId', 160)
+        && data.receiptNumber is string && data.receiptNumber.size() >= 3 && data.receiptNumber.size() <= 80
+        && isOptionalString(data, 'errorMessage', 240)
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidCustomisationItem(data) {
+      return data.keys().hasAll(['category', 'name', 'requiredTier', 'enabled', 'previewValue', 'sortOrder', 'updatedAt'])
+        && data.keys().hasOnly([
+          'category', 'name', 'description', 'requiredTier', 'enabled',
+          'previewValue', 'secondaryValue', 'animated', 'imageUrl', 'sortOrder',
+          'updatedBy', 'updatedAt'
+        ])
+        && data.category in [
+          'theme', 'background', 'accent', 'gradient', 'banner',
+          'avatar_frame', 'static_decoration', 'animated_decoration', 'effect', 'layout'
+        ]
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 60
+        && isOptionalString(data, 'description', 200)
+        && data.requiredTier in ['free', 'plus', 'pro']
+        && data.enabled is bool
+        && data.previewValue is string && data.previewValue.size() >= 1 && data.previewValue.size() <= 600
+        && isOptionalString(data, 'secondaryValue', 200)
+        && (!('animated' in data) || data.animated is bool)
+        && isOptionalString(data, 'imageUrl', 400000)
+        && data.sortOrder is int && data.sortOrder >= 0
+        && isOptionalString(data, 'updatedBy', 128)
+        && data.updatedAt is timestamp;
     }
 
     // --- Collection Rules ---
@@ -988,7 +1143,7 @@ service cloud.firestore {
     match /audit_logs/{logId} {
       allow get: if isValidId(logId) && isVerified() && (isPlatformOwner() || hasPerm('view_audit_logs') || hasPerm('manage_admins'));
       allow list: if isVerified() && (isPlatformOwner() || hasPerm('view_audit_logs') || hasPerm('manage_admins'))
-        && existing().category in ['admin', 'community', 'verification', 'identity', 'platform', 'moderation', 'notification'];
+        && existing().category in ['admin', 'community', 'verification', 'identity', 'platform', 'moderation', 'notification', 'billing', 'customisation'];
 
       allow create: if isValidId(logId)
         && isVerified()
@@ -1011,6 +1166,7 @@ service cloud.firestore {
         && incoming().uid == userId
         && (incoming().verified == false || isFounderOwner())
         && (!('suspended' in incoming()) || incoming().suspended == false)
+        && (!('subscriptionTier' in incoming()) || incoming().subscriptionTier == 'free')
         && incoming().followersCount == 0
         && incoming().followingCount == 0
         && incoming().postsCount == 0
@@ -1035,12 +1191,33 @@ service cloud.firestore {
               'displayName', 'username', 'bio', 'avatarUrl', 'coverUrl',
               'coverPositionY', 'website', 'location', 'interests',
               'onboardingCompleted', 'isOnline', 'lastActiveAt', 'postsCount',
-              'followingCount', 'updatedAt'
+              'followingCount', 'profileCustomisation', 'updatedAt'
             ])
+          ) ||
+          (
+            isOwner(userId)
+            && isNotSuspended()
+            && incoming().verified == existing().verified
+            && (!('suspended' in incoming()) ? !('suspended' in existing()) : ('suspended' in existing() && incoming().suspended == existing().suspended))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['subscriptionTier', 'updatedAt'])
+            && (
+              incoming().subscriptionTier == 'free' ||
+              (
+                exists(/databases/$(database)/documents/user_subscriptions/$(userId))
+                && get(/databases/$(database)/documents/user_subscriptions/$(userId)).data.tier == incoming().subscriptionTier
+                && get(/databases/$(database)/documents/user_subscriptions/$(userId)).data.verifiedByServer == true
+              )
+            )
           ) ||
           (
             !isTargetPlatformOwner(userId)
             && isPlatformOwner()
+          ) ||
+          (
+            !isTargetPlatformOwner(userId)
+            && hasPerm('manage_platform')
+            && incoming().verified == existing().verified
+            && incoming().diff(existing()).affectedKeys().hasOnly(['subscriptionTier', 'updatedAt'])
           ) ||
           (
             !isTargetPlatformOwner(userId)
@@ -1148,6 +1325,19 @@ service cloud.firestore {
           && isOwner(userId)
           && !existsAfter(/databases/$(database)/documents/users/$(targetId)/followers/$(userId));
       }
+    }
+
+    // Per-user private preferences (chat pin/mute + recent searches)
+    match /user_preferences/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow create: if isValidId(userId) && isVerified() && isOwner(userId)
+        && isValidUserPreferences(incoming())
+        && incoming().uid == userId
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isVerified() && isOwner(userId)
+        && isValidUserPreferences(incoming())
+        && incoming().uid == existing().uid
+        && incoming().updatedAt == request.time;
     }
 
     match /usernames/{username} {
@@ -1551,16 +1741,18 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && (
           incoming().type in [
-            'like', 'comment', 'follow', 'repost', 'space_invite', 'message',
+            'like', 'comment', 'reply', 'mention', 'follow', 'repost',
+            'space_invite', 'space_announcement', 'event_reminder', 'message',
             'collab_invite', 'collab_response', 'post_tag', 'gift_received', 'support_ticket'
           ] ||
-          (incoming().type == 'security_alert' && incoming().recipientId == request.auth.uid) ||
+          (incoming().type in ['security_alert', 'subscription_notice', 'subscription_renewal'] && incoming().recipientId == request.auth.uid) ||
           isPlatformOwner() ||
           hasPerm('manage_notifications') ||
           hasPerm('manage_verification') ||
           hasPerm('review_identity_docs') ||
           hasPerm('manage_communities') ||
-          hasPerm('manage_admins')
+          hasPerm('manage_admins') ||
+          hasPerm('manage_platform')
         );
 
       allow update: if isValidId(notifId)
@@ -1580,7 +1772,7 @@ service cloud.firestore {
         isOwner(existing().reporterId) || isPlatformOwner() || hasPerm('moderate_content') || hasPerm('manage_communities')
       );
       allow list: if isVerified() && (isPlatformOwner() || hasPerm('moderate_content') || hasPerm('manage_communities'))
-        && existing().targetType in ['post', 'user', 'space', 'vibe', 'gift', 'collab'];
+        && existing().targetType in ['post', 'user', 'space', 'vibe', 'gift', 'collab', 'message'];
 
       allow create: if isValidId(reportId) && isVerified()
         && isNotSuspended()
@@ -1776,6 +1968,126 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly(['resolved', 'resolvedBy', 'resolvedAt']);
 
       allow delete: if false;
+    }
+
+    // Creator Daily Aggregate Analytics (zero private viewer PII)
+    match /creator_analytics_daily/{docId} {
+      allow get: if isValidId(docId) && isVerified() && isOwner(existing().uid);
+      allow list: if isVerified() && existing().uid == request.auth.uid;
+
+      allow create: if isValidId(docId)
+        && isVerified()
+        && isValidCreatorAnalyticsDaily(incoming())
+        && incoming().profileVisits <= 1
+        && incoming().postImpressions <= 5
+        && incoming().vibeViews <= 5
+        && incoming().followersDelta >= -1 && incoming().followersDelta <= 1
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(docId)
+        && isVerified()
+        && isValidCreatorAnalyticsDaily(incoming())
+        && incoming().uid == existing().uid
+        && incoming().dateKey == existing().dateKey
+        && incoming().updatedAt == request.time
+        && incoming().profileVisits >= existing().profileVisits
+        && incoming().profileVisits <= existing().profileVisits + 1
+        && incoming().postImpressions >= existing().postImpressions
+        && incoming().postImpressions <= existing().postImpressions + 5
+        && incoming().vibeViews >= existing().vibeViews
+        && incoming().vibeViews <= existing().vibeViews + 5;
+    }
+
+    // Subscription Plans Catalog (Admin-Managed)
+    match /subscription_plans/{planId} {
+      allow get: if isValidId(planId) && isSignedIn();
+      allow list: if isSignedIn() && existing().id in ['free', 'plus', 'pro'];
+
+      allow create, update: if isValidId(planId)
+        && isVerified()
+        && isValidSubscriptionPlan(incoming())
+        && incoming().id == planId
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_platform'));
+
+      allow delete: if isValidId(planId) && isVerified() && (isPlatformOwner() || hasPerm('manage_platform'));
+    }
+
+    // User Subscriptions (Admin or verified server checkout receipt)
+    match /user_subscriptions/{userId} {
+      allow get: if isValidId(userId) && isVerified() && (
+        isOwner(userId) || isPlatformOwner() || hasPerm('manage_platform')
+      );
+      allow list: if isVerified()
+        && (isPlatformOwner() || hasPerm('manage_platform'))
+        && existing().tier in ['free', 'plus', 'pro'];
+
+      allow create, update: if isValidId(userId)
+        && isVerified()
+        && isValidUserSubscription(incoming())
+        && incoming().uid == userId
+        && incoming().updatedAt == request.time
+        && (
+          isPlatformOwner() ||
+          hasPerm('manage_platform') ||
+          (
+            isOwner(userId)
+            && (
+              (incoming().tier == 'free' && incoming().provider == 'free') ||
+              (incoming().cancelAtPeriodEnd == true && existing() != null && incoming().tier == existing().tier) ||
+              (incoming().provider == 'stripe' && incoming().verifiedByServer == true && incoming().lastSessionId is string && incoming().lastSessionId.matches('^cs_.*'))
+            )
+          )
+        );
+    }
+
+    // Payment Transactions & Receipts
+    match /payment_transactions/{txId} {
+      allow get: if isValidId(txId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner() || hasPerm('manage_platform')
+      );
+      allow list: if isVerified() && (
+        isOwner(existing().uid) ||
+        ((isPlatformOwner() || hasPerm('manage_platform')) && existing().status in ['paid', 'pending', 'failed', 'refunded', 'canceled'])
+      );
+
+      allow create: if isValidId(txId)
+        && isVerified()
+        && isValidPaymentTransaction(incoming())
+        && incoming().createdAt == request.time
+        && (
+          isPlatformOwner() ||
+          hasPerm('manage_platform') ||
+          (
+            isOwner(incoming().uid)
+            && incoming().provider == 'stripe'
+            && incoming().stripeSessionId is string
+            && incoming().stripeSessionId.matches('^cs_.*')
+          )
+        );
+
+      allow update: if isValidId(txId)
+        && isVerified()
+        && isValidPaymentTransaction(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && (isPlatformOwner() || hasPerm('manage_platform'));
+    }
+
+    // Profile Customisation Studio Catalog (Admin-Managed)
+    match /customisation_catalog/{itemId} {
+      allow get: if isValidId(itemId) && isSignedIn();
+      allow list: if isSignedIn() && existing().requiredTier in ['free', 'plus', 'pro'];
+
+      allow create, update: if isValidId(itemId)
+        && isVerified()
+        && isValidCustomisationItem(incoming())
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_platform'));
+
+      allow delete: if isValidId(itemId)
+        && isVerified()
+        && (isPlatformOwner() || hasPerm('manage_platform'));
     }
   }
 }

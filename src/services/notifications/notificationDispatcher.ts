@@ -2,11 +2,17 @@ import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import {
   NotificationCategory,
+  NotificationTargetType,
   NotificationType,
   PrivacySettings,
   UserProfile,
 } from '../../types/nexora';
-import { maskEmail, sanitizeString, withPrivacyDefaults } from '../../utils/validation';
+import {
+  LOCKED_NOTIFICATION_CATEGORIES,
+  maskEmail,
+  sanitizeString,
+  withPrivacyDefaults,
+} from '../../utils/validation';
 
 export interface DualDispatchParams {
   recipientUid?: string;
@@ -15,7 +21,9 @@ export interface DualDispatchParams {
   recipientPrivacy?: Partial<PrivacySettings> | null;
   actor: Pick<UserProfile, 'uid' | 'displayName' | 'avatarUrl'>;
   type: NotificationType;
-  category: NotificationCategory;
+  category?: NotificationCategory;
+  title?: string;
+  targetType?: NotificationTargetType;
   targetId?: string;
   inAppPreview: string;
   emailSubject: string;
@@ -73,18 +81,28 @@ export function inferCategoryFromNotificationType(type: NotificationType): Notif
       return 'gifts';
     case 'security_alert':
       return 'security';
+    case 'message':
+      return 'messages';
+    case 'space_invite':
+    case 'space_announcement':
+    case 'event_reminder':
+      return 'spaces';
+    case 'subscription_notice':
+    case 'subscription_renewal':
+      return 'subscriptions';
     case 'staff_role_change':
     case 'community_status':
     case 'admin_notice':
     case 'announcement':
     case 'support_ticket':
+    case 'system_update':
       return 'admin';
     case 'like':
     case 'comment':
+    case 'reply':
+    case 'mention':
     case 'follow':
     case 'repost':
-    case 'space_invite':
-    case 'message':
     case 'collab_invite':
     case 'collab_response':
     case 'post_tag':
@@ -93,17 +111,57 @@ export function inferCategoryFromNotificationType(type: NotificationType): Notif
   }
 }
 
+export function inferTargetTypeFromNotificationType(type: NotificationType): NotificationTargetType {
+  switch (type) {
+    case 'like':
+    case 'comment':
+    case 'reply':
+    case 'mention':
+    case 'repost':
+    case 'collab_invite':
+    case 'collab_response':
+    case 'post_tag':
+      return 'post';
+    case 'follow':
+    case 'badge_awarded':
+    case 'badge_revoked':
+    case 'verification_decision':
+    case 'identity_decision':
+    case 'gift_received':
+      return 'profile';
+    case 'message':
+      return 'chat';
+    case 'space_invite':
+    case 'space_announcement':
+    case 'event_reminder':
+    case 'community_status':
+      return 'space';
+    case 'subscription_notice':
+    case 'subscription_renewal':
+      return 'subscription';
+    case 'security_alert':
+    case 'staff_role_change':
+    case 'support_ticket':
+      return 'settings';
+    case 'admin_notice':
+    case 'announcement':
+    case 'system_update':
+    default:
+      return 'system';
+  }
+}
+
 export async function fetchServerEmailStatus(): Promise<ServerEmailStatus> {
   try {
     const res = await fetch('/api/email/status');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error('Email status check failed.');
     return (await res.json()) as ServerEmailStatus;
   } catch {
     return {
       configured: false,
       provider: 'none',
       fromAddress: 'Nexora <noreply@nexora.social>',
-      message: 'Unable to reach /api/email/status endpoint.',
+      message: 'Email delivery service is currently unavailable.',
     };
   }
 }
@@ -124,8 +182,10 @@ export async function dispatchDualNotification(
 
   const prefs = withPrivacyDefaults(params.recipientPrivacy);
   const category = params.category || inferCategoryFromNotificationType(params.type);
-  const inAppEnabled = prefs.inAppNotifications?.[category] !== false;
-  const emailEnabled = prefs.emailNotifications?.[category] !== false;
+  const isLockedCategory = LOCKED_NOTIFICATION_CATEGORIES.includes(category);
+  const inAppEnabled = isLockedCategory || prefs.inAppNotifications?.[category] !== false;
+  const emailEnabled = isLockedCategory || prefs.emailNotifications?.[category] !== false;
+  const targetType = params.targetType || inferTargetTypeFromNotificationType(params.type);
 
   let inAppCreated = false;
   if (
@@ -141,7 +201,10 @@ export async function dispatchDualNotification(
         actorAvatar: sanitizeString(params.actor.avatarUrl || '', 200000),
         type: params.type,
         category,
+        ...(params.title ? { title: sanitizeString(params.title, 120) } : {}),
+        targetType,
         targetId: sanitizeString(params.targetId || '', 128),
+        ...(params.dedupeKey ? { dedupeKey: sanitizeString(params.dedupeKey, 128) } : {}),
         preview: sanitizeString(params.inAppPreview, 200),
         read: false,
         createdAt: serverTimestamp(),

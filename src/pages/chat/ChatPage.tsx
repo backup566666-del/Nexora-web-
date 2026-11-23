@@ -1,11 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertCircle,
   ArrowLeft,
+  Ban,
+  BellOff,
   Check,
   CheckCheck,
+  Clock,
   Edit3,
   ExternalLink,
   FileText,
+  Flag,
   Forward,
   Image as ImageIcon,
   MessageSquarePlus,
@@ -15,7 +20,9 @@ import {
   Phone,
   PhoneCall,
   PhoneOff,
+  Pin,
   Plus,
+  RefreshCw,
   Reply,
   Search,
   Send,
@@ -35,9 +42,13 @@ import {
 } from '../../components/common/PresenceBadge';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
+import { TierBadge } from '../../components/common/TierBadge';
+import { CustomisedAvatar } from '../../components/profile/CustomisedAvatar';
+import { FriendlyErrorBanner } from '../../components/common/FriendlyErrorBanner';
 import { useAuth } from '../../hooks/useAuth';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import {
+  blockUserAccount,
   createGroupConversation,
   createOrGetDirectConversation,
   deleteChatMessage,
@@ -48,13 +59,18 @@ import {
   searchDirectoryUsers,
   sendChatMessage,
   setConversationTyping,
+  submitModerationReport,
   subscribeConversations,
   subscribeMessages,
+  subscribeUserPreferences,
   subscribeUserProfile,
   toggleMessageReaction,
+  toggleMuteConversation,
+  togglePinConversation,
+  unblockUserAccount,
 } from '../../services/firebase/socialService';
 import { uploadBlobAsset, uploadMediaAsset } from '../../services/storage/mediaUploadService';
-import { ChatMessage, Conversation, Story, UserProfile } from '../../types/nexora';
+import { ChatMessage, Conversation, Story, UserPreferences, UserProfile } from '../../types/nexora';
 import { getMessagingCryptoStatus } from '../../utils/cryptoProtocol';
 import { formatRelativeTime } from '../../utils/validation';
 
@@ -75,15 +91,38 @@ interface CallLogEntry {
   timestamp: string;
 }
 
+interface PendingOutboxMessage {
+  clientId: string;
+  convId: string;
+  text: string;
+  replyToId?: string;
+  replyToText?: string;
+  recipientIds: string[];
+  status: 'sending' | 'failed';
+  errorMessage?: string;
+  createdAtLabel: string;
+}
+
 const QUICK_EMOJIS = ['💜', '🔥', '👏', '😂', '😮', '🙌', '✨', '👍'];
 
 export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatPageProps) {
-  const { profile, privateInfo, adminPresenceMap, isAdminInvisibleActive, getUserBadges, getAdminEffectiveStatus } = useAuth();
+  const {
+    profile,
+    privateInfo,
+    adminPresenceMap,
+    isAdminInvisibleActive,
+    getUserBadges,
+    getUserTier,
+    getAdminEffectiveStatus,
+    refreshUserAndProfile,
+  } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [userPrefs, setUserPrefs] = useState<UserPreferences | null>(null);
   const [selectedConvId, setSelectedConvId] = useState<string | null>(initialConvId || null);
   const [mobileShowThread, setMobileShowThread] = useState<boolean>(Boolean(initialConvId));
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activePartner, setActivePartner] = useState<UserProfile | null>(null);
+  const [pendingOutbox, setPendingOutbox] = useState<PendingOutboxMessage[]>([]);
 
   // Left Panel Tabs & Search
   const [convFilter, setConvFilter] = useState<'all' | 'unread' | 'groups' | 'calls'>('all');
@@ -94,6 +133,10 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
   const [messageSearchTerm, setMessageSearchTerm] = useState('');
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
   const [showMembersModal, setShowMembersModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+  const [reportBusy, setReportBusy] = useState(false);
+  const [safetyFeedback, setSafetyFeedback] = useState('');
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
@@ -150,6 +193,11 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
         return convs.length > 0 ? convs[0].id : null;
       });
     });
+  }, [profile?.uid]);
+
+  useEffect(() => {
+    if (!profile?.uid) return;
+    return subscribeUserPreferences(profile.uid, setUserPrefs);
   }, [profile?.uid]);
 
   const activeConv = useMemo(
@@ -367,19 +415,39 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
     );
   };
 
-  const filteredConversations = conversations.filter((c) => {
-    const matchesSearch = getConvTitle(c).toLowerCase().includes(searchTerm.toLowerCase());
-    if (!matchesSearch) return false;
-    if (convFilter === 'unread') return isConversationUnread(c);
-    if (convFilter === 'groups') return c.isGroup;
-    return true;
-  });
+  const isMessageDelivered = (m: ChatMessage, c: Conversation) => {
+    if (m.senderId !== profile.uid) return false;
+    return Boolean(m.createdAt?.toMillis?.()) || c.participantIds.length > 1;
+  };
 
-  const unreadConvCount = conversations.filter(isConversationUnread).length;
+  const pinnedSet = new Set(userPrefs?.pinnedConvIds || []);
+  const mutedSet = new Set(userPrefs?.mutedConvIds || []);
+  const activePartnerBlocked = Boolean(activeOtherUid && blockedSet.has(activeOtherUid));
+
+  const filteredConversations = [...conversations]
+    .filter((c) => {
+      const matchesSearch = getConvTitle(c).toLowerCase().includes(searchTerm.toLowerCase());
+      if (!matchesSearch) return false;
+      if (convFilter === 'unread') return isConversationUnread(c);
+      if (convFilter === 'groups') return c.isGroup;
+      return true;
+    })
+    .sort((a, b) => {
+      const aPinned = pinnedSet.has(a.id) ? 1 : 0;
+      const bPinned = pinnedSet.has(b.id) ? 1 : 0;
+      if (aPinned !== bPinned) return bPinned - aPinned;
+      return (b.updatedAt?.toMillis?.() ?? 0) - (a.updatedAt?.toMillis?.() ?? 0);
+    });
+
+  const unreadConvCount = conversations.filter((c) => !mutedSet.has(c.id) && isConversationUnread(c)).length;
 
   const visibleMessages = messageSearchTerm.trim()
     ? messages.filter((m) => m.text.toLowerCase().includes(messageSearchTerm.toLowerCase()))
     : messages;
+
+  const threadOutbox = activeConv
+    ? pendingOutbox.filter((item) => item.convId === activeConv.id)
+    : [];
 
   const selectConversation = (convId: string) => {
     setSelectedConvId(convId);
@@ -387,6 +455,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
     setShowMessageSearch(false);
     setShowHeaderMenu(false);
     setChatError('');
+    setSafetyFeedback('');
     setReplyTo(null);
     setEditingMsg(null);
   };
@@ -405,35 +474,110 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
     }
   };
 
+  const dispatchOutboxMessage = async (draft: PendingOutboxMessage) => {
+    try {
+      await sendChatMessage({
+        convId: draft.convId,
+        sender: profile,
+        type: 'text',
+        text: draft.text,
+        replyToId: draft.replyToId,
+        replyToText: draft.replyToText,
+        recipientIds: draft.recipientIds,
+      });
+      setPendingOutbox((prev) => prev.filter((item) => item.clientId !== draft.clientId));
+    } catch (err) {
+      const friendly = extractReadableErrorMessage(err, "Your message wasn't sent. Please try again.");
+      setPendingOutbox((prev) =>
+        prev.map((item) =>
+          item.clientId === draft.clientId
+            ? { ...item, status: 'failed', errorMessage: friendly }
+            : item
+        )
+      );
+      setChatError(friendly);
+    }
+  };
+
   const handleSendText = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeConv || !messageText.trim() || sendingMsg) return;
+    if (activePartnerBlocked) {
+      setChatError('You blocked this user. Unblock them from conversation options to send messages.');
+      return;
+    }
     setChatError('');
-    setSendingMsg(true);
     if (typingTimeoutRef.current) window.clearTimeout(typingTimeoutRef.current);
     void setConversationTyping(activeConv.id, profile.uid, false);
-    try {
-      if (editingMsg) {
+
+    if (editingMsg) {
+      setSendingMsg(true);
+      try {
         await editChatMessage(activeConv.id, editingMsg.id, messageText);
         setEditingMsg(null);
-      } else {
-        await sendChatMessage({
-          convId: activeConv.id,
-          sender: profile,
-          type: 'text',
-          text: messageText,
-          replyToId: replyTo?.id,
-          replyToText: replyTo?.text,
-          recipientIds: activeConv.participantIds,
-        });
-        setReplyTo(null);
+        setMessageText('');
+        setShowEmojiPicker(false);
+      } catch (err) {
+        setChatError(extractReadableErrorMessage(err, "We couldn't update your message. Please try again."));
+      } finally {
+        setSendingMsg(false);
       }
-      setMessageText('');
-      setShowEmojiPicker(false);
+      return;
+    }
+
+    const draft: PendingOutboxMessage = {
+      clientId: `outbox_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      convId: activeConv.id,
+      text: messageText.trim(),
+      replyToId: replyTo?.id,
+      replyToText: replyTo?.text,
+      recipientIds: activeConv.participantIds,
+      status: 'sending',
+      createdAtLabel: 'Sending...',
+    };
+    setPendingOutbox((prev) => [...prev, draft]);
+    setMessageText('');
+    setReplyTo(null);
+    setShowEmojiPicker(false);
+    await dispatchOutboxMessage(draft);
+  };
+
+  const handleToggleBlockPartner = async () => {
+    if (!activeOtherUid) return;
+    setShowHeaderMenu(false);
+    setChatError('');
+    try {
+      if (activePartnerBlocked) {
+        await unblockUserAccount(profile.uid, activeOtherUid, privateInfo?.blockedUserIds || []);
+        setSafetyFeedback('User unblocked. You can resume messaging.');
+      } else {
+        await blockUserAccount(profile.uid, activeOtherUid, privateInfo?.blockedUserIds || []);
+        setSafetyFeedback('User blocked. They can no longer reach you in direct messages.');
+      }
+      await refreshUserAndProfile(false);
     } catch (err) {
-      setChatError(extractReadableErrorMessage(err, 'Failed sending message.'));
+      setChatError(extractReadableErrorMessage(err, 'Unable to update block settings right now.'));
+    }
+  };
+
+  const handleSubmitChatReport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeConv || !reportReason.trim()) return;
+    setReportBusy(true);
+    try {
+      await submitModerationReport({
+        reporterId: profile.uid,
+        targetType: activeOtherUid ? 'user' : 'message',
+        targetId: activeOtherUid || activeConv.id,
+        reason: reportReason.trim(),
+      });
+      setShowReportModal(false);
+      setReportReason('');
+      setSafetyFeedback('Your report has been submitted to Nexora moderation for review.');
+    } catch (err) {
+      setChatError(extractReadableErrorMessage(err, 'Unable to submit report. Please try again.'));
     } finally {
-      setSendingMsg(false);
+      setReportBusy(false);
     }
   };
 
@@ -818,6 +962,9 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
           ) : (
             filteredConversations.map((c) => {
               const selected = c.id === selectedConvId;
+              const isPinned = pinnedSet.has(c.id);
+              const isMuted = mutedSet.has(c.id);
+              const partner = getOtherPartnerProfile(c);
               const partnerStatus = getOtherPresenceStatus(c);
               const unread = isConversationUnread(c);
               const typingEntries = getOtherTypingEntries(c);
@@ -839,10 +986,11 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                   }`}
                 >
                   <div className="relative shrink-0">
-                    <ResilientImage
+                    <CustomisedAvatar
                       src={getConvAvatar(c)}
                       alt={getConvTitle(c)}
-                      className="w-12 h-12 rounded-full object-cover border border-white/10"
+                      sizeClass="w-12 h-12"
+                      customisation={partner?.profileCustomisation}
                     />
                     {partnerStatus && (
                       <span className="absolute bottom-0 right-0">
@@ -853,11 +1001,16 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-sm font-semibold text-white truncate inline-flex items-center gap-1.5">
+                        {isPinned && <Pin size={11} className="text-[#C084FC] shrink-0" />}
                         <span className="truncate">{getConvTitle(c)}</span>
                         <BadgeStrip badges={getOtherBadges(c)} size={13} max={2} interactive={false} />
+                        {partner && (
+                          <TierBadge tier={getUserTier(partner.uid, partner.subscriptionTier)} size="xs" />
+                        )}
                         {partnerStatus && <PresenceBadge status={partnerStatus} size="xs" />}
                       </p>
-                      <span className="text-[11px] font-mono-tabular text-[#64748B] shrink-0">
+                      <span className="text-[11px] font-mono-tabular text-[#64748B] shrink-0 inline-flex items-center gap-1">
+                        {isMuted && <BellOff size={11} className="text-[#64748B]" />}
                         {formatRelativeTime(c.updatedAt)}
                       </span>
                     </div>
@@ -873,7 +1026,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                           {c.lastMessageText || 'Conversation started'}
                         </p>
                       )}
-                      {unread && (
+                      {unread && !isMuted && (
                         <span
                           aria-label="Unread message"
                           className="w-2.5 h-2.5 rounded-full bg-gradient-to-r from-[#8B5CF6] to-[#EC4899] shrink-0"
@@ -921,10 +1074,11 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                   title={activeOtherUid ? 'Open user profile' : 'View group participants'}
                 >
                   <div className="relative shrink-0">
-                    <ResilientImage
+                    <CustomisedAvatar
                       src={getConvAvatar(activeConv)}
                       alt={getConvTitle(activeConv)}
-                      className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover border border-[#8B5CF6]/40 group-hover:border-[#C084FC] transition-colors"
+                      sizeClass="w-10 h-10 sm:w-11 sm:h-11"
+                      customisation={activePartner?.profileCustomisation}
                     />
                     {activePartnerStatus && (
                       <span className="absolute bottom-0 right-0">
@@ -936,6 +1090,12 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                     <h2 className="font-display text-sm sm:text-base font-semibold text-white group-hover:text-[#C084FC] transition-colors truncate inline-flex items-center gap-1.5 max-w-full">
                       <span className="truncate">{getConvTitle(activeConv)}</span>
                       <BadgeStrip badges={getOtherBadges(activeConv)} size={14} max={3} />
+                      {activePartner && (
+                        <TierBadge
+                          tier={getUserTier(activePartner.uid, activePartner.subscriptionTier)}
+                          size="xs"
+                        />
+                      )}
                     </h2>
                     <div className="text-[11px] sm:text-xs text-[#94A3B8] truncate">
                       {activeTypingUsers.length > 0 ? (
@@ -1016,7 +1176,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                     <MoreHorizontal size={16} />
                   </button>
                   {showHeaderMenu && (
-                    <div className="absolute right-0 mt-2 w-60 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-2 space-y-1 z-30">
+                    <div className="absolute right-0 mt-2 w-64 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-2 space-y-1 z-30">
                       <div className="px-3 py-2 text-[11px] text-[#94A3B8] border-b border-white/10 flex items-center gap-2">
                         <ShieldCheck size={14} className="text-[#A855F7] shrink-0" />
                         <span>{cryptoStatus.protocol} active</span>
@@ -1048,6 +1208,36 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                       )}
                       <button
                         type="button"
+                        onClick={async () => {
+                          setShowHeaderMenu(false);
+                          try {
+                            await togglePinConversation(profile.uid, activeConv.id, userPrefs);
+                          } catch (err) {
+                            setChatError(extractReadableErrorMessage(err, 'Unable to update pin state.'));
+                          }
+                        }}
+                        className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs text-white hover:bg-[#7C3AED]/15 text-left"
+                      >
+                        <span>{pinnedSet.has(activeConv.id) ? 'Unpin conversation' : 'Pin conversation'}</span>
+                        <Pin size={13} className="text-[#C084FC]" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setShowHeaderMenu(false);
+                          try {
+                            await toggleMuteConversation(profile.uid, activeConv.id, userPrefs);
+                          } catch (err) {
+                            setChatError(extractReadableErrorMessage(err, 'Unable to update mute settings.'));
+                          }
+                        }}
+                        className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs text-white hover:bg-[#7C3AED]/15 text-left"
+                      >
+                        <span>{mutedSet.has(activeConv.id) ? 'Unmute notifications' : 'Mute conversation'}</span>
+                        <BellOff size={13} className="text-[#94A3B8]" />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => {
                           setShowMessageSearch(true);
                           setShowHeaderMenu(false);
@@ -1067,11 +1257,43 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                       >
                         Start new DM or group thread
                       </button>
+                      <div className="border-t border-white/10 pt-1 mt-1 space-y-1">
+                        {activeOtherUid && (
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleBlockPartner()}
+                            className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs text-amber-300 hover:bg-amber-500/10 text-left"
+                          >
+                            <span>{activePartnerBlocked ? 'Unblock user' : 'Block user'}</span>
+                            <Ban size={13} />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowHeaderMenu(false);
+                            setShowReportModal(true);
+                          }}
+                          className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs text-rose-300 hover:bg-rose-500/10 text-left"
+                        >
+                          <span>{activeOtherUid ? 'Report user' : 'Report conversation'}</span>
+                          <Flag size={13} />
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
             </div>
+
+            {safetyFeedback && (
+              <div className="mx-4 mt-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 px-3.5 py-2 text-xs text-emerald-200 flex items-center justify-between">
+                <span>{safetyFeedback}</span>
+                <button type="button" onClick={() => setSafetyFeedback('')} className="text-emerald-300 hover:text-white">
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             {/* In-Thread Search Bar */}
             {showMessageSearch && (
@@ -1184,9 +1406,20 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                           {m.edited && !m.deleted ? ' · edited' : ''}
                           {isMine && !m.deleted && (
                             isRead ? (
-                              <CheckCheck size={13} className="text-[#E9D5FF] ml-0.5" aria-label="Read" />
+                              <span className="inline-flex items-center gap-0.5 text-[#E9D5FF]" title="Read">
+                                <CheckCheck size={13} className="ml-0.5" aria-label="Read" />
+                                <span className="text-[9px]">Read</span>
+                              </span>
+                            ) : isMessageDelivered(m, activeConv) ? (
+                              <span className="inline-flex items-center gap-0.5 text-white/75" title="Delivered">
+                                <CheckCheck size={12} className="ml-0.5" aria-label="Delivered" />
+                                <span className="text-[9px]">Delivered</span>
+                              </span>
                             ) : (
-                              <Check size={12} className="text-white/60 ml-0.5" aria-label="Delivered" />
+                              <span className="inline-flex items-center gap-0.5 text-white/60" title="Sent">
+                                <Check size={12} className="ml-0.5" aria-label="Sent" />
+                                <span className="text-[9px]">Sent</span>
+                              </span>
                             )
                           )}
                         </span>
@@ -1294,6 +1527,56 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                 );
               })}
 
+              {threadOutbox.map((draft) => (
+                <div key={draft.clientId} className="flex flex-col items-end">
+                  <div
+                    className={`max-w-[85%] sm:max-w-[70%] rounded-2xl px-4 py-2.5 space-y-1.5 ${
+                      draft.status === 'failed'
+                        ? 'bg-rose-950/60 border border-rose-500/40 text-rose-100'
+                        : 'bg-[#7C3AED]/65 text-white'
+                    }`}
+                  >
+                    <p className="text-sm leading-relaxed break-words">{draft.text}</p>
+                    <div className="flex items-center justify-end gap-2 text-[10px]">
+                      {draft.status === 'sending' ? (
+                        <span className="inline-flex items-center gap-1 text-white/80">
+                          <Clock size={11} /> Sending...
+                        </span>
+                      ) : (
+                        <>
+                          <span className="inline-flex items-center gap-1 text-rose-300">
+                            <AlertCircle size={11} /> Failed to send
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPendingOutbox((prev) =>
+                                prev.map((it) =>
+                                  it.clientId === draft.clientId ? { ...it, status: 'sending' } : it
+                                )
+                              );
+                              void dispatchOutboxMessage(draft);
+                            }}
+                            className="inline-flex items-center gap-1 font-semibold text-white underline"
+                          >
+                            <RefreshCw size={10} /> Retry
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPendingOutbox((prev) => prev.filter((it) => it.clientId !== draft.clientId))
+                            }
+                            className="text-rose-200 hover:text-white"
+                          >
+                            Dismiss
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
               {activeTypingUsers.length > 0 && (
                 <div className="flex items-start">
                   <div className="px-4 py-2 rounded-2xl bg-[#161423] border border-[#8B5CF6]/20">
@@ -1317,6 +1600,19 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
               onSubmit={handleSendText}
               className="p-3 sm:p-4 border-t border-white/[0.08] bg-[#0D0B16] space-y-2.5 relative"
             >
+              {activePartnerBlocked && (
+                <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+                  <span>You blocked this user. Messages cannot be sent while blocked.</span>
+                  <button
+                    type="button"
+                    onClick={() => void handleToggleBlockPartner()}
+                    className="font-semibold text-white underline shrink-0"
+                  >
+                    Unblock
+                  </button>
+                </div>
+              )}
+
               {(replyTo || editingMsg) && (
                 <div className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-[#7C3AED]/15 border border-[#8B5CF6]/25 text-xs text-[#E9D5FF]">
                   <span className="truncate">
@@ -1355,7 +1651,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                 </div>
               )}
 
-              {chatError && <p className="text-xs text-rose-400">{chatError}</p>}
+              {chatError && <FriendlyErrorBanner message={chatError} onDismiss={() => setChatError('')} />}
 
               {/* Attachment & Emoji Popovers */}
               {showAttachMenu && (
@@ -1822,6 +2118,57 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
               <PhoneOff size={16} /> End Call
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Report User / Conversation Modal */}
+      {showReportModal && activeConv && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowReportModal(false)}
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={handleSubmitChatReport}
+            className="w-full max-w-md bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl p-6 space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-base font-semibold text-white">
+                {activeOtherUid ? 'Report Member' : 'Report Conversation'}
+              </h3>
+              <button type="button" onClick={() => setShowReportModal(false)} className="p-1">
+                <X size={18} className="text-[#94A3B8]" />
+              </button>
+            </div>
+            <p className="text-xs text-[#94A3B8]">
+              Describe what happened so Nexora safety reviewers can investigate.
+            </p>
+            <textarea
+              required
+              maxLength={300}
+              rows={3}
+              value={reportReason}
+              onChange={(e) => setReportReason(e.target.value)}
+              placeholder="Explain why you are reporting this conversation..."
+              className="w-full rounded-xl bg-[#06060A] border border-white/10 p-3 text-xs text-white placeholder:text-[#64748B] focus:outline-none focus:border-[#8B5CF6]"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowReportModal(false)}
+                className="min-h-[42px] px-4 rounded-xl bg-white/10 text-xs font-medium text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={reportBusy || !reportReason.trim()}
+                className="min-h-[42px] px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-semibold text-white disabled:opacity-50"
+              >
+                {reportBusy ? 'Submitting...' : 'Submit Report'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

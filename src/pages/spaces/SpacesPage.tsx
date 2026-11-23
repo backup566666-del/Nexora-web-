@@ -23,8 +23,10 @@ import {
   Volume2,
   X,
 } from 'lucide-react';
+import { FriendlyErrorBanner } from '../../components/common/FriendlyErrorBanner';
 import { PresenceBadge } from '../../components/common/PresenceBadge';
 import { ResilientImage } from '../../components/common/ResilientImage';
+import { TierBadge } from '../../components/common/TierBadge';
 import { BadgeStrip, VerifiedBadge } from '../../components/common/VerifiedBadge';
 import { CoverEditorModal } from '../../components/media/CoverEditorModal';
 import { PostComposer } from '../../features/posts/PostComposer';
@@ -92,7 +94,7 @@ export function SpacesPage({
   initialSpaceId,
   onOpenProfile,
 }: SpacesPageProps) {
-  const { profile, myRole, platformConfig, getUserBadges, getAdminEffectiveStatus } = useAuth();
+  const { profile, myRole, platformConfig, getUserBadges, getUserTier, getAdminEffectiveStatus } = useAuth();
   const [sidebarTab, setSidebarTab] = useState<'discover' | 'mine' | 'invites' | 'joined' | 'create'>('discover');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showMoreCategories, setShowMoreCategories] = useState(false);
@@ -112,6 +114,7 @@ export function SpacesPage({
   const [isPrivate, setIsPrivate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   const createCoverFileRef = useRef<HTMLInputElement>(null);
 
   // Inside Space state
@@ -258,6 +261,10 @@ export function SpacesPage({
           <ArrowLeft size={15} /> Back to Explore Spaces
         </button>
 
+        {actionError && (
+          <FriendlyErrorBanner message={actionError} onDismiss={() => setActionError('')} />
+        )}
+
         <div className="relative rounded-3xl overflow-hidden border border-[#8B5CF6]/25 min-h-[220px] sm:aspect-[16/5]">
           <ResilientImage
             src={activeSpace.coverUrl}
@@ -368,6 +375,7 @@ export function SpacesPage({
                   post={p}
                   isSaved={savedPostIds.includes(p.id)}
                   onOpenProfile={onOpenProfile}
+                  usersDirectory={users}
                 />
               ))
             )}
@@ -435,13 +443,18 @@ export function SpacesPage({
                   onSubmit={async (e) => {
                     e.preventDefault();
                     if (!discussionInput.trim()) return;
-                    await sendSpaceDiscussion({
-                      spaceId: activeSpace.id,
-                      author: profile,
-                      text: discussionInput,
-                      channel: 'general',
-                    });
-                    setDiscussionInput('');
+                    setActionError('');
+                    try {
+                      await sendSpaceDiscussion({
+                        spaceId: activeSpace.id,
+                        author: profile,
+                        text: discussionInput,
+                        channel: 'general',
+                      });
+                      setDiscussionInput('');
+                    } catch (err) {
+                      setActionError(extractReadableErrorMessage(err, "Your discussion message wasn't sent. Please try again."));
+                    }
                   }}
                   className="p-4 border-t border-white/10 flex gap-2"
                 >
@@ -496,6 +509,10 @@ export function SpacesPage({
                       <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1 max-w-full">
                         <span className="truncate">{m.displayName}</span>
                         <BadgeStrip badges={getUserBadges(m.uid)} size={12} max={2} interactive={false} />
+                        <TierBadge
+                          tier={getUserTier(m.uid, users.find((u) => u.uid === m.uid)?.subscriptionTier)}
+                          showFree={false}
+                        />
                         {badgeStatus && <PresenceBadge status={badgeStatus} size="xs" />}
                       </p>
                       <p className="text-[11px] text-[#94A3B8] truncate">
@@ -678,8 +695,13 @@ export function SpacesPage({
                           type="button"
                           disabled={sent}
                           onClick={async () => {
-                            await sendSpaceInviteNotification(activeSpace, profile, u.uid);
-                            setInvitedUids((prev) => [...prev, u.uid]);
+                            setActionError('');
+                            try {
+                              await sendSpaceInviteNotification(activeSpace, profile, u.uid);
+                              setInvitedUids((prev) => [...prev, u.uid]);
+                            } catch (err) {
+                              setActionError(extractReadableErrorMessage(err, 'Unable to send invitation right now.'));
+                            }
                           }}
                           className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
                             sent
@@ -703,17 +725,22 @@ export function SpacesPage({
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
-                await createSpaceEvent({
-                  spaceId: activeSpace.id,
-                  host: profile,
-                  title: eventTitle,
-                  description: eventDesc,
-                  scheduledFor: eventDate,
-                });
-                setEventTitle('');
-                setEventDesc('');
-                setEventDate('');
-                setShowEventModal(false);
+                setActionError('');
+                try {
+                  await createSpaceEvent({
+                    spaceId: activeSpace.id,
+                    host: profile,
+                    title: eventTitle,
+                    description: eventDesc,
+                    scheduledFor: eventDate,
+                  });
+                  setEventTitle('');
+                  setEventDesc('');
+                  setEventDate('');
+                  setShowEventModal(false);
+                } catch (err) {
+                  setActionError(extractReadableErrorMessage(err, 'Unable to schedule event right now.'));
+                }
               }}
               className="w-full max-w-md bg-[#0D0B16] border border-[#8B5CF6]/25 rounded-2xl p-6 space-y-4"
             >

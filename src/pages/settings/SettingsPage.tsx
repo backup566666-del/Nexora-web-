@@ -6,6 +6,7 @@ import {
   BarChart3,
   BellRing,
   Compass,
+  CreditCard,
   FileCheck2,
   Flag,
   Gift,
@@ -16,17 +17,22 @@ import {
   Lock,
   LogOut,
   Megaphone,
+  Palette,
   Send,
   Shield,
   ShieldCheck,
   Smartphone,
+  Sparkles,
   Upload,
 } from 'lucide-react';
 import { useBadgeModal } from '../../components/badges/BadgeContext';
 import { AdminPresenceSelector } from '../../components/common/PresenceBadge';
 import { PWAInstallButton } from '../../components/common/PWAInstallButton';
+import { TierBadge } from '../../components/common/TierBadge';
 import { BadgeStrip, VerifiedBadge } from '../../components/common/VerifiedBadge';
+import { AdminCustomisationCatalogPanel } from '../../components/settings/admin/AdminCustomisationCatalogPanel';
 import { AdminManagementPanel } from '../../components/settings/admin/AdminManagementPanel';
+import { AdminSubscriptionManagementPanel } from '../../components/settings/admin/AdminSubscriptionManagementPanel';
 import { AuditLogPanel } from '../../components/settings/admin/AuditLogPanel';
 import { CommunityControlPanel } from '../../components/settings/admin/CommunityControlPanel';
 import { GiftModerationPanel } from '../../components/settings/admin/GiftModerationPanel';
@@ -55,6 +61,7 @@ import { encodeRestrictedIdentityDocument } from '../../services/storage/mediaUp
 import {
   ContactSubmission,
   IdentityVerificationRequest,
+  NavSection,
   NotificationCategory,
   Post,
   PrivacySettings,
@@ -80,6 +87,7 @@ interface SettingsPageProps {
   vibes?: Vibe[];
   spaces?: Space[];
   initialAdminOpen?: boolean;
+  onNavigate?: (section: NavSection) => void;
 }
 
 type AdminSectionKey =
@@ -89,6 +97,8 @@ type AdminSectionKey =
   | 'verification'
   | 'identity'
   | 'gifts'
+  | 'subscriptions_admin'
+  | 'studio_admin'
   | 'platform'
   | 'moderation'
   | 'notifications'
@@ -99,13 +109,17 @@ const NOTIFICATION_CATEGORY_META: {
   key: NotificationCategory;
   label: string;
   description: string;
+  locked?: boolean;
 }[] = [
   { key: 'account', label: 'Account', description: 'Welcome, profile & recovery events' },
   { key: 'social', label: 'Social, Tags & Collabs', description: 'Likes, comments, tags & collab invites' },
+  { key: 'messages', label: 'Messages', description: 'New direct messages & requests' },
+  { key: 'spaces', label: 'Spaces', description: 'Invites, announcements & community events' },
+  { key: 'subscriptions', label: 'Subscriptions & Billing', description: 'Plan status, renewals & payment receipts' },
   { key: 'badges', label: 'Badges & Verification', description: 'Badge awards & ID decisions' },
   { key: 'gifts', label: 'Virtual Gifts', description: 'Free appreciation gifts received' },
   { key: 'admin', label: 'Platform & Support', description: 'Ticket replies & official notices' },
-  { key: 'security', label: 'Security Alerts', description: 'Account safety & critical advisories' },
+  { key: 'security', label: 'Security Alerts (Locked ON)', description: 'Critical sign-in & account safety advisories', locked: true },
 ];
 
 export function SettingsPage({
@@ -114,6 +128,7 @@ export function SettingsPage({
   vibes = [],
   spaces = [],
   initialAdminOpen = false,
+  onNavigate,
 }: SettingsPageProps) {
   const {
     user,
@@ -122,6 +137,7 @@ export function SettingsPage({
     myRole,
     myAdminManualMode,
     myAdminSelfStatus,
+    effectiveTier,
     setMyAdminStatus,
     getUserBadges,
     refreshUserAndProfile,
@@ -218,6 +234,8 @@ export function SettingsPage({
       list.push({ key: 'gifts', label: 'Free Virtual Gifts', icon: Gift });
     }
     if (hasAdminPermission(myRole, 'manage_platform')) {
+      list.push({ key: 'subscriptions_admin', label: 'Subscriptions & Billing', icon: CreditCard });
+      list.push({ key: 'studio_admin', label: 'Studio Customisation', icon: Sparkles });
       list.push({ key: 'platform', label: 'Platform Management', icon: Globe });
     }
     if (hasAdminPermission(myRole, 'moderate_content')) {
@@ -265,6 +283,7 @@ export function SettingsPage({
     channel: 'inAppNotifications' | 'emailNotifications',
     cat: NotificationCategory
   ) => {
+    if (cat === 'security') return;
     setPrivacy((prev) => {
       const defaults = withPrivacyDefaults(prev);
       const currentMap = defaults[channel]!;
@@ -273,6 +292,7 @@ export function SettingsPage({
         [channel]: {
           ...currentMap,
           [cat]: !currentMap[cat],
+          security: true,
         },
       };
     });
@@ -539,6 +559,21 @@ export function SettingsPage({
                   hasAdminPermission(myRole, 'manage_platform')) && (
                   <GiftModerationPanel actor={profile} myRole={myRole} />
                 )}
+              {activeAdminTab === 'subscriptions_admin' &&
+                hasAdminPermission(myRole, 'manage_platform') && (
+                  <AdminSubscriptionManagementPanel
+                    actor={profile}
+                    actorRole={myRole.role}
+                    users={users}
+                  />
+                )}
+              {activeAdminTab === 'studio_admin' &&
+                hasAdminPermission(myRole, 'manage_platform') && (
+                  <AdminCustomisationCatalogPanel
+                    actor={profile}
+                    actorRole={myRole.role}
+                  />
+                )}
               {activeAdminTab === 'platform' && hasAdminPermission(myRole, 'manage_platform') && (
                 <PlatformManagementPanel actor={profile} myRole={myRole} />
               )}
@@ -650,6 +685,53 @@ export function SettingsPage({
                 busy={presenceBusy}
               />
               {presenceError && <p className="text-xs text-rose-400">{presenceError}</p>}
+            </section>
+          )}
+
+          {/* Membership, Studio & Creator Hub Shortcuts */}
+          {onNavigate && (
+            <section className="p-5 sm:p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="font-display text-base font-semibold text-white flex items-center gap-2">
+                    <Sparkles size={17} className="text-[#C084FC]" /> Membership &amp; Creator Suite
+                  </h2>
+                  <TierBadge tier={effectiveTier} />
+                </div>
+                <p className="text-xs text-[#94A3B8]">
+                  Manage your Nexora subscription plan, customise your profile visual studio, review alerts, or inspect creator analytics.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onNavigate('subscriptions')}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white min-h-[40px]"
+                >
+                  <CreditCard size={14} /> Plans &amp; Billing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('studio')}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-xs font-semibold text-white min-h-[40px]"
+                >
+                  <Palette size={14} className="text-[#C084FC]" /> Profile Studio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('analytics')}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-xs font-semibold text-white min-h-[40px]"
+                >
+                  <BarChart3 size={14} className="text-sky-300" /> Analytics
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('notifications')}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-xs font-semibold text-white min-h-[40px]"
+                >
+                  <BellRing size={14} className="text-amber-300" /> Notification Centre
+                </button>
+              </div>
             </section>
           )}
 
@@ -1007,31 +1089,44 @@ export function SettingsPage({
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {NOTIFICATION_CATEGORY_META.map((item) => {
-                  const inAppOn = privacy.inAppNotifications?.[item.key] !== false;
-                  const emailOn = privacy.emailNotifications?.[item.key] !== false;
+                  const inAppOn = item.locked ? true : privacy.inAppNotifications?.[item.key] !== false;
+                  const emailOn = item.locked ? true : privacy.emailNotifications?.[item.key] !== false;
                   return (
                     <div
                       key={item.key}
                       className="p-3.5 rounded-xl bg-[#08070F] border border-white/[0.06] flex items-center justify-between gap-3"
                     >
                       <div className="min-w-0">
-                        <p className="text-xs font-semibold text-white">{item.label}</p>
+                        <p className="text-xs font-semibold text-white inline-flex items-center gap-1.5">
+                          <span>{item.label}</span>
+                          {item.locked && <Lock size={11} className="text-amber-300" />}
+                        </p>
                         <p className="text-[11px] text-[#94A3B8] truncate">{item.description}</p>
                       </div>
                       <div className="flex items-center gap-3 shrink-0 text-[11px]">
-                        <label className="flex items-center gap-1.5 text-[#CBD5E1] cursor-pointer">
+                        <label
+                          className={`flex items-center gap-1.5 text-[#CBD5E1] ${
+                            item.locked ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
+                          }`}
+                        >
                           <input
                             type="checkbox"
                             checked={inAppOn}
+                            disabled={item.locked}
                             onChange={() => toggleChannelPref('inAppNotifications', item.key)}
                             className="accent-[#7C3AED]"
                           />
                           In-App
                         </label>
-                        <label className="flex items-center gap-1.5 text-[#CBD5E1] cursor-pointer">
+                        <label
+                          className={`flex items-center gap-1.5 text-[#CBD5E1] ${
+                            item.locked ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
+                          }`}
+                        >
                           <input
                             type="checkbox"
                             checked={emailOn}
+                            disabled={item.locked}
                             onChange={() => toggleChannelPref('emailNotifications', item.key)}
                             className="accent-sky-500"
                           />

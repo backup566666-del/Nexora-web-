@@ -26,6 +26,8 @@
         "likesCount": { "type": "number" },
         "isOnline": { "type": "boolean" },
         "lastActiveAt": { "type": "string", "format": "date-time" },
+        "subscriptionTier": { "type": "string", "enum": ["free", "plus", "pro"] },
+        "profileCustomisation": { "type": "object" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -211,7 +213,7 @@
         "actorName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "actorRole": { "type": "string", "minLength": 1, "maxLength": 40 },
         "action": { "type": "string", "minLength": 1, "maxLength": 100 },
-        "category": { "type": "string", "enum": ["admin", "community", "verification", "identity", "platform", "moderation", "notification"] },
+        "category": { "type": "string", "enum": ["admin", "community", "verification", "identity", "platform", "moderation", "notification", "billing", "customisation"] },
         "targetType": { "type": "string", "minLength": 1, "maxLength": 40 },
         "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "targetLabel": { "type": "string", "maxLength": 120 },
@@ -500,15 +502,20 @@
         "type": {
           "type": "string",
           "enum": [
-            "like", "comment", "follow", "repost", "space_invite", "message",
-            "announcement", "security_alert", "admin_notice",
-            "badge_awarded", "badge_revoked", "identity_decision", "staff_role_change",
-            "community_status", "verification_decision", "collab_invite", "collab_response",
-            "post_tag", "gift_received", "support_ticket"
+            "like", "comment", "reply", "mention", "follow", "repost", "space_invite",
+            "space_announcement", "event_reminder", "message", "announcement",
+            "security_alert", "admin_notice", "badge_awarded", "badge_revoked",
+            "identity_decision", "staff_role_change", "community_status",
+            "verification_decision", "collab_invite", "collab_response",
+            "post_tag", "gift_received", "support_ticket",
+            "subscription_notice", "subscription_renewal", "system_update"
           ]
         },
-        "category": { "type": "string", "enum": ["account", "social", "badges", "gifts", "admin", "security"] },
+        "category": { "type": "string", "enum": ["account", "social", "badges", "gifts", "admin", "security", "messages", "spaces", "subscriptions"] },
+        "title": { "type": "string", "maxLength": 120 },
+        "targetType": { "type": "string", "enum": ["post", "vibe", "profile", "chat", "space", "subscription", "settings", "system"] },
         "targetId": { "type": "string", "maxLength": 128 },
+        "dedupeKey": { "type": "string", "maxLength": 128 },
         "preview": { "type": "string", "maxLength": 200 },
         "read": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" }
@@ -517,11 +524,11 @@
     },
     "Report": {
       "title": "Report",
-      "description": "Content, user, collab, or gift moderation report.",
+      "description": "Content, user, collab, message, or gift moderation report.",
       "type": "object",
       "properties": {
         "reporterId": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "targetType": { "type": "string", "enum": ["post", "user", "space", "vibe", "gift", "collab"] },
+        "targetType": { "type": "string", "enum": ["post", "user", "space", "vibe", "gift", "collab", "message"] },
         "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "reason": { "type": "string", "minLength": 1, "maxLength": 300 },
         "status": { "type": "string", "enum": ["open", "resolved", "dismissed"] },
@@ -655,6 +662,119 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["category", "feature", "requestId", "httpStatus", "errorCode", "diagnosticMessage", "actorUid", "resolved", "createdAt"]
+    },
+    "UserPreferences": {
+      "title": "UserPreferences",
+      "description": "Per-user chat pins/mutes and search history.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "pinnedConvIds": { "type": "array" },
+        "mutedConvIds": { "type": "array" },
+        "recentSearches": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "pinnedConvIds", "mutedConvIds", "recentSearches", "updatedAt"]
+    },
+    "CreatorAnalyticsDaily": {
+      "title": "CreatorAnalyticsDaily",
+      "description": "Aggregated daily creator reach/visit counts without viewer PII.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "dateKey": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "profileVisits": { "type": "number" },
+        "postImpressions": { "type": "number" },
+        "vibeViews": { "type": "number" },
+        "followersDelta": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "dateKey", "profileVisits", "postImpressions", "vibeViews", "followersDelta", "updatedAt"]
+    },
+    "SubscriptionPlan": {
+      "title": "SubscriptionPlan",
+      "description": "Admin-managed subscription tier definition.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "enum": ["free", "plus", "pro"] },
+        "name": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "tagline": { "type": "string", "maxLength": 160 },
+        "badgeLabel": { "type": "string", "maxLength": 40 },
+        "badgeColor": { "type": "string", "maxLength": 24 },
+        "monthlyPriceCents": { "type": "number" },
+        "yearlyPriceCents": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 10 },
+        "stripeMonthlyPriceId": { "type": "string", "maxLength": 128 },
+        "stripeYearlyPriceId": { "type": "string", "maxLength": 128 },
+        "enabled": { "type": "boolean" },
+        "pricingConfigured": { "type": "boolean" },
+        "benefits": { "type": "array" },
+        "sortOrder": { "type": "number" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "enabled", "pricingConfigured", "benefits", "sortOrder", "updatedAt"]
+    },
+    "UserSubscription": {
+      "title": "UserSubscription",
+      "description": "Verified user subscription status.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "tier": { "type": "string", "enum": ["free", "plus", "pro"] },
+        "billingCycle": { "type": "string", "enum": ["monthly", "yearly", "none"] },
+        "status": { "type": "string", "enum": ["active", "canceled", "past_due", "expired", "free"] },
+        "cancelAtPeriodEnd": { "type": "boolean" },
+        "provider": { "type": "string", "enum": ["stripe", "admin", "free"] },
+        "stripeCustomerId": { "type": "string", "maxLength": 128 },
+        "stripeSubscriptionId": { "type": "string", "maxLength": 128 },
+        "lastSessionId": { "type": "string", "maxLength": 160 },
+        "receiptRef": { "type": "string", "maxLength": 120 },
+        "verifiedByServer": { "type": "boolean" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "currentPeriodEnd": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "tier", "billingCycle", "status", "cancelAtPeriodEnd", "provider", "verifiedByServer", "updatedAt"]
+    },
+    "PaymentTransaction": {
+      "title": "PaymentTransaction",
+      "description": "Verified billing receipt and payment transaction log.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "planId": { "type": "string", "enum": ["free", "plus", "pro"] },
+        "billingCycle": { "type": "string", "enum": ["monthly", "yearly"] },
+        "amountCents": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 10 },
+        "status": { "type": "string", "enum": ["paid", "pending", "failed", "refunded", "canceled"] },
+        "provider": { "type": "string", "enum": ["stripe", "admin"] },
+        "stripeSessionId": { "type": "string", "maxLength": 160 },
+        "stripePaymentIntentId": { "type": "string", "maxLength": 160 },
+        "receiptNumber": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "planId", "billingCycle", "amountCents", "currency", "status", "provider", "receiptNumber", "createdAt"]
+    },
+    "CustomisationCatalogItem": {
+      "title": "CustomisationCatalogItem",
+      "description": "Admin-managed profile customisation Studio asset.",
+      "type": "object",
+      "properties": {
+        "category": { "type": "string" },
+        "name": { "type": "string", "maxLength": 60 },
+        "description": { "type": "string", "maxLength": 200 },
+        "requiredTier": { "type": "string", "enum": ["free", "plus", "pro"] },
+        "enabled": { "type": "boolean" },
+        "previewValue": { "type": "string", "maxLength": 600 },
+        "secondaryValue": { "type": "string", "maxLength": 200 },
+        "imageUrl": { "type": "string", "maxLength": 400000 },
+        "sortOrder": { "type": "number" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["category", "name", "requiredTier", "enabled", "previewValue", "sortOrder", "updatedAt"]
     }
   },
   "firestore": {
@@ -809,6 +929,30 @@
     "/error_diagnostics/{diagId}": {
       "schema": { "$ref": "#/entities/ErrorDiagnostic" },
       "description": "Private redacted error diagnostics accessible only to Owner and authorized administrators."
+    },
+    "/user_preferences/{userId}": {
+      "schema": { "$ref": "#/entities/UserPreferences" },
+      "description": "Owner-only chat pins, mutes, and search history."
+    },
+    "/creator_analytics_daily/{docId}": {
+      "schema": { "$ref": "#/entities/CreatorAnalyticsDaily" },
+      "description": "Anonymous daily aggregate reach/visit counters per creator."
+    },
+    "/subscription_plans/{planId}": {
+      "schema": { "$ref": "#/entities/SubscriptionPlan" },
+      "description": "Admin-managed subscription plans catalog."
+    },
+    "/user_subscriptions/{userId}": {
+      "schema": { "$ref": "#/entities/UserSubscription" },
+      "description": "User subscription state verified by backend or admin."
+    },
+    "/payment_transactions/{txId}": {
+      "schema": { "$ref": "#/entities/PaymentTransaction" },
+      "description": "Subscription transaction receipts and error logs."
+    },
+    "/customisation_catalog/{itemId}": {
+      "schema": { "$ref": "#/entities/CustomisationCatalogItem" },
+      "description": "Admin-managed profile customisation Studio items and tier locks."
     }
   }
 }

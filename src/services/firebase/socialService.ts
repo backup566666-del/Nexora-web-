@@ -27,6 +27,8 @@ import { handleFirestoreError, logFirestoreListenerError, OperationType } from '
 import {
   dispatchDualNotification,
   inferCategoryFromNotificationType,
+  inferTargetTypeFromNotificationType,
+  shouldAllowDedupeKey,
 } from '../notifications/notificationDispatcher';
 import {
   AudienceType,
@@ -36,6 +38,7 @@ import {
   GiftTransaction,
   MessageType,
   NotificationItem,
+  NotificationTargetType,
   NotificationType,
   Post,
   PostComment,
@@ -48,6 +51,7 @@ import {
   StoryPrivacy,
   StoryType,
   StoryView,
+  UserPreferences,
   UserProfile,
   Vibe,
   VirtualGiftCatalogItem,
@@ -66,9 +70,14 @@ export async function createNotification(params: {
   actor: UserProfile;
   type: NotificationType;
   targetId?: string;
+  targetType?: NotificationTargetType;
+  title?: string;
   preview?: string;
+  dedupeKey?: string;
+  allowSelf?: boolean;
 }): Promise<void> {
-  if (params.recipientId === params.actor.uid) return;
+  if (!params.allowSelf && params.recipientId === params.actor.uid) return;
+  if (!shouldAllowDedupeKey(params.dedupeKey)) return;
   try {
     await addDoc(collection(db, 'notifications'), {
       recipientId: params.recipientId,
@@ -77,7 +86,10 @@ export async function createNotification(params: {
       actorAvatar: sanitizeString(params.actor.avatarUrl || '', 200000),
       type: params.type,
       category: inferCategoryFromNotificationType(params.type),
+      ...(params.title ? { title: sanitizeString(params.title, 120) } : {}),
+      targetType: params.targetType || inferTargetTypeFromNotificationType(params.type),
       targetId: sanitizeString(params.targetId || '', 128),
+      ...(params.dedupeKey ? { dedupeKey: sanitizeString(params.dedupeKey, 128) } : {}),
       preview: sanitizeString(params.preview || '', 200),
       read: false,
       createdAt: serverTimestamp(),
@@ -95,7 +107,7 @@ export function subscribeNotifications(
     collection(db, 'notifications'),
     where('recipientId', '==', uid),
     orderBy('createdAt', 'desc'),
-    limit(50)
+    limit(80)
   );
   return onSnapshot(
     q,
@@ -121,13 +133,38 @@ export async function markAllNotificationsRead(notifications: NotificationItem[]
   const unread = notifications.filter((n) => !n.read);
   if (unread.length === 0) return;
   try {
-    const batch = writeBatch(db);
-    unread.slice(0, 25).forEach((item) => {
-      batch.update(doc(db, 'notifications', item.id), { read: true });
-    });
-    await batch.commit();
+    for (let i = 0; i < unread.length; i += 25) {
+      const batch = writeBatch(db);
+      unread.slice(i, i + 25).forEach((item) => {
+        batch.update(doc(db, 'notifications', item.id), { read: true });
+      });
+      await batch.commit();
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, 'notifications');
+  }
+}
+
+export async function deleteNotification(notificationId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'notifications', notificationId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `notifications/${notificationId}`);
+  }
+}
+
+export async function clearNotificationsBatch(notifications: NotificationItem[]): Promise<void> {
+  if (notifications.length === 0) return;
+  try {
+    for (let i = 0; i < notifications.length; i += 25) {
+      const batch = writeBatch(db);
+      notifications.slice(i, i + 25).forEach((item) => {
+        batch.delete(doc(db, 'notifications', item.id));
+      });
+      await batch.commit();
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, 'notifications');
   }
 }
 
@@ -791,6 +828,7 @@ export async function addPostComment(params: {
   author: UserProfile;
   text: string;
   parentCommentId?: string;
+  replyToUid?: string;
 }): Promise<void> {
   const clean = sanitizeString(params.text, BLUEPRINT_LIMITS.COMMENT_TEXT_MAX);
   if (!clean) return;
@@ -813,13 +851,33 @@ export async function addPostComment(params: {
       updatedAt: serverTimestamp(),
     });
     await batch.commit();
+
+    const isReply = Boolean(params.parentCommentId && params.replyToUid);
     await createNotification({
-      recipientId: params.post.authorId,
+      recipientId: isReply && params.replyToUid ? params.replyToUid : params.post.authorId,
       actor: params.author,
-      type: 'comment',
+      type: isReply ? 'reply' : 'comment',
+      targetType: 'post',
       targetId: params.post.id,
       preview: clean.slice(0, 80),
+      dedupeKey: `comment:${commentRef.id}`,
     });
+
+    const mentions = extractMentions(clean).slice(0, 5);
+    for (const handle of mentions) {
+      const mentionedUid = await resolveUidByUsername(handle).catch(() => null);
+      if (mentionedUid && mentionedUid !== params.author.uid && mentionedUid !== params.post.authorId) {
+        await createNotification({
+          recipientId: mentionedUid,
+          actor: params.author,
+          type: 'mention',
+          targetType: 'post',
+          targetId: params.post.id,
+          preview: clean.slice(0, 80),
+          dedupeKey: `mention:${commentRef.id}:${mentionedUid}`,
+        });
+      }
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `posts/${params.post.id}/comments`);
   }
@@ -1933,10 +1991,10 @@ export async function submitContactSubmission(params: {
   }
 }
 
-// --- Moderation / Reports ---
+// --- Moderation / Reports & Blocking ---
 export async function submitModerationReport(params: {
   reporterId: string;
-  targetType: 'post' | 'user' | 'space' | 'vibe' | 'gift' | 'collab';
+  targetType: 'post' | 'user' | 'space' | 'vibe' | 'gift' | 'collab' | 'message';
   targetId: string;
   reason: string;
 }): Promise<void> {
@@ -1953,3 +2011,155 @@ export async function submitModerationReport(params: {
     handleFirestoreError(err, OperationType.CREATE, 'reports');
   }
 }
+
+export async function blockUserAccount(currentUid: string, targetUid: string, existingBlocked: string[]): Promise<string[]> {
+  if (!currentUid || !targetUid || currentUid === targetUid) return existingBlocked;
+  const next = Array.from(new Set([...existingBlocked, targetUid])).slice(0, 100);
+  try {
+    await updateDoc(doc(db, 'users_private', currentUid), {
+      blockedUserIds: next,
+      updatedAt: serverTimestamp(),
+    });
+    return next;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `users_private/${currentUid}`);
+  }
+}
+
+export async function unblockUserAccount(currentUid: string, targetUid: string, existingBlocked: string[]): Promise<string[]> {
+  const next = existingBlocked.filter((id) => id !== targetUid);
+  try {
+    await updateDoc(doc(db, 'users_private', currentUid), {
+      blockedUserIds: next,
+      updatedAt: serverTimestamp(),
+    });
+    return next;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `users_private/${currentUid}`);
+  }
+}
+
+// --- Per-User Preferences (Pinned Chats, Muted Chats, Recent Searches) ---
+export function subscribeUserPreferences(
+  uid: string,
+  callback: (prefs: UserPreferences) => void
+): Unsubscribe {
+  return onSnapshot(
+    doc(db, 'user_preferences', uid),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as Partial<UserPreferences>;
+        callback({
+          uid,
+          pinnedConvIds: Array.isArray(data.pinnedConvIds) ? data.pinnedConvIds : [],
+          mutedConvIds: Array.isArray(data.mutedConvIds) ? data.mutedConvIds : [],
+          recentSearches: Array.isArray(data.recentSearches) ? data.recentSearches : [],
+          updatedAt: data.updatedAt,
+        });
+      } else {
+        callback({
+          uid,
+          pinnedConvIds: [],
+          mutedConvIds: [],
+          recentSearches: [],
+        });
+      }
+    },
+    () =>
+      callback({
+        uid,
+        pinnedConvIds: [],
+        mutedConvIds: [],
+        recentSearches: [],
+      })
+  );
+}
+
+async function upsertUserPreferences(
+  uid: string,
+  current: UserPreferences | null | undefined,
+  patch: Partial<Pick<UserPreferences, 'pinnedConvIds' | 'mutedConvIds' | 'recentSearches'>>
+): Promise<void> {
+  const nextPayload = {
+    uid,
+    pinnedConvIds: (patch.pinnedConvIds ?? current?.pinnedConvIds ?? []).slice(0, 30),
+    mutedConvIds: (patch.mutedConvIds ?? current?.mutedConvIds ?? []).slice(0, 100),
+    recentSearches: (patch.recentSearches ?? current?.recentSearches ?? []).slice(0, 20),
+    updatedAt: serverTimestamp(),
+  };
+  await setDoc(doc(db, 'user_preferences', uid), nextPayload);
+}
+
+export async function togglePinConversation(
+  uid: string,
+  convId: string,
+  currentPrefs: UserPreferences | null | undefined
+): Promise<boolean> {
+  const pinned = currentPrefs?.pinnedConvIds || [];
+  const isPinned = pinned.includes(convId);
+  const next = isPinned ? pinned.filter((id) => id !== convId) : [convId, ...pinned].slice(0, 30);
+  try {
+    await upsertUserPreferences(uid, currentPrefs, { pinnedConvIds: next });
+    return !isPinned;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `user_preferences/${uid}`);
+  }
+}
+
+export async function toggleMuteConversation(
+  uid: string,
+  convId: string,
+  currentPrefs: UserPreferences | null | undefined
+): Promise<boolean> {
+  const muted = currentPrefs?.mutedConvIds || [];
+  const isMuted = muted.includes(convId);
+  const next = isMuted ? muted.filter((id) => id !== convId) : [convId, ...muted].slice(0, 100);
+  try {
+    await upsertUserPreferences(uid, currentPrefs, { mutedConvIds: next });
+    return !isMuted;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `user_preferences/${uid}`);
+  }
+}
+
+export async function saveRecentSearchTerm(
+  uid: string,
+  term: string,
+  currentPrefs: UserPreferences | null | undefined
+): Promise<void> {
+  const clean = sanitizeString(term, 80);
+  if (!clean) return;
+  const existing = currentPrefs?.recentSearches || [];
+  const next = [clean, ...existing.filter((item) => item.toLowerCase() !== clean.toLowerCase())].slice(0, 12);
+  try {
+    await upsertUserPreferences(uid, currentPrefs, { recentSearches: next });
+  } catch {
+    // Non-blocking search history sync
+  }
+}
+
+export async function removeRecentSearchTerm(
+  uid: string,
+  term: string,
+  currentPrefs: UserPreferences | null | undefined
+): Promise<void> {
+  const existing = currentPrefs?.recentSearches || [];
+  const next = existing.filter((item) => item !== term);
+  try {
+    await upsertUserPreferences(uid, currentPrefs, { recentSearches: next });
+  } catch {
+    // Non-blocking search history sync
+  }
+}
+
+export async function clearAllRecentSearches(
+  uid: string,
+  currentPrefs: UserPreferences | null | undefined
+): Promise<void> {
+  try {
+    await upsertUserPreferences(uid, currentPrefs, { recentSearches: [] });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `user_preferences/${uid}`);
+  }
+}
+

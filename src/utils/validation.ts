@@ -3,12 +3,19 @@ import {
   AnyVerifiedBadgeType,
   BadgeConfig,
   BadgeDefinition,
+  CustomisationItem,
   InternalRole,
   NotificationCategory,
   PlatformConfig,
   PlatformRole,
   Post,
   PrivacySettings,
+  ProfileCustomisation,
+  Space,
+  SubscriptionPlan,
+  SubscriptionTier,
+  UserProfile,
+  UserSubscription,
   VerifiedBadgeType,
   VirtualGiftCatalogItem,
 } from '../types/nexora';
@@ -576,7 +583,12 @@ export const DEFAULT_NOTIFICATION_CHANNELS: Record<NotificationCategory, boolean
   gifts: true,
   admin: true,
   security: true,
+  messages: true,
+  spaces: true,
+  subscriptions: true,
 };
+
+export const LOCKED_NOTIFICATION_CATEGORIES: NotificationCategory[] = ['security'];
 
 export function withPrivacyDefaults(settings?: Partial<PrivacySettings> | null): PrivacySettings {
   return {
@@ -598,10 +610,12 @@ export function withPrivacyDefaults(settings?: Partial<PrivacySettings> | null):
     emailNotifications: {
       ...DEFAULT_NOTIFICATION_CHANNELS,
       ...(settings?.emailNotifications || {}),
+      security: true,
     },
     inAppNotifications: {
       ...DEFAULT_NOTIFICATION_CHANNELS,
       ...(settings?.inAppNotifications || {}),
+      security: true,
     },
   };
 }
@@ -726,5 +740,655 @@ export function rankTrendingPosts(posts: Post[]): Post[] {
     const aTime = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
     const bTime = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
     return bTime - aTime;
+  });
+}
+
+// --- Nexora Subscriptions & Tier Access Helpers ---
+export const TIER_ORDER: Record<SubscriptionTier, number> = {
+  free: 0,
+  plus: 1,
+  pro: 2,
+};
+
+export function canAccessTier(
+  userTier: SubscriptionTier | undefined | null,
+  requiredTier: SubscriptionTier
+): boolean {
+  const actual = TIER_ORDER[userTier || 'free'] ?? 0;
+  const required = TIER_ORDER[requiredTier] ?? 0;
+  return actual >= required;
+}
+
+export function resolveEffectiveSubscriptionTier(
+  subscription: Partial<UserSubscription> | null | undefined,
+  nowMs = Date.now()
+): SubscriptionTier {
+  if (!subscription || !subscription.tier || subscription.tier === 'free') {
+    return 'free';
+  }
+  if (subscription.status === 'expired' || subscription.status === 'free' || subscription.status === 'past_due') {
+    return 'free';
+  }
+  if (subscription.status !== 'active' && subscription.status !== 'canceled') {
+    return 'free';
+  }
+  const endMs = subscription.currentPeriodEnd?.toMillis
+    ? subscription.currentPeriodEnd.toMillis()
+    : undefined;
+  if (typeof endMs === 'number' && endMs <= nowMs) {
+    return 'free';
+  }
+  return subscription.tier;
+}
+
+// Default plan catalog (prices remain null / pricingConfigured: false until admin sets pricing)
+export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
+  {
+    id: 'free',
+    name: 'Nexora Free',
+    tagline: 'Essential social access for creators and communities',
+    badgeLabel: 'Free Member',
+    badgeColor: '#94A3B8',
+    monthlyPriceCents: 0,
+    yearlyPriceCents: 0,
+    currency: 'usd',
+    enabled: true,
+    pricingConfigured: true,
+    sortOrder: 1,
+    benefits: [
+      'Full access to Home Feed, Vibes, Chat & Public Spaces',
+      'Core creator analytics overview & standard notifications',
+      'Essential profile colours, classic layout & starter frames',
+    ],
+  },
+  {
+    id: 'plus',
+    name: 'Nexora Plus',
+    tagline: 'Enhanced expression, customisation & creator insights',
+    badgeLabel: 'Nexora Plus',
+    badgeColor: '#A855F7',
+    monthlyPriceCents: null,
+    yearlyPriceCents: null,
+    currency: 'usd',
+    enabled: true,
+    pricingConfigured: false,
+    sortOrder: 2,
+    benefits: [
+      'Distinctive purple Nexora Plus membership badge across the platform',
+      'Plus profile themes, gradient backdrops, custom banners & frames',
+      'Static & selected animated avatar decorations + Spotlight layout',
+    ],
+  },
+  {
+    id: 'pro',
+    name: 'Nexora Pro',
+    tagline: 'Signature studio artistry & complete customisation suite',
+    badgeLabel: 'Nexora Pro',
+    badgeColor: '#F59E0B',
+    monthlyPriceCents: null,
+    yearlyPriceCents: null,
+    currency: 'usd',
+    enabled: true,
+    pricingConfigured: false,
+    sortOrder: 3,
+    benefits: [
+      'Signature gold Nexora Pro crest visible on profiles, posts & chat',
+      'Full unlock of animated decorations, ambient effects & Pro themes',
+      'All profile layouts including Showcase & priority studio drops',
+    ],
+  },
+];
+
+// --- Nexora Original Profile Customisation Studio Defaults & Catalog ---
+export const DEFAULT_PROFILE_CUSTOMISATION: ProfileCustomisation = {
+  themeId: 'theme_obsidian',
+  backgroundColor: '#0A0812',
+  accentColor: '#8B5CF6',
+  gradientId: 'grad_none',
+  bannerPresetId: 'banner_obsidian_grid',
+  bannerImageUrl: '',
+  avatarFrameId: 'frame_minimal',
+  staticDecorationId: 'deco_none',
+  animatedDecorationId: 'anim_none',
+  effectId: 'effect_none',
+  layoutVariant: 'classic',
+  cardOpacity: 92,
+};
+
+export const DEFAULT_CUSTOMISATION_CATALOG: CustomisationItem[] = [
+  // Themes
+  {
+    id: 'theme_obsidian',
+    category: 'theme',
+    name: 'Obsidian Classic',
+    description: 'Nexora signature deep obsidian glass aesthetic.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: '#0A0812',
+    secondaryValue: '#8B5CF6',
+    sortOrder: 1,
+  },
+  {
+    id: 'theme_velvet_violet',
+    category: 'theme',
+    name: 'Velvet Violet',
+    description: 'Rich midnight plum surface with luminous violet trims.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: '#130B24',
+    secondaryValue: '#A855F7',
+    sortOrder: 2,
+  },
+  {
+    id: 'theme_celestial_gold',
+    category: 'theme',
+    name: 'Celestial Gold',
+    description: 'Executive dark slate elevated with warm amber gold.',
+    requiredTier: 'pro',
+    enabled: true,
+    previewValue: '#141008',
+    secondaryValue: '#F59E0B',
+    sortOrder: 3,
+  },
+  {
+    id: 'theme_aurora_dusk',
+    category: 'theme',
+    name: 'Aurora Dusk',
+    description: 'Deep twilight indigo paired with electric iris glow.',
+    requiredTier: 'pro',
+    enabled: true,
+    previewValue: '#09111E',
+    secondaryValue: '#38BDF8',
+    sortOrder: 4,
+  },
+
+  // Background Colours
+  {
+    id: 'bg_obsidian',
+    category: 'background',
+    name: 'Deep Obsidian',
+    description: 'Clean dark neutral profile surface.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: '#0A0812',
+    sortOrder: 1,
+  },
+  {
+    id: 'bg_midnight_plum',
+    category: 'background',
+    name: 'Midnight Plum',
+    description: 'Subtle violet-tinted studio backdrop.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: '#120C21',
+    sortOrder: 2,
+  },
+  {
+    id: 'bg_indigo_abyss',
+    category: 'background',
+    name: 'Indigo Abyss',
+    description: 'Cool deep sapphire-slate canvas.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: '#0B1120',
+    sortOrder: 3,
+  },
+  {
+    id: 'bg_crimson_velvet',
+    category: 'background',
+    name: 'Velvet Rose',
+    description: 'Muted dark burgundy studio surface.',
+    requiredTier: 'pro',
+    enabled: true,
+    previewValue: '#1B0C18',
+    sortOrder: 4,
+  },
+
+  // Accent Colours
+  {
+    id: 'accent_violet',
+    category: 'accent',
+    name: 'Nexora Violet',
+    description: 'Signature violet accent colour.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: '#8B5CF6',
+    sortOrder: 1,
+  },
+  {
+    id: 'accent_orchid',
+    category: 'accent',
+    name: 'Electric Orchid',
+    description: 'Vibrant magenta-violet highlights.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: '#D946EF',
+    sortOrder: 2,
+  },
+  {
+    id: 'accent_cyan',
+    category: 'accent',
+    name: 'Glacier Cyan',
+    description: 'Crisp sky cyan accent trim.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: '#06B6D4',
+    sortOrder: 3,
+  },
+  {
+    id: 'accent_gold',
+    category: 'accent',
+    name: 'Sovereign Gold',
+    description: 'Radiant Pro gold accent highlights.',
+    requiredTier: 'pro',
+    enabled: true,
+    previewValue: '#F59E0B',
+    sortOrder: 4,
+  },
+
+  // Gradient Backgrounds
+  {
+    id: 'grad_none',
+    category: 'gradient',
+    name: 'Solid Surface',
+    description: 'No gradient overlay on your profile card.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: 'none',
+    sortOrder: 1,
+  },
+  {
+    id: 'grad_violet_nebula',
+    category: 'gradient',
+    name: 'Violet Nebula',
+    description: 'Deep ultraviolet to midnight indigo blend.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: 'linear-gradient(135deg, rgba(124,58,237,0.34) 0%, rgba(15,12,26,0.94) 55%, rgba(168,85,247,0.22) 100%)',
+    sortOrder: 2,
+  },
+  {
+    id: 'grad_prism_twilight',
+    category: 'gradient',
+    name: 'Prism Twilight',
+    description: 'Violet, rose, and teal horizon gradient.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: 'linear-gradient(135deg, rgba(139,92,246,0.3) 0%, rgba(236,72,153,0.22) 50%, rgba(14,165,233,0.22) 100%)',
+    sortOrder: 3,
+  },
+  {
+    id: 'grad_solar_crown',
+    category: 'gradient',
+    name: 'Solar Crown',
+    description: 'Rich amber-gold and deep plum luxury blend.',
+    requiredTier: 'pro',
+    enabled: true,
+    previewValue: 'linear-gradient(135deg, rgba(245,158,11,0.32) 0%, rgba(28,18,12,0.92) 52%, rgba(168,85,247,0.26) 100%)',
+    sortOrder: 4,
+  },
+
+  // Banners
+  {
+    id: 'banner_obsidian_grid',
+    category: 'banner',
+    name: 'Obsidian Horizon',
+    description: 'Clean dark violet horizon banner.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: 'linear-gradient(120deg, #1E1338 0%, #0D0B16 60%, #241242 100%)',
+    sortOrder: 1,
+  },
+  {
+    id: 'banner_cosmic_waves',
+    category: 'banner',
+    name: 'Cosmic Waves',
+    description: 'Layered purple and cyan ambient waves.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: 'radial-gradient(circle at 20% 25%, rgba(168,85,247,0.65), transparent 52%), radial-gradient(circle at 80% 70%, rgba(56,189,248,0.45), transparent 55%), linear-gradient(135deg, #0D0B18 0%, #1F123A 100%)',
+    sortOrder: 2,
+  },
+  {
+    id: 'banner_auric_eclipse',
+    category: 'banner',
+    name: 'Auric Eclipse',
+    description: 'Animated eclipse halo banner for Pro creators.',
+    requiredTier: 'pro',
+    enabled: true,
+    animated: true,
+    previewValue: 'radial-gradient(circle at 50% 40%, rgba(251,191,36,0.52), rgba(139,92,246,0.28) 42%, #090710 80%)',
+    sortOrder: 3,
+  },
+
+  // Profile Picture Frames
+  {
+    id: 'frame_minimal',
+    category: 'avatar_frame',
+    name: 'Clean Ring',
+    description: 'Minimalist hairline avatar border.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: 'ring-2 ring-white/15',
+    sortOrder: 1,
+  },
+  {
+    id: 'frame_violet_halo',
+    category: 'avatar_frame',
+    name: 'Violet Halo',
+    description: 'Luminous purple double-bevel frame.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: 'ring-2 ring-purple-400 shadow-[0_0_20px_rgba(168,85,247,0.55)]',
+    sortOrder: 2,
+  },
+  {
+    id: 'frame_prism_bevel',
+    category: 'avatar_frame',
+    name: 'Prism Bevel',
+    description: 'Iridescent violet-cyan studio border.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: 'conic-violet-cyan',
+    sortOrder: 3,
+  },
+  {
+    id: 'frame_sovereign_crest',
+    category: 'avatar_frame',
+    name: 'Sovereign Crest',
+    description: 'Refined gold-and-violet dual orbital frame.',
+    requiredTier: 'pro',
+    enabled: true,
+    previewValue: 'conic-gold-violet',
+    sortOrder: 4,
+  },
+
+  // Static Decorations
+  {
+    id: 'deco_none',
+    category: 'static_decoration',
+    name: 'No Decoration',
+    description: 'Clean unadorned avatar presentation.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: 'none',
+    sortOrder: 1,
+  },
+  {
+    id: 'deco_spark_crest',
+    category: 'static_decoration',
+    name: 'Violet Spark Crest',
+    description: 'Crisp faceted geometric corner crest.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: 'spark_crest',
+    sortOrder: 2,
+  },
+  {
+    id: 'deco_botanical_arc',
+    category: 'static_decoration',
+    name: 'Silver Laurel Arc',
+    description: 'Precision vector laurel wreath accent.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: 'laurel_arc',
+    sortOrder: 3,
+  },
+  {
+    id: 'deco_crown_pin',
+    category: 'static_decoration',
+    name: 'Gold Sovereign Pin',
+    description: 'Pro faceted crown emblem above your avatar.',
+    requiredTier: 'pro',
+    enabled: true,
+    previewValue: 'crown_pin',
+    sortOrder: 4,
+  },
+
+  // Animated Decorations
+  {
+    id: 'anim_none',
+    category: 'animated_decoration',
+    name: 'Static Avatar',
+    description: 'No animated avatar ring effect.',
+    requiredTier: 'free',
+    enabled: true,
+    animated: false,
+    previewValue: 'none',
+    sortOrder: 1,
+  },
+  {
+    id: 'anim_pulse_aura',
+    category: 'animated_decoration',
+    name: 'Violet Pulse Orbit',
+    description: 'Smooth breathing violet orbital shimmer.',
+    requiredTier: 'plus',
+    enabled: true,
+    animated: true,
+    previewValue: 'pulse_aura',
+    sortOrder: 2,
+  },
+  {
+    id: 'anim_prism_orbit',
+    category: 'animated_decoration',
+    name: 'Prism Orbit Ring',
+    description: 'Slow rotating prismatic energy halo.',
+    requiredTier: 'pro',
+    enabled: true,
+    animated: true,
+    previewValue: 'prism_orbit',
+    sortOrder: 3,
+  },
+  {
+    id: 'anim_stardust_halo',
+    category: 'animated_decoration',
+    name: 'Auric Stardust Halo',
+    description: 'Orbiting gold & violet stardust particles.',
+    requiredTier: 'pro',
+    enabled: true,
+    animated: true,
+    previewValue: 'stardust_halo',
+    sortOrder: 4,
+  },
+
+  // Special Profile Effects
+  {
+    id: 'effect_none',
+    category: 'effect',
+    name: 'No Ambient Effect',
+    description: 'Clean static profile header.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: 'none',
+    sortOrder: 1,
+  },
+  {
+    id: 'effect_aurora',
+    category: 'effect',
+    name: 'Aurora Mist',
+    description: 'Drifting soft violet and indigo northern light veil.',
+    requiredTier: 'plus',
+    enabled: true,
+    animated: true,
+    previewValue: 'aurora',
+    sortOrder: 2,
+  },
+  {
+    id: 'effect_starlight',
+    category: 'effect',
+    name: 'Starlight Field',
+    description: 'Subtle twinkling starlight constellation shimmer.',
+    requiredTier: 'pro',
+    enabled: true,
+    animated: true,
+    previewValue: 'starlight',
+    sortOrder: 3,
+  },
+  {
+    id: 'effect_prism',
+    category: 'effect',
+    name: 'Prism Shimmer',
+    description: 'Diagonal specular glass light sweep across your header.',
+    requiredTier: 'pro',
+    enabled: true,
+    animated: true,
+    previewValue: 'prism',
+    sortOrder: 4,
+  },
+
+  // Profile Layouts
+  {
+    id: 'layout_classic',
+    category: 'layout',
+    name: 'Classic Balanced',
+    description: 'Standard Nexora profile header & clean timeline layout.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: 'classic',
+    sortOrder: 1,
+  },
+  {
+    id: 'layout_compact',
+    category: 'layout',
+    name: 'Compact Minimal',
+    description: 'Streamlined condensed header putting content first.',
+    requiredTier: 'free',
+    enabled: true,
+    previewValue: 'compact',
+    sortOrder: 2,
+  },
+  {
+    id: 'layout_spotlight',
+    category: 'layout',
+    name: 'Creator Spotlight',
+    description: 'Wide cinematic cover & prominent creator highlight bar.',
+    requiredTier: 'plus',
+    enabled: true,
+    previewValue: 'spotlight',
+    sortOrder: 3,
+  },
+  {
+    id: 'layout_showcase',
+    category: 'layout',
+    name: 'Executive Showcase',
+    description: 'Two-column studio hero with featured highlights & stats.',
+    requiredTier: 'pro',
+    enabled: true,
+    previewValue: 'showcase',
+    sortOrder: 4,
+  },
+];
+
+export function sanitizeProfileCustomisation(
+  raw?: Partial<ProfileCustomisation> | null,
+  allowedTier: SubscriptionTier = 'pro'
+): ProfileCustomisation {
+  const base = { ...DEFAULT_PROFILE_CUSTOMISATION };
+  if (!raw) return base;
+  const pickIfAllowed = (itemId: string | undefined, fallback: string) => {
+    if (!itemId) return fallback;
+    const found = DEFAULT_CUSTOMISATION_CATALOG.find((c) => c.id === itemId);
+    if (!found) return itemId.slice(0, 64);
+    return canAccessTier(allowedTier, found.requiredTier) ? found.id : fallback;
+  };
+  const validHex = (val: string | undefined, fallback: string) =>
+    val && /^#[0-9a-fA-F]{6}$/.test(val) ? val : fallback;
+
+  return {
+    themeId: pickIfAllowed(raw.themeId, base.themeId),
+    backgroundColor: validHex(raw.backgroundColor, base.backgroundColor),
+    accentColor: validHex(raw.accentColor, base.accentColor),
+    gradientId: pickIfAllowed(raw.gradientId, base.gradientId),
+    bannerPresetId: pickIfAllowed(raw.bannerPresetId, base.bannerPresetId),
+    bannerImageUrl:
+      typeof raw.bannerImageUrl === 'string' && canAccessTier(allowedTier, 'plus')
+        ? raw.bannerImageUrl.slice(0, 400000)
+        : '',
+    avatarFrameId: pickIfAllowed(raw.avatarFrameId, base.avatarFrameId),
+    staticDecorationId: pickIfAllowed(raw.staticDecorationId, base.staticDecorationId),
+    animatedDecorationId: pickIfAllowed(raw.animatedDecorationId, base.animatedDecorationId),
+    effectId: pickIfAllowed(raw.effectId, base.effectId),
+    layoutVariant:
+      raw.layoutVariant === 'classic' ||
+      raw.layoutVariant === 'compact' ||
+      (raw.layoutVariant === 'spotlight' && canAccessTier(allowedTier, 'plus')) ||
+      (raw.layoutVariant === 'showcase' && canAccessTier(allowedTier, 'pro'))
+        ? raw.layoutVariant
+        : base.layoutVariant,
+    cardOpacity:
+      typeof raw.cardOpacity === 'number' && Number.isFinite(raw.cardOpacity)
+        ? Math.min(100, Math.max(60, Math.round(raw.cardOpacity)))
+        : 92,
+  };
+}
+
+// --- Search & Discovery Privacy Filters ---
+export function filterSearchableUsers(
+  users: UserProfile[],
+  viewerUid: string | null | undefined,
+  blockedUserIds: string[] = [],
+  followingIds: string[] = [],
+  privateProfileUids: Set<string> = new Set()
+): UserProfile[] {
+  const blocked = new Set(blockedUserIds);
+  const following = new Set(followingIds);
+  return users.filter((u) => {
+    if (!u || !u.uid) return false;
+    if (u.suspended) return false;
+    if (u.uid !== viewerUid && blocked.has(u.uid)) return false;
+    if (u.uid !== viewerUid && privateProfileUids.has(u.uid) && !following.has(u.uid)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+export function filterSearchablePosts(
+  posts: Post[],
+  viewerUid: string | null | undefined,
+  blockedUserIds: string[] = [],
+  followingIds: string[] = [],
+  joinedSpaceIds: string[] = [],
+  privateSpaceIds: Set<string> = new Set(),
+  suspendedUserIds: Set<string> = new Set()
+): Post[] {
+  const blocked = new Set(blockedUserIds);
+  const following = new Set(followingIds);
+  const joinedSpaces = new Set(joinedSpaceIds);
+  return posts.filter((post) => {
+    if (!post || !post.id) return false;
+    if (blocked.has(post.authorId) || suspendedUserIds.has(post.authorId)) return false;
+    if (post.authorId === viewerUid) return true;
+    if (post.audience === 'public') {
+      if (post.spaceId && privateSpaceIds.has(post.spaceId) && !joinedSpaces.has(post.spaceId)) {
+        return false;
+      }
+      return true;
+    }
+    if (post.audience === 'followers') {
+      return following.has(post.authorId);
+    }
+    if (post.audience === 'space') {
+      return Boolean(post.spaceId && joinedSpaces.has(post.spaceId));
+    }
+    return false;
+  });
+}
+
+export function filterSearchableSpaces(
+  spaces: Space[],
+  viewerUid: string | null | undefined,
+  joinedSpaceIds: string[] = []
+): Space[] {
+  const joined = new Set(joinedSpaceIds);
+  return spaces.filter((s) => {
+    if (!s || !s.id) return false;
+    if (s.status === 'suspended' || s.status === 'pending') {
+      return s.ownerId === viewerUid;
+    }
+    if (s.isPrivate) {
+      return s.ownerId === viewerUid || joined.has(s.id);
+    }
+    return true;
   });
 }

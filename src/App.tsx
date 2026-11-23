@@ -8,21 +8,28 @@ import { LoadingScreen } from './components/common/LoadingScreen';
 import { NexoraLogo } from './components/branding/NexoraLogo';
 import { DashboardShell } from './components/navigation/DashboardShell';
 import { AuthProvider, useAuth } from './hooks/useAuth';
+import { PostCard } from './features/posts/PostCard';
 import { AuthView } from './pages/auth/AuthView';
 import { OnboardingFlow } from './pages/auth/OnboardingFlow';
+import { CreatorAnalyticsPage } from './pages/analytics/CreatorAnalyticsPage';
 import { ChatPage } from './pages/chat/ChatPage';
 import { CreatePage } from './pages/create/CreatePage';
 import { HomePage } from './pages/home/HomePage';
 import { LandingPage } from './pages/landing/LandingPage';
+import { NotificationsPage } from './pages/notifications/NotificationsPage';
 import { ProfilePage } from './pages/profile/ProfilePage';
+import { SearchDiscoveryPage } from './pages/search/SearchDiscoveryPage';
 import { SettingsPage } from './pages/settings/SettingsPage';
 import { SpacesPage } from './pages/spaces/SpacesPage';
+import { ProfileCustomisationStudio } from './pages/studio/ProfileCustomisationStudio';
+import { SubscriptionsPage } from './pages/subscriptions/SubscriptionsPage';
 import { VibesPage } from './pages/vibes/VibesPage';
 import { logoutUser } from './services/auth/authService';
 import {
   getUserByUsername,
   subscribeDirectoryUsers,
   subscribeFeedPosts,
+  subscribeFollowingIds,
   subscribeNotifications,
   subscribeSavedPostIds,
   subscribeSpaces,
@@ -45,9 +52,16 @@ function NexoraAppContent() {
   const {
     user,
     profile,
+    privateInfo,
     myRole,
+    badgesMap,
     platformConfig,
     isAdminDndActive,
+    subscription,
+    effectiveTier,
+    subscriptionPlans,
+    userPrefs,
+    getUserTier,
     loading,
     authReady,
     emailVerified,
@@ -61,6 +75,9 @@ function NexoraAppContent() {
   const [targetProfileTab, setTargetProfileTab] = useState<ProfileContentTab | undefined>(undefined);
   const [targetSpaceId, setTargetSpaceId] = useState<string | null>(null);
   const [targetConvId, setTargetConvId] = useState<string | null>(null);
+  const [searchQueryInitial, setSearchQueryInitial] = useState('');
+  const [pendingBillingSessionId, setPendingBillingSessionId] = useState<string | null>(null);
+  const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
 
   // Real-time Firestore state (attached ONLY when auth is ready, email verified & profile synced)
   const [posts, setPosts] = useState<Post[]>([]);
@@ -70,6 +87,7 @@ function NexoraAppContent() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [savedPostIds, setSavedPostIds] = useState<string[]>([]);
+  const [followingIds, setFollowingIds] = useState<Set<string>>(new Set());
   const [deepLinkHandled, setDeepLinkHandled] = useState(false);
   const [incomingGiftToast, setIncomingGiftToast] = useState<NotificationItem | null>(null);
   const seenGiftNotifIdsRef = useRef<Set<string>>(new Set());
@@ -80,6 +98,7 @@ function NexoraAppContent() {
     if (!authReady || !user || !emailVerified || !profile?.uid) {
       seenGiftNotifIdsRef.current.clear();
       giftObserverPrimedRef.current = false;
+      setFollowingIds(new Set());
       return;
     }
 
@@ -114,6 +133,7 @@ function NexoraAppContent() {
     });
     const u6 = subscribeSavedPostIds(user.uid, setSavedPostIds);
     const u7 = subscribeVibes(setVibes);
+    const u8 = subscribeFollowingIds(user.uid, setFollowingIds);
 
     return () => {
       u1();
@@ -123,6 +143,7 @@ function NexoraAppContent() {
       u5();
       u6();
       u7();
+      u8();
     };
   }, [authReady, user?.uid, emailVerified, profile?.uid, isAdminDndActive]);
 
@@ -137,6 +158,23 @@ function NexoraAppContent() {
   useEffect(() => {
     if (deepLinkHandled || !profile?.onboardingCompleted) return;
     const params = new URLSearchParams(window.location.search);
+    const billingSessionId =
+      params.get('billing_session_id')?.trim() || params.get('session_id')?.trim() || '';
+    const billingCanceled = params.get('billing_canceled')?.trim();
+    if (billingSessionId) {
+      setPendingBillingSessionId(billingSessionId);
+      setActiveSection('subscriptions');
+      window.history.replaceState({}, '', window.location.pathname);
+      setDeepLinkHandled(true);
+      return;
+    }
+    if (billingCanceled) {
+      setActiveSection('subscriptions');
+      window.history.replaceState({}, '', window.location.pathname);
+      setDeepLinkHandled(true);
+      return;
+    }
+
     const sharedUsername = params.get('u')?.trim().toLowerCase();
     if (!sharedUsername) {
       setDeepLinkHandled(true);
@@ -324,6 +362,7 @@ function NexoraAppContent() {
 
   const handleNavigate = (section: NavSection, targetId?: string, profileTab?: ProfileContentTab) => {
     setOpenAdminSettings(false);
+    setSelectedPostId(null);
     setActiveSection(section);
     if (section === 'profile') {
       setTargetProfileUid(targetId && targetId !== profile.uid ? targetId : null);
@@ -335,10 +374,20 @@ function NexoraAppContent() {
     if (section === 'chat' && targetId) {
       setTargetConvId(targetId);
     }
+    if (section === 'search' && typeof targetId === 'string') {
+      setSearchQueryInitial(targetId);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleOpenSearch = (query = '') => {
+    setSearchQueryInitial(query);
+    setActiveSection('search');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleOpenUserProfile = (uid: string) => {
+    setSelectedPostId(null);
     setTargetProfileUid(uid === profile.uid ? null : uid);
     setTargetProfileTab(undefined);
     setActiveSection('profile');
@@ -346,15 +395,19 @@ function NexoraAppContent() {
   };
 
   const handleOpenChatThread = (convId: string) => {
+    setSelectedPostId(null);
     setTargetConvId(convId);
     setActiveSection('chat');
   };
+
+  const selectedPost = selectedPostId ? posts.find((p) => p.id === selectedPostId) || null : null;
 
   return (
     <BadgeModalProvider>
       <DashboardShell
         activeSection={activeSection}
         onNavigate={handleNavigate}
+        onOpenSearch={handleOpenSearch}
         onOpenUserProfile={handleOpenUserProfile}
         onOpenAdminSettings={() => {
           setOpenAdminSettings(true);
@@ -387,6 +440,7 @@ function NexoraAppContent() {
             users={users}
             savedIds={savedPostIds}
             onOpenProfile={handleOpenUserProfile}
+            onNavigate={handleNavigate}
           />
         )}
 
@@ -429,7 +483,61 @@ function NexoraAppContent() {
             onOpenProfile={handleOpenUserProfile}
             onOpenChatThread={handleOpenChatThread}
             onOpenVibes={() => handleNavigate('vibes')}
+            onNavigate={handleNavigate}
           />
+        )}
+
+        {activeSection === 'search' && (
+          <SearchDiscoveryPage
+            currentUser={profile}
+            initialQuery={searchQueryInitial}
+            directoryUsers={users}
+            feedPosts={posts}
+            spaces={spaces}
+            blockedUserIds={privateInfo?.blockedUserIds || []}
+            followingIds={followingIds}
+            userPrefs={userPrefs}
+            verifiedBadgesMap={badgesMap}
+            getUserTier={getUserTier}
+            onNavigate={handleNavigate}
+            onOpenUserProfile={handleOpenUserProfile}
+            onOpenPost={(postId) => setSelectedPostId(postId)}
+          />
+        )}
+
+        {activeSection === 'notifications' && (
+          <NotificationsPage
+            uid={profile.uid}
+            notifications={notifications}
+            privateInfo={privateInfo}
+            onNavigate={handleNavigate}
+            onOpenUserProfile={handleOpenUserProfile}
+            onOpenPost={(postId) => setSelectedPostId(postId)}
+          />
+        )}
+
+        {activeSection === 'analytics' && (
+          <CreatorAnalyticsPage
+            profile={profile}
+            feedPosts={posts}
+            onNavigate={handleNavigate}
+          />
+        )}
+
+        {activeSection === 'subscriptions' && (
+          <SubscriptionsPage
+            profile={profile}
+            effectiveTier={effectiveTier}
+            subscription={subscription}
+            plans={subscriptionPlans}
+            pendingBillingSessionId={pendingBillingSessionId}
+            onClearBillingSessionParam={() => setPendingBillingSessionId(null)}
+            onNavigate={handleNavigate}
+          />
+        )}
+
+        {activeSection === 'studio' && (
+          <ProfileCustomisationStudio onNavigate={handleNavigate} />
         )}
 
         {activeSection === 'settings' && (
@@ -439,9 +547,42 @@ function NexoraAppContent() {
             vibes={vibes}
             spaces={spaces}
             initialAdminOpen={openAdminSettings}
+            onNavigate={handleNavigate}
           />
         )}
       </DashboardShell>
+
+      {/* Deep-Link Post Detail Modal */}
+      {selectedPost && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+          onClick={() => setSelectedPostId(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-2xl rounded-2xl bg-[#090712] border border-[#8B5CF6]/30 p-3 sm:p-5 space-y-3 my-auto"
+          >
+            <div className="flex items-center justify-between px-1">
+              <span className="font-display text-sm font-semibold text-white">Post Discussion</span>
+              <button
+                type="button"
+                onClick={() => setSelectedPostId(null)}
+                className="p-1.5 rounded-lg hover:bg-white/10 text-[#94A3B8] hover:text-white"
+                aria-label="Close post preview"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <PostCard
+              post={selectedPost}
+              isSaved={savedPostIds.includes(selectedPost.id)}
+              onOpenProfile={handleOpenUserProfile}
+              usersDirectory={users}
+            />
+          </div>
+        </div>
+      )}
+
       <BadgeInfoModal />
 
       {/* Real-time Incoming Free Gift Celebration Toast */}

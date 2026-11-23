@@ -31,27 +31,42 @@ import {
 import {
   seedInitialSpacesIfEmpty,
   setUserOnlinePresence,
+  subscribeUserPreferences,
   subscribeUserProfile,
 } from '../services/firebase/socialService';
+import {
+  subscribeMySubscription,
+  subscribeSubscriptionPlans,
+  syncExpiredSubscriptionDowngrade,
+} from '../services/firebase/subscriptionService';
+import { subscribeCustomisationCatalog } from '../services/firebase/customisationService';
 import {
   AdminManualMode,
   AdminPresencePrivate,
   AdminPresencePublic,
   AdminPresenceStatus,
+  CustomisationItem,
   PlatformAnnouncement,
   PlatformConfig,
   PlatformRole,
   PublicAdminPresenceStatus,
+  SubscriptionPlan,
+  SubscriptionTier,
+  UserPreferences,
   UserPrivate,
   UserProfile,
+  UserSubscription,
   VerifiedBadgeRecord,
   VerifiedBadgeType,
 } from '../types/nexora';
 import {
+  DEFAULT_CUSTOMISATION_CATALOG,
   DEFAULT_PLATFORM_CONFIG,
+  DEFAULT_SUBSCRIPTION_PLANS,
   FOUNDER_OWNER_EMAIL,
   normalizeBadgeList,
   normalizeBadgeType,
+  resolveEffectiveSubscriptionTier,
   withPrivacyDefaults,
 } from '../utils/validation';
 
@@ -68,12 +83,18 @@ interface AuthContextValue {
   myAdminSelfStatus: AdminPresenceStatus | 'offline';
   isAdminDndActive: boolean;
   isAdminInvisibleActive: boolean;
+  subscription: UserSubscription | null;
+  effectiveTier: SubscriptionTier;
+  subscriptionPlans: SubscriptionPlan[];
+  customisationCatalog: CustomisationItem[];
+  userPrefs: UserPreferences | null;
   loading: boolean;
   authReady: boolean;
   emailVerified: boolean;
   profileError: string | null;
   getBadgeVariant: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType | null;
   getUserBadges: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType[];
+  getUserTier: (uid?: string | null, fallbackTier?: SubscriptionTier) => SubscriptionTier;
   getAdminEffectiveStatus: (uid?: string | null) => PublicAdminPresenceStatus | null;
   setMyAdminStatus: (mode: AdminManualMode) => Promise<void>;
   refreshUserAndProfile: (reloadAuthUser?: boolean) => Promise<void>;
@@ -93,12 +114,18 @@ const AuthContext = createContext<AuthContextValue>({
   myAdminSelfStatus: 'offline',
   isAdminDndActive: false,
   isAdminInvisibleActive: false,
+  subscription: null,
+  effectiveTier: 'free',
+  subscriptionPlans: DEFAULT_SUBSCRIPTION_PLANS,
+  customisationCatalog: DEFAULT_CUSTOMISATION_CATALOG,
+  userPrefs: null,
   loading: true,
   authReady: false,
   emailVerified: false,
   profileError: null,
   getBadgeVariant: () => null,
   getUserBadges: () => [],
+  getUserTier: (_uid, fallbackTier) => fallbackTier || 'free',
   getAdminEffectiveStatus: () => null,
   setMyAdminStatus: async () => {},
   refreshUserAndProfile: async () => {},
@@ -116,6 +143,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [announcements, setAnnouncements] = useState<PlatformAnnouncement[]>([]);
   const [adminPresenceMap, setAdminPresenceMap] = useState<Record<string, AdminPresencePublic>>({});
   const [myAdminPresencePrivate, setMyAdminPresencePrivate] = useState<AdminPresencePrivate | null>(null);
+  const [subscription, setSubscription] = useState<UserSubscription | null>(null);
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>(DEFAULT_SUBSCRIPTION_PLANS);
+  const [customisationCatalog, setCustomisationCatalog] = useState<CustomisationItem[]>(DEFAULT_CUSTOMISATION_CATALOG);
+  const [userPrefs, setUserPrefs] = useState<UserPreferences | null>(null);
   const [localSessionIdle, setLocalSessionIdle] = useState(false);
   const [loading, setLoading] = useState(true);
   const [authReady, setAuthReady] = useState(false);
@@ -258,13 +289,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return subscribePlatformConfig(setPlatformConfig);
   }, []);
 
-  // Subscribe to RBAC role, trusted badges, admin presence projections, and announcements
+  // Subscribe to RBAC role, trusted badges, subscriptions, studio catalog, user preferences, and announcements
   useEffect(() => {
     if (!authReady || !user || !emailVerified || !profile?.uid) {
       setMyRole(null);
       setBadgesMap({});
       setAnnouncements([]);
       setAdminPresenceMap({});
+      setSubscription(null);
+      setUserPrefs(null);
       return;
     }
     const u1 = subscribeMyPlatformRole(user.uid, setMyRole);
@@ -276,14 +309,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
     const u5 = subscribeAllAdminPresence(setAdminPresenceMap);
+    const u6 = subscribeSubscriptionPlans(setSubscriptionPlans);
+    const u7 = subscribeMySubscription(user.uid, setSubscription);
+    const u8 = subscribeCustomisationCatalog(setCustomisationCatalog);
+    const u9 = subscribeUserPreferences(user.uid, setUserPrefs);
     return () => {
       u1();
       u2();
       u3();
       u4();
       u5();
+      u6();
+      u7();
+      u8();
+      u9();
     };
   }, [authReady, user?.uid, emailVerified, profile?.uid]);
+
+  const isOwnerAccount = Boolean(
+    (emailVerified && (user?.email || '').toLowerCase() === FOUNDER_OWNER_EMAIL.toLowerCase()) ||
+      (myRole?.active && myRole.role === 'owner')
+  );
+
+  useEffect(() => {
+    if (!profile?.uid || isOwnerAccount) return;
+    void syncExpiredSubscriptionDowngrade({ profile, subscription, isOwner: isOwnerAccount });
+  }, [profile?.uid, profile?.subscriptionTier, subscription, isOwnerAccount]);
 
   const isActiveStaff = Boolean(myRole && myRole.active);
 
@@ -516,6 +567,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [getUserBadges]
   );
 
+  const effectiveTier = useMemo<SubscriptionTier>(() => {
+    if (isOwnerAccount) {
+      return 'pro';
+    }
+    if (subscription) {
+      return resolveEffectiveSubscriptionTier(subscription);
+    }
+    return profile?.subscriptionTier || 'free';
+  }, [isOwnerAccount, subscription, profile?.subscriptionTier]);
+
+  const getUserTier = useCallback(
+    (uid?: string | null, fallbackTier?: SubscriptionTier): SubscriptionTier => {
+      if (!uid) return fallbackTier || 'free';
+      if (uid === profile?.uid) return effectiveTier;
+      const badgeRec = badgesMap[uid];
+      if (
+        badgeRec?.badgeType === 'founder' ||
+        badgeRec?.badgeType === 'owner' ||
+        badgeRec?.badges?.includes('founder') ||
+        badgeRec?.badges?.includes('owner')
+      ) {
+        return 'pro';
+      }
+      return fallbackTier || 'free';
+    },
+    [profile?.uid, effectiveTier, badgesMap]
+  );
+
   return (
     <AuthContext.Provider
       value={{
@@ -531,12 +610,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         myAdminSelfStatus,
         isAdminDndActive,
         isAdminInvisibleActive,
+        subscription,
+        effectiveTier,
+        subscriptionPlans,
+        customisationCatalog,
+        userPrefs,
         loading,
         authReady,
         emailVerified,
         profileError,
         getBadgeVariant,
         getUserBadges,
+        getUserTier,
         getAdminEffectiveStatus,
         setMyAdminStatus,
         refreshUserAndProfile,

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BarChart3,
   Camera,
   Check,
   Edit3,
@@ -11,6 +12,7 @@ import {
   MapPin,
   MessageCircle,
   MessageSquare,
+  Palette,
   Plus,
   Share2,
   ShieldBan,
@@ -22,9 +24,15 @@ import {
 import { resolveAssetUrl } from '../../assets/defaultAssets';
 import { AdminPresenceSelector, PresenceBadge } from '../../components/common/PresenceBadge';
 import { ResilientImage } from '../../components/common/ResilientImage';
+import { TierBadge } from '../../components/common/TierBadge';
 import { BadgeStrip, VerifiedBadge } from '../../components/common/VerifiedBadge';
 import { GiftPickerModal } from '../../components/gifts/GiftPickerModal';
 import { CoverEditorModal } from '../../components/media/CoverEditorModal';
+import {
+  ProfileEffectLayer,
+  resolveBannerBackground,
+  resolveGradientStyle,
+} from '../../components/profile/ProfileEffectLayer';
 import { PostCard } from '../../features/posts/PostCard';
 import { useAuth } from '../../hooks/useAuth';
 import {
@@ -33,6 +41,7 @@ import {
   updateUserPrivacySettings,
   updateUserProfileFields,
 } from '../../services/auth/authService';
+import { recordProfileVisit } from '../../services/firebase/analyticsService';
 import {
   createOrGetDirectConversation,
   respondToCollaborationInvite,
@@ -43,8 +52,14 @@ import {
 } from '../../services/firebase/socialService';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
-import { GiftTransaction, Post, Space, UserProfile, Vibe } from '../../types/nexora';
-import { formatCompactCount, formatRelativeTime, isValidUsername, normalizeUsername } from '../../utils/validation';
+import { GiftTransaction, NavSection, Post, Space, UserProfile, Vibe } from '../../types/nexora';
+import {
+  formatCompactCount,
+  formatRelativeTime,
+  isValidUsername,
+  normalizeUsername,
+  sanitizeProfileCustomisation,
+} from '../../utils/validation';
 
 type ProfileContentTab =
   | 'posts'
@@ -66,6 +81,11 @@ interface ProfilePageProps {
   onOpenProfile: (uid: string) => void;
   onOpenChatThread: (convId: string) => void;
   onOpenVibes: () => void;
+  onNavigate?: (
+    section: NavSection,
+    targetId?: string,
+    profileTab?: ProfileContentTab
+  ) => void;
 }
 
 export function ProfilePage({
@@ -78,6 +98,7 @@ export function ProfilePage({
   onOpenProfile,
   onOpenChatThread,
   onOpenVibes,
+  onNavigate,
 }: ProfilePageProps) {
   const {
     user: firebaseUser,
@@ -86,7 +107,10 @@ export function ProfilePage({
     myRole,
     myAdminManualMode,
     myAdminSelfStatus,
+    effectiveTier,
+    customisationCatalog,
     getUserBadges,
+    getUserTier,
     getAdminEffectiveStatus,
     setMyAdminStatus,
     refreshUserAndProfile,
@@ -178,8 +202,11 @@ export function ProfilePage({
 
   useEffect(() => {
     if (!activeProfile?.uid) return;
+    if (currentUser?.uid && activeProfile.uid !== currentUser.uid) {
+      void recordProfileVisit(activeProfile.uid, currentUser.uid);
+    }
     return subscribeUserGifts(activeProfile.uid, setUserGifts);
-  }, [activeProfile?.uid]);
+  }, [activeProfile?.uid, currentUser?.uid]);
 
   // Resolve real uploaded or authenticated profile picture without premature fallback
   const primaryAvatarUrl = useMemo(() => {
@@ -289,6 +316,38 @@ export function ProfilePage({
   if (!currentUser || !activeProfile) return null;
 
   const activeBadges = getUserBadges(activeProfile.uid, activeProfile.verified);
+  const activeTier = isOwnProfile
+    ? effectiveTier
+    : getUserTier(activeProfile.uid, activeProfile.subscriptionTier);
+  const rawCustomisation = activeProfile.profileCustomisation || null;
+  const resolvedCustomisation = rawCustomisation
+    ? sanitizeProfileCustomisation(rawCustomisation, activeTier)
+    : null;
+  const bannerBg = resolveBannerBackground(resolvedCustomisation, customisationCatalog);
+  const gradientStyle = resolveGradientStyle(resolvedCustomisation, customisationCatalog);
+  const accentColor = resolvedCustomisation?.accentColor || '#8B5CF6';
+  const surfaceBgColor = resolvedCustomisation?.backgroundColor || '#090712';
+  const surfaceOpacity = resolvedCustomisation ? (resolvedCustomisation.cardOpacity ?? 92) / 100 : 1;
+  const layoutVariant = resolvedCustomisation?.layoutVariant || 'classic';
+
+  const avatarFrameClass =
+    resolvedCustomisation?.avatarFrameId === 'frame_sovereign_crest'
+      ? 'bg-gradient-to-tr from-[#F59E0B] via-[#FDE68A] to-[#8B5CF6] shadow-[0_12px_40px_rgba(245,158,11,0.35)]'
+      : resolvedCustomisation?.avatarFrameId === 'frame_prism_bevel'
+      ? 'bg-gradient-to-tr from-[#8B5CF6] via-[#EC4899] to-[#06B6D4] shadow-[0_12px_40px_rgba(236,72,153,0.35)]'
+      : resolvedCustomisation?.avatarFrameId === 'frame_violet_halo'
+      ? 'bg-gradient-to-tr from-[#7C3AED] via-[#A855F7] to-[#C084FC] shadow-[0_12px_42px_rgba(168,85,247,0.5)]'
+      : 'bg-gradient-to-tr from-[#6D28D9] via-[#8B5CF6] to-[#C084FC] shadow-[0_12px_40px_rgba(124,58,237,0.4)]';
+
+  const avatarOrbitClass =
+    resolvedCustomisation?.animatedDecorationId === 'anim_pulse_aura'
+      ? 'after:content-[""] after:absolute after:-inset-2 after:rounded-full after:border after:border-[#A855F7]/65 after:animate-pulse after:pointer-events-none'
+      : resolvedCustomisation?.animatedDecorationId === 'anim_prism_orbit'
+      ? 'after:content-[""] after:absolute after:-inset-2 after:rounded-full after:border-2 after:border-dashed after:border-[#C084FC]/75 after:animate-[spin_8s_linear_infinite] after:pointer-events-none'
+      : resolvedCustomisation?.animatedDecorationId === 'anim_stardust_halo'
+      ? 'after:content-[""] after:absolute after:-inset-2 after:rounded-full after:border-2 after:border-dotted after:border-amber-400/80 after:animate-[spin_10s_linear_infinite] after:pointer-events-none'
+      : '';
+
   const canSwitchOwnPresence = isOwnProfile && Boolean(myRole && myRole.active);
   const publicAdminStatus = getAdminEffectiveStatus(activeProfile.uid);
   const viewedAdminBadgeStatus = canSwitchOwnPresence
@@ -447,15 +506,52 @@ export function ProfilePage({
   return (
     <div className="w-full space-y-8">
       {/* 1. COVER BANNER + 2. LEFT OVERLAPPING AVATAR + 3/4/5. RIGHT PROFILE COLUMN */}
-      <section className="w-full">
+      <section
+        className={`w-full relative rounded-3xl overflow-hidden transition-all ${
+          resolvedCustomisation ? 'p-3 sm:p-5 border' : ''
+        }`}
+        style={
+          resolvedCustomisation
+            ? {
+                backgroundColor: surfaceBgColor,
+                backgroundImage: gradientStyle,
+                borderColor: `${accentColor}40`,
+                opacity: surfaceOpacity,
+              }
+            : undefined
+        }
+      >
+        {resolvedCustomisation && <ProfileEffectLayer effectId={resolvedCustomisation.effectId} />}
+
         {/* 1. Large Horizontal Cover Banner with Rounded Corners */}
-        <div className="relative h-56 sm:h-64 lg:h-76 w-full rounded-3xl overflow-hidden border border-[#8B5CF6]/20 bg-[#0D0B16] shadow-[0_20px_50px_rgba(0,0,0,0.6)]">
-          <ResilientImage
-            src={activeProfile.coverUrl}
-            alt={`${activeProfile.displayName} cover banner`}
-            style={{ objectPosition: `50% ${activeProfile.coverPositionY ?? 50}%` }}
-            className="w-full h-full object-cover"
-          />
+        <div
+          className={`relative w-full rounded-3xl overflow-hidden border bg-[#0D0B16] shadow-[0_20px_50px_rgba(0,0,0,0.6)] ${
+            layoutVariant === 'compact'
+              ? 'h-44 sm:h-52 lg:h-56'
+              : layoutVariant === 'spotlight' || layoutVariant === 'showcase'
+              ? 'h-60 sm:h-72 lg:h-80'
+              : 'h-56 sm:h-64 lg:h-76'
+          }`}
+          style={{
+            borderColor: `${accentColor}38`,
+            backgroundImage: bannerBg.cssBackground,
+          }}
+        >
+          {resolvedCustomisation?.bannerImageUrl ? (
+            <ResilientImage
+              src={resolvedCustomisation.bannerImageUrl}
+              alt={`${activeProfile.displayName} studio banner`}
+              className="w-full h-full object-cover"
+            />
+          ) : !resolvedCustomisation?.bannerPresetId ||
+            resolvedCustomisation.bannerPresetId === 'banner_obsidian_grid' ? (
+            <ResilientImage
+              src={activeProfile.coverUrl}
+              alt={`${activeProfile.displayName} cover banner`}
+              style={{ objectPosition: `50% ${activeProfile.coverPositionY ?? 50}%` }}
+              className="w-full h-full object-cover"
+            />
+          ) : null}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#06060A]/80 via-black/15 to-transparent" />
           {isOwnProfile && (
             <button
@@ -469,30 +565,57 @@ export function ProfilePage({
         </div>
 
         {/* Profile Split Header: Left = Overlapping Circular Avatar | Right = Info + Compact Stats + Buttons */}
-        <div className="grid grid-cols-1 md:grid-cols-[46%_54%] gap-6 md:gap-0 px-4 sm:px-8 lg:px-10 pt-2">
+        <div className="relative z-10 grid grid-cols-1 md:grid-cols-[46%_54%] gap-6 md:gap-0 px-4 sm:px-8 lg:px-10 pt-2">
           {/* 2. LEFT-HAND SIDE: Large Circular Overlapping Profile Picture */}
           <div className="flex justify-start items-start">
             <div className="-mt-16 sm:-mt-20 lg:-mt-28 md:ml-4 lg:ml-10 relative z-20 shrink-0">
-              <div className="w-32 h-32 sm:w-40 sm:h-40 lg:w-48 lg:h-48 rounded-full p-[3px] bg-gradient-to-tr from-[#6D28D9] via-[#8B5CF6] to-[#C084FC] shadow-[0_12px_40px_rgba(124,58,237,0.4)]">
-                <div className="w-full h-full rounded-full overflow-hidden border-4 border-[#06060A] bg-[#120E20] relative">
-                  {primaryAvatarUrl && !avatarLoadError ? (
-                    <img
-                      key={primaryAvatarUrl}
-                      src={primaryAvatarUrl}
-                      alt={activeProfile.displayName}
-                      referrerPolicy="no-referrer"
-                      onError={() => setAvatarLoadError(true)}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div
-                      aria-label={activeProfile.displayName}
-                      className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[#2E1065] via-[#131320] to-[#06060A] text-white/85 font-display text-4xl font-bold select-none"
-                    >
-                      {avatarInitial}
-                    </div>
-                  )}
+              <div className={`relative rounded-full ${avatarOrbitClass}`}>
+                <div className={`w-32 h-32 sm:w-40 sm:h-40 lg:w-48 lg:h-48 rounded-full p-[3px] ${avatarFrameClass}`}>
+                  <div className="w-full h-full rounded-full overflow-hidden border-4 border-[#06060A] bg-[#120E20] relative">
+                    {primaryAvatarUrl && !avatarLoadError ? (
+                      <img
+                        key={primaryAvatarUrl}
+                        src={primaryAvatarUrl}
+                        alt={activeProfile.displayName}
+                        referrerPolicy="no-referrer"
+                        onError={() => setAvatarLoadError(true)}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div
+                        aria-label={activeProfile.displayName}
+                        className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[#2E1065] via-[#131320] to-[#06060A] text-white/85 font-display text-4xl font-bold select-none"
+                      >
+                        {avatarInitial}
+                      </div>
+                    )}
+                  </div>
                 </div>
+
+                {resolvedCustomisation?.staticDecorationId === 'deco_spark_crest' && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute -top-1 right-3 w-8 h-8 rounded-full bg-[#120F1E] border border-[#A855F7]/70 flex items-center justify-center text-[#C084FC] shadow-lg"
+                  >
+                    <Sparkles size={15} />
+                  </span>
+                )}
+                {resolvedCustomisation?.staticDecorationId === 'deco_botanical_arc' && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute -top-1 right-3 w-8 h-8 rounded-full bg-[#120F1E] border border-sky-400/70 flex items-center justify-center text-sky-300 shadow-lg"
+                  >
+                    <Sparkles size={15} />
+                  </span>
+                )}
+                {resolvedCustomisation?.staticDecorationId === 'deco_crown_pin' && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute -top-2 right-3 w-8 h-8 rounded-full bg-[#181209] border border-amber-400/75 flex items-center justify-center text-amber-300 shadow-lg"
+                  >
+                    <Sparkles size={15} />
+                  </span>
+                )}
               </div>
 
               {isOwnProfile && (
@@ -510,7 +633,7 @@ export function ProfilePage({
                     onClick={() => quickAvatarInputRef.current?.click()}
                     title="Upload profile picture"
                     aria-label="Upload profile picture"
-                    className="absolute bottom-2 right-2 w-10 h-10 rounded-full bg-[#0D0B16] hover:bg-[#7C3AED] border border-[#8B5CF6]/50 text-white flex items-center justify-center shadow-lg transition-colors"
+                    className="absolute bottom-2 right-2 w-10 h-10 rounded-full bg-[#0D0B16] hover:bg-[#7C3AED] border border-[#8B5CF6]/50 text-white flex items-center justify-center shadow-lg transition-colors z-10"
                   >
                     <Camera size={16} />
                   </button>
@@ -522,7 +645,7 @@ export function ProfilePage({
           {/* 3, 4, 5. RIGHT-HAND SIDE: Starts ~middle of profile section */}
           <div className="pt-1 md:pt-5 flex flex-col items-start">
             {/* Shared constrained width column so Info, Bio, Compact Stats Panel, and Buttons align cleanly */}
-            <div className="w-full max-w-[440px] space-y-4">
+            <div className="w-full max-w-[460px] space-y-4">
               {/* 3. Profile Information */}
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -530,6 +653,7 @@ export function ProfilePage({
                     {activeProfile.displayName}
                   </h1>
                   <BadgeStrip badges={activeBadges} size={20} max={6} />
+                  <TierBadge tier={activeTier} showFree={false} />
                   {viewedAdminBadgeStatus && (
                     <PresenceBadge
                       status={viewedAdminBadgeStatus}
@@ -540,7 +664,9 @@ export function ProfilePage({
                   )}
                 </div>
 
-                <p className="text-sm font-medium text-[#A855F7]">@{activeProfile.username}</p>
+                <p className="text-sm font-medium" style={{ color: accentColor }}>
+                  @{activeProfile.username}
+                </p>
 
                 {activeProfile.bio && (
                   <p className="text-sm text-[#E2E8F0] leading-relaxed pt-1.5 break-words">
@@ -552,7 +678,7 @@ export function ProfilePage({
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-1 text-xs text-[#94A3B8]">
                     {activeProfile.location && (
                       <span className="inline-flex items-center gap-1.5">
-                        <MapPin size={13} className="text-[#A855F7]" />
+                        <MapPin size={13} style={{ color: accentColor }} />
                         {activeProfile.location}
                       </span>
                     )}
@@ -565,7 +691,8 @@ export function ProfilePage({
                         }
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 text-[#C084FC] hover:underline break-all"
+                        className="inline-flex items-center gap-1.5 hover:underline break-all"
+                        style={{ color: accentColor }}
                       >
                         <Globe size={13} />
                         {activeProfile.website}
@@ -575,8 +702,13 @@ export function ProfilePage({
                 )}
               </div>
 
-              {/* 4. Compact Statistics Panel — restricted strictly to the right-hand info/bio width */}
-              <div className="w-full grid grid-cols-4 divide-x divide-white/10 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 py-2.5 px-1">
+              {/* 4. Compact Statistics Panel */}
+              <div
+                className={`w-full grid grid-cols-4 divide-x divide-white/10 rounded-2xl bg-[#0D0B16]/90 border py-2.5 px-1 ${
+                  layoutVariant === 'showcase' ? 'shadow-[0_12px_30px_rgba(124,58,237,0.2)]' : ''
+                }`}
+                style={{ borderColor: `${accentColor}38` }}
+              >
                 <div className="px-3 text-center">
                   <p className="font-mono-tabular text-base font-bold text-white leading-tight">
                     {formatCompactCount(userPosts.length)}
@@ -603,23 +735,41 @@ export function ProfilePage({
                 </div>
               </div>
 
-              {/* 5. Profile Action Buttons — directly underneath compact statistics panel */}
-              <div className="flex flex-wrap items-center gap-3 pt-0.5">
+              {/* 5. Profile Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2.5 pt-0.5">
                 {isOwnProfile ? (
                   <>
                     <button
                       type="button"
                       onClick={openEditProfileModal}
-                      className="inline-flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] hover:brightness-110 text-xs font-semibold text-white shadow-[0_4px_18px_rgba(124,58,237,0.4)] transition-all whitespace-nowrap"
+                      className="inline-flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] hover:brightness-110 text-xs font-semibold text-white shadow-[0_4px_18px_rgba(124,58,237,0.4)] transition-all whitespace-nowrap min-h-[42px]"
                     >
                       <Edit3 size={14} /> Edit Profile
                     </button>
+                    {onNavigate && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('studio')}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-[#8B5CF6]/35 bg-[#0D0B16]/90 hover:border-[#8B5CF6] text-xs font-semibold text-[#E9D5FF] transition-colors whitespace-nowrap min-h-[42px]"
+                      >
+                        <Palette size={14} className="text-[#C084FC]" /> Customise Studio
+                      </button>
+                    )}
+                    {onNavigate && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('analytics')}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-white/15 bg-[#0D0B16]/90 hover:border-[#8B5CF6]/60 text-xs font-semibold text-white transition-colors whitespace-nowrap min-h-[42px]"
+                      >
+                        <BarChart3 size={14} className="text-[#C084FC]" /> Analytics
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={handleShareProfile}
-                      className="inline-flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl border border-[#8B5CF6]/25 bg-[#0D0B16] hover:border-[#8B5CF6]/60 text-xs font-semibold text-white transition-colors whitespace-nowrap"
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-[#8B5CF6]/25 bg-[#0D0B16]/90 hover:border-[#8B5CF6]/60 text-xs font-semibold text-white transition-colors whitespace-nowrap min-h-[42px]"
                     >
-                      <Share2 size={14} /> Share Profile
+                      <Share2 size={14} /> Share
                     </button>
                   </>
                 ) : (

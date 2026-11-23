@@ -25,8 +25,10 @@ import {
 } from 'lucide-react';
 import { NexoraLogo } from '../../components/branding/NexoraLogo';
 import { ResilientImage } from '../../components/common/ResilientImage';
+import { TierBadge } from '../../components/common/TierBadge';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { useAuth } from '../../hooks/useAuth';
+import { recordVibeAnalyticsView } from '../../services/firebase/analyticsService';
 import {
   createVibe,
   addVibeComment,
@@ -41,7 +43,7 @@ import {
 } from '../../services/firebase/socialService';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { uploadBlobAsset, uploadMediaAsset } from '../../services/storage/mediaUploadService';
-import { PostComment, UserProfile, Vibe } from '../../types/nexora';
+import { NavSection, PostComment, UserProfile, Vibe } from '../../types/nexora';
 import { formatCompactCount, formatRelativeTime } from '../../utils/validation';
 
 const FILTER_CSS: Record<string, string> = {
@@ -63,10 +65,11 @@ interface VibesPageProps {
   users: UserProfile[];
   savedIds: string[];
   onOpenProfile: (uid: string) => void;
+  onNavigate?: (section: NavSection) => void;
 }
 
-export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPageProps) {
-  const { profile, getUserBadges } = useAuth();
+export function VibesPage({ vibes, users, savedIds, onOpenProfile, onNavigate }: VibesPageProps) {
+  const { profile, getUserBadges, getUserTier } = useAuth();
   const [activeIndex, setActiveIndex] = useState(0);
   const [likedIds, setLikedIds] = useState<string[]>([]);
   const [followingAuthor, setFollowingAuthor] = useState(false);
@@ -122,6 +125,7 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
     setShowHeaderMenu(false);
     setShowBottomMenu(false);
     void incrementVibeView(currentVibe.id);
+    void recordVibeAnalyticsView(currentVibe.authorId, currentVibe.id, profile.uid);
     let unsubFollow: (() => void) | undefined;
     if (currentVibe.authorId !== profile.uid) {
       unsubFollow = subscribeIsFollowing(profile.uid, currentVibe.authorId, setFollowingAuthor);
@@ -306,20 +310,32 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
   };
 
   const handleLike = async (vibe: Vibe) => {
-    const liked = await toggleVibeLike(vibe, profile);
-    setLikedIds((prev) =>
-      liked ? Array.from(new Set([...prev, vibe.id])) : prev.filter((id) => id !== vibe.id)
-    );
+    try {
+      const liked = await toggleVibeLike(vibe, profile);
+      setLikedIds((prev) =>
+        liked ? Array.from(new Set([...prev, vibe.id])) : prev.filter((id) => id !== vibe.id)
+      );
+    } catch (err) {
+      showToast(extractReadableErrorMessage(err, 'Unable to update like right now.'));
+    }
   };
 
   const handleRepost = async (vibe: Vibe) => {
-    await repostVibe(vibe, profile);
-    showToast('Reposted to your followers');
+    try {
+      await repostVibe(vibe, profile);
+      showToast('Reposted to your followers');
+    } catch (err) {
+      showToast(extractReadableErrorMessage(err, 'Unable to repost right now.'));
+    }
   };
 
   const handleSave = async (vibe: Vibe) => {
-    const nowSaved = await toggleSaveVibe(vibe, profile.uid);
-    showToast(nowSaved ? 'Saved to your Profile' : 'Removed from Saved');
+    try {
+      const nowSaved = await toggleSaveVibe(vibe, profile.uid);
+      showToast(nowSaved ? 'Saved to your Profile' : 'Removed from Saved');
+    } catch (err) {
+      showToast(extractReadableErrorMessage(err, 'Unable to save Vibe right now.'));
+    }
   };
 
   const handleShare = async (vibe: Vibe) => {
@@ -602,6 +618,13 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
                                 size={14}
                                 max={3}
                                 interactive={false}
+                              />
+                              <TierBadge
+                                tier={getUserTier(
+                                  currentVibe.authorId,
+                                  users.find((u) => u.uid === currentVibe.authorId)?.subscriptionTier
+                                )}
+                                showFree={false}
                               />
                             </p>
                             <p className="text-[11px] text-white/75 truncate">
@@ -895,8 +918,12 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
             onSubmit={async (e) => {
               e.preventDefault();
               if (!commentText.trim()) return;
-              await addVibeComment(currentVibe, profile, commentText);
-              setCommentText('');
+              try {
+                await addVibeComment(currentVibe, profile, commentText);
+                setCommentText('');
+              } catch (err) {
+                showToast(extractReadableErrorMessage(err, 'Your comment could not be posted.'));
+              }
             }}
             className="pt-3 border-t border-white/10 flex gap-2"
           >
@@ -924,15 +951,19 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
             onSubmit={async (e) => {
               e.preventDefault();
               if (!reportReason.trim()) return;
-              await submitModerationReport({
-                reporterId: profile.uid,
-                targetType: 'vibe',
-                targetId: currentVibe.id,
-                reason: reportReason,
-              });
-              setReportReason('');
-              setShowReportModal(false);
-              showToast('Report submitted');
+              try {
+                await submitModerationReport({
+                  reporterId: profile.uid,
+                  targetType: 'vibe',
+                  targetId: currentVibe.id,
+                  reason: reportReason,
+                });
+                setReportReason('');
+                setShowReportModal(false);
+                showToast('Report submitted');
+              } catch (err) {
+                showToast(extractReadableErrorMessage(err, 'Unable to submit report right now.'));
+              }
             }}
             className="w-full max-w-md bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl p-6 space-y-4"
           >
@@ -995,6 +1026,18 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile }: VibesPagePr
                 <p className="text-xs text-[#94A3B8]">Total Likes</p>
               </div>
             </div>
+            {onNavigate && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAnalytics(false);
+                  onNavigate('analytics');
+                }}
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white"
+              >
+                Open Full Creator Analytics Studio
+              </button>
+            )}
           </div>
         </div>
       )}

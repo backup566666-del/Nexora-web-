@@ -1,12 +1,46 @@
 import { Timestamp } from 'firebase/firestore';
 
-export type NavSection = 'home' | 'vibes' | 'create' | 'chat' | 'spaces' | 'profile' | 'settings';
+export type NavSection =
+  | 'home'
+  | 'vibes'
+  | 'create'
+  | 'chat'
+  | 'spaces'
+  | 'profile'
+  | 'settings'
+  | 'search'
+  | 'notifications'
+  | 'analytics'
+  | 'subscriptions'
+  | 'studio';
 
 export type AudienceType = 'public' | 'followers' | 'space';
 export type PostType = 'text' | 'photo' | 'video' | 'poll' | 'repost';
 export type StoryType = 'image' | 'video' | 'text';
 export type StoryPrivacy = 'public' | 'followers' | 'close';
 export type MessageType = 'text' | 'image' | 'video' | 'voice' | 'document';
+export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+
+export type SubscriptionTier = 'free' | 'plus' | 'pro';
+export type BillingCycle = 'monthly' | 'yearly';
+
+export type ProfileLayoutVariant = 'classic' | 'spotlight' | 'compact' | 'showcase';
+
+export interface ProfileCustomisation {
+  themeId: string;
+  backgroundColor: string;
+  accentColor: string;
+  gradientId: string;
+  bannerPresetId: string;
+  bannerImageUrl?: string;
+  avatarFrameId: string;
+  staticDecorationId: string;
+  animatedDecorationId: string;
+  effectId: string;
+  layoutVariant: ProfileLayoutVariant;
+  cardOpacity?: number;
+  updatedAt?: Timestamp;
+}
 
 export type NotificationCategory =
   | 'account'
@@ -14,14 +48,21 @@ export type NotificationCategory =
   | 'badges'
   | 'gifts'
   | 'admin'
-  | 'security';
+  | 'security'
+  | 'messages'
+  | 'spaces'
+  | 'subscriptions';
 
 export type NotificationType =
   | 'like'
   | 'comment'
+  | 'reply'
+  | 'mention'
   | 'follow'
   | 'repost'
   | 'space_invite'
+  | 'space_announcement'
+  | 'event_reminder'
   | 'message'
   | 'announcement'
   | 'security_alert'
@@ -36,7 +77,10 @@ export type NotificationType =
   | 'collab_response'
   | 'post_tag'
   | 'gift_received'
-  | 'support_ticket';
+  | 'support_ticket'
+  | 'subscription_notice'
+  | 'subscription_renewal'
+  | 'system_update';
 
 // --- Governance & 5-Tier RBAC ---
 export type InternalRole =
@@ -212,7 +256,7 @@ export interface PlatformAnnouncement {
 export interface ModerationReport {
   id: string;
   reporterId: string;
-  targetType: 'post' | 'user' | 'space' | 'vibe' | 'gift' | 'collab';
+  targetType: 'post' | 'user' | 'space' | 'vibe' | 'gift' | 'collab' | 'message';
   targetId: string;
   reason: string;
   status?: 'open' | 'resolved' | 'dismissed';
@@ -229,7 +273,9 @@ export type AuditLogCategory =
   | 'identity'
   | 'platform'
   | 'moderation'
-  | 'notification';
+  | 'notification'
+  | 'billing'
+  | 'customisation';
 
 export interface AuditLogEntry {
   id: string;
@@ -289,6 +335,8 @@ export interface UserProfile {
   likesCount: number;
   isOnline: boolean;
   lastActiveAt?: Timestamp;
+  subscriptionTier?: SubscriptionTier;
+  profileCustomisation?: ProfileCustomisation;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -310,6 +358,14 @@ export interface UserPrivate {
   blockedUserIds: string[];
   privacySettings: PrivacySettings;
   updatedAt: Timestamp;
+}
+
+export interface UserPreferences {
+  uid: string;
+  pinnedConvIds: string[];
+  mutedConvIds: string[];
+  recentSearches: string[];
+  updatedAt?: Timestamp;
 }
 
 export interface CollaboratorProfileSummary {
@@ -498,9 +554,21 @@ export interface ChatMessage {
   reactions: Record<string, string[]>;
   edited: boolean;
   deleted: boolean;
+  deliveryStatus?: MessageDeliveryStatus;
+  localId?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
+
+export type NotificationTargetType =
+  | 'post'
+  | 'vibe'
+  | 'profile'
+  | 'chat'
+  | 'space'
+  | 'subscription'
+  | 'settings'
+  | 'system';
 
 export interface NotificationItem {
   id: string;
@@ -510,11 +578,111 @@ export interface NotificationItem {
   actorAvatar: string;
   type: NotificationType;
   category?: NotificationCategory;
+  title?: string;
+  targetType?: NotificationTargetType;
   targetId: string;
+  dedupeKey?: string;
   preview: string;
   read: boolean;
   createdAt: Timestamp;
 }
+
+// --- Creator Analytics ---
+export interface CreatorAnalyticsDaily {
+  id: string; // `${uid}_${YYYY-MM-DD}`
+  uid: string;
+  dateKey: string; // YYYY-MM-DD
+  profileVisits: number;
+  postImpressions: number;
+  vibeViews: number;
+  followersDelta: number;
+  updatedAt?: Timestamp;
+}
+
+// --- Subscriptions, Billing & Discord Nitro-Inspired Customisation Studio ---
+export interface SubscriptionPlan {
+  id: SubscriptionTier;
+  name: string;
+  tagline: string;
+  badgeLabel: string;
+  badgeColor: string;
+  monthlyPriceCents: number | null;
+  yearlyPriceCents: number | null;
+  currency: string;
+  stripeMonthlyPriceId?: string;
+  stripeYearlyPriceId?: string;
+  enabled: boolean;
+  pricingConfigured: boolean;
+  benefits: string[];
+  sortOrder: number;
+  updatedBy?: string;
+  updatedAt?: Timestamp;
+}
+
+export interface UserSubscription {
+  uid: string;
+  tier: SubscriptionTier;
+  billingCycle: BillingCycle | 'none';
+  status: 'active' | 'canceled' | 'past_due' | 'expired' | 'free';
+  cancelAtPeriodEnd: boolean;
+  provider: 'stripe' | 'admin' | 'free';
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  lastSessionId?: string;
+  receiptRef?: string;
+  verifiedByServer: boolean;
+  startedAt?: Timestamp;
+  currentPeriodEnd?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface PaymentTransaction {
+  id: string;
+  uid: string;
+  userDisplayName?: string;
+  userUsername?: string;
+  planId: SubscriptionTier;
+  billingCycle: BillingCycle;
+  amountCents: number;
+  currency: string;
+  status: 'paid' | 'pending' | 'failed' | 'refunded' | 'canceled';
+  provider: 'stripe' | 'admin';
+  stripeSessionId?: string;
+  stripePaymentIntentId?: string;
+  receiptNumber: string;
+  errorMessage?: string;
+  createdAt: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type CustomisationCategory =
+  | 'theme'
+  | 'background'
+  | 'accent'
+  | 'gradient'
+  | 'banner'
+  | 'avatar_frame'
+  | 'static_decoration'
+  | 'animated_decoration'
+  | 'effect'
+  | 'layout';
+
+export interface CustomisationItem {
+  id: string;
+  category: CustomisationCategory;
+  name: string;
+  description: string;
+  requiredTier: SubscriptionTier;
+  enabled: boolean;
+  previewValue: string;
+  secondaryValue?: string;
+  animated?: boolean;
+  imageUrl?: string;
+  sortOrder: number;
+  updatedBy?: string;
+  updatedAt?: Timestamp;
+}
+
 
 // --- Free Virtual Gifting ---
 export interface VirtualGiftCatalogItem {

@@ -1,9 +1,13 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express, { Request, Response } from 'express';
+import { getApps, initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 import fs from 'fs';
 import http from 'http';
 import nodemailer from 'nodemailer';
 import path from 'path';
+import Stripe from 'stripe';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -454,9 +458,330 @@ export function getAndroidReleaseStatus(rootDir: string = __dirname): AndroidRel
   };
 }
 
+// --- Nexora Stripe Billing & Firebase ID Token Helpers ---
+function loadFirebaseProjectId(): string {
+  const candidates = [
+    path.resolve(__dirname, 'firebase-applet-config.json'),
+    path.resolve(process.cwd(), 'firebase-applet-config.json'),
+  ];
+  for (const file of candidates) {
+    try {
+      if (fs.existsSync(file)) {
+        const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { projectId?: string };
+        if (parsed.projectId) return parsed.projectId;
+      }
+    } catch {
+      // Fallback below
+    }
+  }
+  return process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0024648348';
+}
+
+function getFirebaseAdminAuth() {
+  if (getApps().length === 0) {
+    initializeApp({ projectId: loadFirebaseProjectId() });
+  }
+  return getAuth();
+}
+
+async function verifyFirebaseBearerToken(req: Request): Promise<{ uid: string; email?: string }> {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  if (!token) {
+    throw new Error('Authentication required. Please sign in and try again.');
+  }
+  const decoded = await getFirebaseAdminAuth().verifyIdToken(token);
+  return { uid: decoded.uid, email: decoded.email };
+}
+
+export function getStripeBillingConfig() {
+  const secretKey = (process.env.STRIPE_SECRET_KEY || '').trim();
+  const webhookSecret = (process.env.STRIPE_WEBHOOK_SECRET || '').trim();
+  return {
+    configured: Boolean(secretKey && (secretKey.startsWith('sk_') || secretKey.startsWith('rk_'))),
+    webhookConfigured: Boolean(webhookSecret),
+    secretKey,
+    webhookSecret,
+  };
+}
+
+function createBillingClient(): Stripe | null {
+  const cfg = getStripeBillingConfig();
+  if (!cfg.configured) return null;
+  return new Stripe(cfg.secretKey);
+}
+
+function signVerificationAttestation(payload: string): string {
+  const secret =
+    (process.env.BILLING_SIGNING_SECRET || '').trim() ||
+    (process.env.STRIPE_WEBHOOK_SECRET || '').trim() ||
+    'nexora-session-attestation';
+  return crypto.createHmac('sha256', secret).update(payload).digest('hex').slice(0, 32);
+}
+
 export async function createNexoraServer(httpServer?: http.Server) {
   const app = express();
+
+  // Stripe Webhook MUST receive raw body before express.json()
+  app.post(
+    '/api/billing/webhook',
+    express.raw({ type: 'application/json' }),
+    (req: Request, res: Response) => {
+      const stripe = createBillingClient();
+      const cfg = getStripeBillingConfig();
+      if (!stripe || !cfg.webhookConfigured) {
+        res.status(503).json({ error: 'Billing webhook is not configured on this server.' });
+        return;
+      }
+      const sig = req.headers['stripe-signature'];
+      if (typeof sig !== 'string' || !sig) {
+        res.status(400).json({ error: 'Missing webhook signature header.' });
+        return;
+      }
+      try {
+        const event = stripe.webhooks.constructEvent(req.body as Buffer, sig, cfg.webhookSecret);
+        res.status(200).json({ received: true, eventType: event.type });
+      } catch {
+        res.status(400).json({ error: 'Invalid billing webhook signature.' });
+      }
+    }
+  );
+
   app.use(express.json({ limit: '512kb' }));
+
+  app.get('/api/billing/status', (_req: Request, res: Response) => {
+    const cfg = getStripeBillingConfig();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      configured: cfg.configured,
+      provider: cfg.configured ? 'stripe' : 'none',
+      webhookConfigured: cfg.webhookConfigured,
+      message: cfg.configured
+        ? 'Stripe online billing is active and ready.'
+        : 'Online payment processing is awaiting Stripe server configuration (STRIPE_SECRET_KEY).',
+    });
+  });
+
+  app.post('/api/billing/create-checkout-session', async (req: Request, res: Response) => {
+    let authedUser: { uid: string; email?: string };
+    try {
+      authedUser = await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Please sign in with your verified account before continuing.' });
+      return;
+    }
+
+    const stripe = createBillingClient();
+    if (!stripe) {
+      res.status(503).json({
+        error: 'Online checkout is temporarily unavailable because payment processing is not configured.',
+      });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      tier?: string;
+      billingCycle?: string;
+      stripePriceId?: string;
+      unitAmountCents?: number;
+      currency?: string;
+      planName?: string;
+      originUrl?: string;
+    };
+
+    const tier = body.tier === 'plus' || body.tier === 'pro' ? body.tier : null;
+    const billingCycle = body.billingCycle === 'yearly' ? 'yearly' : 'monthly';
+    if (!tier) {
+      res.status(400).json({ error: 'Please select Nexora Plus or Nexora Pro to check out.' });
+      return;
+    }
+
+    const stripePriceId = typeof body.stripePriceId === 'string' ? body.stripePriceId.trim() : '';
+    const unitAmount =
+      typeof body.unitAmountCents === 'number' && Number.isFinite(body.unitAmountCents)
+        ? Math.round(body.unitAmountCents)
+        : 0;
+    const currency =
+      typeof body.currency === 'string' && /^[a-z]{3}$/i.test(body.currency)
+        ? body.currency.toLowerCase()
+        : 'usd';
+
+    if (!stripePriceId && unitAmount <= 0) {
+      res.status(400).json({
+        error: 'Pricing for this plan has not been configured by the platform administrator yet.',
+      });
+      return;
+    }
+
+    const rawOrigin =
+      (typeof body.originUrl === 'string' && /^https?:\/\//i.test(body.originUrl)
+        ? body.originUrl
+        : req.headers.origin) || `http://localhost:${PORT}`;
+    const safeOrigin = String(rawOrigin).replace(/\/$/, '');
+
+    try {
+      const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = stripePriceId
+        ? { price: stripePriceId, quantity: 1 }
+        : {
+            price_data: {
+              currency,
+              unit_amount: unitAmount,
+              recurring: { interval: billingCycle === 'yearly' ? 'year' : 'month' },
+              product_data: {
+                name: body.planName || (tier === 'pro' ? 'Nexora Pro' : 'Nexora Plus'),
+                description: `Nexora ${tier.toUpperCase()} (${billingCycle}) subscription`,
+              },
+            },
+            quantity: 1,
+          };
+
+      const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        line_items: [lineItem],
+        customer_email: authedUser.email || undefined,
+        success_url: `${safeOrigin}/?billing_session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${safeOrigin}/?billing_canceled=1`,
+        client_reference_id: authedUser.uid,
+        metadata: {
+          uid: authedUser.uid,
+          tier,
+          billingCycle,
+        },
+      });
+
+      res.json({ url: session.url, sessionId: session.id });
+    } catch {
+      res.status(502).json({
+        error: 'We could not start your payment checkout session. Please try again shortly.',
+      });
+    }
+  });
+
+  app.get('/api/billing/verify-session', async (req: Request, res: Response) => {
+    let authedUser: { uid: string; email?: string };
+    try {
+      authedUser = await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Please sign in to verify your payment.' });
+      return;
+    }
+
+    const stripe = createBillingClient();
+    if (!stripe) {
+      res.status(503).json({ error: 'Billing verification service is unavailable.' });
+      return;
+    }
+
+    const sessionId = typeof req.query.session_id === 'string' ? req.query.session_id.trim() : '';
+    if (!sessionId.startsWith('cs_')) {
+      res.status(400).json({ error: 'Invalid checkout session identifier.' });
+      return;
+    }
+
+    try {
+      const session = await stripe.checkout.sessions.retrieve(sessionId, {
+        expand: ['subscription'],
+      });
+      if (session.metadata?.uid !== authedUser.uid && session.client_reference_id !== authedUser.uid) {
+        res.status(403).json({ error: 'This payment session does not belong to your account.' });
+        return;
+      }
+
+      const isPaid = session.payment_status === 'paid' || session.status === 'complete';
+      if (!isPaid) {
+        res.status(402).json({ error: 'Payment has not been completed yet.' });
+        return;
+      }
+
+      const tier = session.metadata?.tier === 'pro' ? 'pro' : 'plus';
+      const billingCycle = session.metadata?.billingCycle === 'yearly' ? 'yearly' : 'monthly';
+      const subObj =
+        typeof session.subscription === 'object' && session.subscription !== null
+          ? (session.subscription as Stripe.Subscription & { current_period_end?: number })
+          : null;
+      const periodEndSec = subObj?.current_period_end || Math.floor(Date.now() / 1000) + (billingCycle === 'yearly' ? 365 : 30) * 86400;
+      const receiptNumber = `NXR-${session.id.slice(-8).toUpperCase()}`;
+      const attestation = signVerificationAttestation(`${authedUser.uid}:${session.id}:${tier}`);
+
+      res.json({
+        verified: true,
+        sessionId: session.id,
+        tier,
+        billingCycle,
+        stripeCustomerId: typeof session.customer === 'string' ? session.customer : '',
+        stripeSubscriptionId: subObj?.id || (typeof session.subscription === 'string' ? session.subscription : ''),
+        amountCents: session.amount_total ?? 0,
+        currency: session.currency || 'usd',
+        currentPeriodEndMs: periodEndSec * 1000,
+        receiptNumber,
+        attestation,
+      });
+    } catch {
+      res.status(502).json({ error: 'Unable to verify payment status right now. Please try again.' });
+    }
+  });
+
+  app.post('/api/billing/cancel', async (req: Request, res: Response) => {
+    try {
+      await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Please sign in to manage your subscription.' });
+      return;
+    }
+    const stripe = createBillingClient();
+    const { stripeSubscriptionId } = (req.body || {}) as { stripeSubscriptionId?: string };
+    if (!stripe) {
+      res.status(503).json({ error: 'Online billing cancellation is unavailable without Stripe configuration.' });
+      return;
+    }
+    if (!stripeSubscriptionId) {
+      res.status(400).json({ error: 'Missing active subscription reference.' });
+      return;
+    }
+    try {
+      const updated = await stripe.subscriptions.update(stripeSubscriptionId, {
+        cancel_at_period_end: true,
+      });
+      res.json({ canceledAtPeriodEnd: Boolean(updated.cancel_at_period_end) });
+    } catch {
+      res.status(502).json({ error: 'Could not cancel subscription with payment provider.' });
+    }
+  });
+
+  app.post('/api/billing/refund', async (req: Request, res: Response) => {
+    try {
+      await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Authorisation required to issue refunds.' });
+      return;
+    }
+    const stripe = createBillingClient();
+    if (!stripe) {
+      res.status(503).json({ error: 'Refunds require active Stripe configuration.' });
+      return;
+    }
+    const { paymentIntentId, stripeSessionId } = (req.body || {}) as {
+      paymentIntentId?: string;
+      stripeSessionId?: string;
+    };
+    try {
+      let targetPaymentIntent = paymentIntentId || '';
+      if (!targetPaymentIntent && stripeSessionId?.startsWith('cs_')) {
+        const sess = await stripe.checkout.sessions.retrieve(stripeSessionId);
+        if (typeof sess.payment_intent === 'string') {
+          targetPaymentIntent = sess.payment_intent;
+        }
+      }
+      if (!targetPaymentIntent) {
+        res.status(400).json({ error: 'No refundable payment reference found for this transaction.' });
+        return;
+      }
+      const refund = await stripe.refunds.create({ payment_intent: targetPaymentIntent });
+      res.json({ refunded: refund.status === 'succeeded' || refund.status === 'pending', refundId: refund.id });
+    } catch {
+      res.status(502).json({ error: 'Unable to process refund right now.' });
+    }
+  });
 
   app.get('/api/health', (_req: Request, res: Response) => {
     const emailConfig = getEmailProviderConfig();
