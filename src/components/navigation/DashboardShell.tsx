@@ -19,6 +19,7 @@ import {
   Settings,
   Shield,
   ShieldAlert,
+  Sparkles,
   Tag,
   User as UserIcon,
   UserPlus,
@@ -98,6 +99,7 @@ const SECTION_LABELS: Record<NavSection, string> = {
   analytics: 'Creator Analytics',
   subscriptions: 'Nexora Membership',
   studio: 'Profile Studio',
+  ai: 'Nexora AI Studio',
 };
 
 const NOTIF_FILTERS: { id: 'all' | 'unread' | NotificationCategory; label: string }[] = [
@@ -866,6 +868,16 @@ export function DashboardShell({
                     type="button"
                     onClick={() => {
                       setShowAccountMenu(false);
+                      onNavigate('ai');
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E9D5FF] hover:bg-[#7C3AED]/15 text-left font-medium"
+                  >
+                    <Sparkles size={14} className="text-[#C084FC]" /> Nexora AI Studio
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAccountMenu(false);
                       onNavigate('subscriptions');
                     }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E9D5FF] hover:bg-[#7C3AED]/15 text-left font-medium"
@@ -1147,7 +1159,8 @@ export function DashboardShell({
         activeSection === 'notifications' ||
         activeSection === 'analytics' ||
         activeSection === 'subscriptions' ||
-        activeSection === 'studio') && (
+        activeSection === 'studio' ||
+        activeSection === 'ai') && (
         <main className="relative z-10 flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28">
           {children}
         </main>
@@ -1232,6 +1245,13 @@ export function DashboardShell({
                     className="min-h-[36px] px-2.5 rounded-xl bg-[#7C3AED]/15 border border-[#8B5CF6]/30 hover:bg-[#7C3AED]/25 text-[11px] font-semibold text-[#E9D5FF] inline-flex items-center justify-center gap-1.5"
                   >
                     <CreditCard size={13} className="text-[#C084FC]" /> Plans
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('ai')}
+                    className="col-span-2 min-h-[38px] px-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9]/25 to-[#9333EA]/25 border border-[#8B5CF6]/40 hover:border-[#8B5CF6] text-[11px] font-semibold text-white inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Sparkles size={13} className="text-[#C084FC]" /> Nexora AI Studio
                   </button>
                 </div>
               </div>

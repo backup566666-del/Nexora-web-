@@ -29,7 +29,14 @@ service cloud.firestore {
     }
 
     function isVerified() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        (
+          'phone_number' in request.auth.token &&
+          request.auth.token.phone_number is string &&
+          request.auth.token.phone_number.size() >= 7
+        )
+      );
     }
 
     function isOwner(uid) {

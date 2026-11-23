@@ -14,6 +14,7 @@ import {
   History,
   KeyRound,
   LifeBuoy,
+  Link2,
   Lock,
   LogOut,
   Megaphone,
@@ -23,8 +24,10 @@ import {
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Unlink,
   Upload,
 } from 'lucide-react';
+import { ProviderLogo } from '../../components/auth/ProviderLogo';
 import { useBadgeModal } from '../../components/badges/BadgeContext';
 import { AdminPresenceSelector } from '../../components/common/PresenceBadge';
 import { PWAInstallButton } from '../../components/common/PWAInstallButton';
@@ -45,9 +48,23 @@ import { SystemDiagnosticsPanel } from '../../components/settings/admin/SystemDi
 import { VerificationCentrePanel } from '../../components/settings/admin/VerificationCentrePanel';
 import { useAuth } from '../../hooks/useAuth';
 import {
+  AUTH_PROVIDER_LIST,
+  AuthProviderMethod,
+  clearPhoneRecaptcha,
+  confirmPhoneLinkOtp,
+  linkEmailPasswordToCurrentUser,
+  linkOAuthProviderToCurrentUser,
   logoutUser,
+  mapAuthErrorMessage,
+  maskPhoneNumber,
+  normalizeE164Phone,
+  OAuthProviderId,
+  PhoneOtpSession,
   sendPasswordReset,
+  sendPhoneLinkOtp,
+  unlinkProviderFromCurrentUser,
   updateUserPrivacySettings,
+  validateE164Phone,
 } from '../../services/auth/authService';
 import {
   submitIdentityVerification,
@@ -191,6 +208,24 @@ export function SettingsPage({
   const [supportMessage, setSupportMessage] = useState('');
   const [submittingSupport, setSubmittingSupport] = useState(false);
   const [supportFeedback, setSupportFeedback] = useState('');
+
+  // Connected Authentication Methods state
+  const [authBusyMethod, setAuthBusyMethod] = useState<AuthProviderMethod | null>(null);
+  const [authFeedback, setAuthFeedback] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [showPhoneLinkForm, setShowPhoneLinkForm] = useState(false);
+  const [linkPhoneDial, setLinkPhoneDial] = useState('+1');
+  const [linkPhoneLocal, setLinkPhoneLocal] = useState('');
+  const [linkPhoneOtpSession, setLinkPhoneOtpSession] = useState<PhoneOtpSession | null>(null);
+  const [linkPhoneCode, setLinkPhoneCode] = useState('');
+  const [showEmailLinkForm, setShowEmailLinkForm] = useState(false);
+  const [linkEmailValue, setLinkEmailValue] = useState('');
+  const [linkPasswordValue, setLinkPasswordValue] = useState('');
+
+  useEffect(() => {
+    return () => {
+      clearPhoneRecaptcha();
+    };
+  }, []);
 
   useEffect(() => {
     if (privateInfo?.privacySettings) {
@@ -626,15 +661,25 @@ export function SettingsPage({
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
               <div className="p-3.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/15">
                 <p className="text-[#64748B]">Email Address (Private)</p>
-                <p className="text-white font-medium mt-1 truncate">{user.email}</p>
+                <p className="text-white font-medium mt-1 truncate">{user.email || 'Not attached'}</p>
               </div>
               <div className="p-3.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/15">
-                <p className="text-[#64748B]">Email Verification</p>
+                <p className="text-[#64748B]">Phone Number (Private)</p>
+                <p className="text-white font-medium mt-1 truncate">
+                  {user.phoneNumber ? maskPhoneNumber(user.phoneNumber) : 'Not connected'}
+                </p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/15">
+                <p className="text-[#64748B]">Verification Status</p>
                 <p className="text-emerald-400 font-medium mt-1">
-                  {user.emailVerified ? 'Verified' : 'Pending verification'}
+                  {user.emailVerified
+                    ? 'Email Verified'
+                    : user.phoneNumber
+                    ? 'Phone SMS Verified'
+                    : 'Pending verification'}
                 </p>
               </div>
               <div className="p-3.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/15">
@@ -650,21 +695,23 @@ export function SettingsPage({
             </div>
 
             <div className="flex flex-wrap gap-3 pt-1">
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!user.email) return;
-                  try {
-                    await sendPasswordReset(user.email);
-                    setPrivacyNotice('Password reset email dispatched.');
-                  } catch (err) {
-                    setPrivacyNotice(extractReadableErrorMessage(err, 'Unable to send password reset email right now.'));
-                  }
-                }}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-xs font-medium text-white"
-              >
-                <KeyRound size={14} /> Send Password Reset Email
-              </button>
+              {user.email && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!user.email) return;
+                    try {
+                      await sendPasswordReset(user.email);
+                      setPrivacyNotice('Password reset email dispatched.');
+                    } catch (err) {
+                      setPrivacyNotice(extractReadableErrorMessage(err, 'Unable to send password reset email right now.'));
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-xs font-medium text-white"
+                >
+                  <KeyRound size={14} /> Send Password Reset Email
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void logoutUser(profile.uid)}
@@ -673,6 +720,305 @@ export function SettingsPage({
                 <LogOut size={14} /> Sign Out
               </button>
             </div>
+          </section>
+
+          {/* Connected Sign-In Methods & Multi-Provider Account Security */}
+          <section className="p-5 sm:p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-4">
+            <div className="space-y-1">
+              <h2 className="font-display text-base font-semibold text-white flex items-center gap-2">
+                <Link2 size={17} className="text-[#C084FC]" /> Connected Sign-In Methods
+              </h2>
+              <p className="text-xs text-[#94A3B8]">
+                Link Google, GitHub, Apple, Microsoft, Facebook, Phone SMS, or Email &amp; Password to sign into your same Nexora account across devices.
+              </p>
+            </div>
+
+            {authFeedback && (
+              <div
+                className={`p-3 rounded-xl text-xs leading-relaxed border ${
+                  authFeedback.type === 'error'
+                    ? 'bg-rose-500/10 border-rose-500/25 text-rose-300'
+                    : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
+                }`}
+              >
+                {authFeedback.text}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {AUTH_PROVIDER_LIST.map((provider) => {
+                const linkedEntry = user.providerData.find((p) => p?.providerId === provider.id);
+                const isConnected = Boolean(linkedEntry);
+                const canDisconnect = isConnected && user.providerData.length > 1;
+                const isBusy = authBusyMethod === provider.id;
+
+                return (
+                  <div
+                    key={provider.id}
+                    className="p-3.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/15 flex items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-lg bg-white/[0.06] border border-white/10 flex items-center justify-center shrink-0">
+                        <ProviderLogo providerId={provider.id} size={18} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-white truncate">{provider.label}</p>
+                        <p className={`text-[11px] truncate ${isConnected ? 'text-emerald-400' : 'text-[#64748B]'}`}>
+                          {isConnected
+                            ? linkedEntry?.email ||
+                              (linkedEntry?.phoneNumber ? maskPhoneNumber(linkedEntry.phoneNumber) : 'Connected')
+                            : 'Not connected'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {isConnected ? (
+                      <button
+                        type="button"
+                        disabled={!canDisconnect || authBusyMethod !== null}
+                        title={
+                          canDisconnect
+                            ? `Disconnect ${provider.label}`
+                            : 'Keep at least one sign-in method connected'
+                        }
+                        onClick={async () => {
+                          setAuthFeedback(null);
+                          setAuthBusyMethod(provider.id);
+                          try {
+                            await unlinkProviderFromCurrentUser(provider.id);
+                            await refreshUserAndProfile(false);
+                            setAuthFeedback({
+                              type: 'success',
+                              text: `${provider.label} was disconnected from your account.`,
+                            });
+                          } catch (err) {
+                            setAuthFeedback({ type: 'error', text: mapAuthErrorMessage(err) });
+                          } finally {
+                            setAuthBusyMethod(null);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/15 hover:bg-white/10 disabled:opacity-40 text-[11px] font-medium text-[#CBD5E1] shrink-0"
+                      >
+                        <Unlink size={12} />
+                        {isBusy ? 'Removing...' : canDisconnect ? 'Disconnect' : 'Primary'}
+                      </button>
+                    ) : provider.category === 'oauth' ? (
+                      <button
+                        type="button"
+                        disabled={authBusyMethod !== null}
+                        onClick={async () => {
+                          setAuthFeedback(null);
+                          setAuthBusyMethod(provider.id);
+                          try {
+                            await linkOAuthProviderToCurrentUser(provider.id as OAuthProviderId);
+                            await refreshUserAndProfile(false);
+                            setAuthFeedback({
+                              type: 'success',
+                              text: `${provider.label} is now connected to your Nexora account.`,
+                            });
+                          } catch (err) {
+                            setAuthFeedback({ type: 'error', text: mapAuthErrorMessage(err) });
+                          } finally {
+                            setAuthBusyMethod(null);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#7C3AED]/20 hover:bg-[#7C3AED]/35 border border-[#8B5CF6]/35 text-[11px] font-semibold text-[#E9D5FF] shrink-0 disabled:opacity-50"
+                      >
+                        {isBusy ? 'Connecting...' : 'Connect'}
+                      </button>
+                    ) : provider.id === 'phone' ? (
+                      <button
+                        type="button"
+                        disabled={authBusyMethod !== null}
+                        onClick={() => {
+                          setAuthFeedback(null);
+                          setShowEmailLinkForm(false);
+                          setShowPhoneLinkForm((v) => !v);
+                          setLinkPhoneOtpSession(null);
+                          setLinkPhoneCode('');
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#7C3AED]/20 hover:bg-[#7C3AED]/35 border border-[#8B5CF6]/35 text-[11px] font-semibold text-[#E9D5FF] shrink-0 disabled:opacity-50"
+                      >
+                        {showPhoneLinkForm ? 'Close' : 'Connect Phone'}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={authBusyMethod !== null}
+                        onClick={() => {
+                          setAuthFeedback(null);
+                          setShowPhoneLinkForm(false);
+                          setShowEmailLinkForm((v) => !v);
+                          setLinkEmailValue(user.email || '');
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#7C3AED]/20 hover:bg-[#7C3AED]/35 border border-[#8B5CF6]/35 text-[11px] font-semibold text-[#E9D5FF] shrink-0 disabled:opacity-50"
+                      >
+                        {showEmailLinkForm ? 'Close' : 'Add Password'}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {showPhoneLinkForm && (
+              <div className="p-4 rounded-xl bg-[#08070F] border border-[#8B5CF6]/30 space-y-3">
+                <p className="text-xs font-semibold text-white">Link Phone Number via SMS Verification</p>
+                {!linkPhoneOtpSession ? (
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <select
+                      aria-label="Country dial code"
+                      value={linkPhoneDial}
+                      onChange={(e) => setLinkPhoneDial(e.target.value)}
+                      className="sm:w-[120px] px-3 py-2 rounded-lg bg-[#0D0B16] border border-white/15 text-xs text-white"
+                    >
+                      <option value="+1">US / CA (+1)</option>
+                      <option value="+44">UK (+44)</option>
+                      <option value="+61">AU (+61)</option>
+                      <option value="+234">NG (+234)</option>
+                      <option value="+27">ZA (+27)</option>
+                      <option value="+91">IN (+91)</option>
+                      <option value="+49">DE (+49)</option>
+                      <option value="+33">FR (+33)</option>
+                      <option value="+971">AE (+971)</option>
+                    </select>
+                    <input
+                      type="tel"
+                      value={linkPhoneLocal}
+                      onChange={(e) => setLinkPhoneLocal(e.target.value)}
+                      placeholder="555 234 5678"
+                      className="flex-1 px-3 py-2 rounded-lg bg-[#0D0B16] border border-white/15 text-xs text-white"
+                    />
+                    <button
+                      type="button"
+                      disabled={authBusyMethod !== null}
+                      onClick={async () => {
+                        setAuthFeedback(null);
+                        const e164 = normalizeE164Phone(linkPhoneDial, linkPhoneLocal);
+                        if (!validateE164Phone(e164)) {
+                          setAuthFeedback({
+                            type: 'error',
+                            text: 'Please enter a valid phone number including your country code.',
+                          });
+                          return;
+                        }
+                        setAuthBusyMethod('phone');
+                        try {
+                          const sess = await sendPhoneLinkOtp({
+                            phoneNumber: e164,
+                            containerId: 'nexora-settings-phone-recaptcha',
+                          });
+                          setLinkPhoneOtpSession(sess);
+                          setAuthFeedback({
+                            type: 'success',
+                            text: `6-digit SMS code sent to ${maskPhoneNumber(e164)}.`,
+                          });
+                        } catch (err) {
+                          setAuthFeedback({ type: 'error', text: mapAuthErrorMessage(err) });
+                        } finally {
+                          setAuthBusyMethod(null);
+                        }
+                      }}
+                      className="px-4 py-2 rounded-lg bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-xs font-semibold shrink-0"
+                    >
+                      {authBusyMethod === 'phone' ? 'Sending...' : 'Send SMS Code'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={linkPhoneCode}
+                      onChange={(e) => setLinkPhoneCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="6-digit SMS code"
+                      className="flex-1 px-3 py-2 rounded-lg bg-[#0D0B16] border border-white/15 text-xs text-white tracking-widest"
+                    />
+                    <button
+                      type="button"
+                      disabled={authBusyMethod !== null || linkPhoneCode.length !== 6}
+                      onClick={async () => {
+                        setAuthFeedback(null);
+                        setAuthBusyMethod('phone');
+                        try {
+                          await confirmPhoneLinkOtp({
+                            session: linkPhoneOtpSession,
+                            code: linkPhoneCode,
+                          });
+                          await refreshUserAndProfile(false);
+                          setShowPhoneLinkForm(false);
+                          setLinkPhoneOtpSession(null);
+                          setLinkPhoneCode('');
+                          setLinkPhoneLocal('');
+                          setAuthFeedback({
+                            type: 'success',
+                            text: 'Phone number linked to your Nexora account.',
+                          });
+                        } catch (err) {
+                          setAuthFeedback({ type: 'error', text: mapAuthErrorMessage(err) });
+                        } finally {
+                          setAuthBusyMethod(null);
+                        }
+                      }}
+                      className="px-4 py-2 rounded-lg bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-xs font-semibold shrink-0"
+                    >
+                      {authBusyMethod === 'phone' ? 'Verifying...' : 'Confirm & Link'}
+                    </button>
+                  </div>
+                )}
+                <div id="nexora-settings-phone-recaptcha" />
+              </div>
+            )}
+
+            {showEmailLinkForm && (
+              <div className="p-4 rounded-xl bg-[#08070F] border border-[#8B5CF6]/30 space-y-3">
+                <p className="text-xs font-semibold text-white">Add Email &amp; Password Sign-In</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="email"
+                    value={linkEmailValue}
+                    onChange={(e) => setLinkEmailValue(e.target.value)}
+                    placeholder="you@domain.com"
+                    className="px-3 py-2 rounded-lg bg-[#0D0B16] border border-white/15 text-xs text-white"
+                  />
+                  <input
+                    type="password"
+                    value={linkPasswordValue}
+                    onChange={(e) => setLinkPasswordValue(e.target.value)}
+                    placeholder="Password (min 6 chars)"
+                    className="px-3 py-2 rounded-lg bg-[#0D0B16] border border-white/15 text-xs text-white"
+                  />
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={authBusyMethod !== null}
+                    onClick={async () => {
+                      setAuthFeedback(null);
+                      setAuthBusyMethod('password');
+                      try {
+                        await linkEmailPasswordToCurrentUser(linkEmailValue, linkPasswordValue);
+                        await refreshUserAndProfile(false);
+                        setShowEmailLinkForm(false);
+                        setLinkPasswordValue('');
+                        setAuthFeedback({
+                          type: 'success',
+                          text: 'Email & password sign-in linked to your account.',
+                        });
+                      } catch (err) {
+                        setAuthFeedback({ type: 'error', text: mapAuthErrorMessage(err) });
+                      } finally {
+                        setAuthBusyMethod(null);
+                      }
+                    }}
+                    className="px-4 py-2 rounded-lg bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-xs font-semibold"
+                  >
+                    {authBusyMethod === 'password' ? 'Linking...' : 'Link Email & Password'}
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Staff Presence Control (Only shown to Owner & Authorized Active Admins) */}

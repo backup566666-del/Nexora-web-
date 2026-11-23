@@ -1,3 +1,4 @@
+import { GoogleGenAI } from '@google/genai';
 import 'dotenv/config';
 import crypto from 'crypto';
 import express, { Request, Response } from 'express';
@@ -459,7 +460,11 @@ export function getAndroidReleaseStatus(rootDir: string = __dirname): AndroidRel
 }
 
 // --- Nexora Stripe Billing & Firebase ID Token Helpers ---
-function loadFirebaseProjectId(): string {
+function loadFirebaseAuthMeta(): {
+  projectId: string;
+  authDomain: string;
+  hasGoogleOAuthClient: boolean;
+} {
   const candidates = [
     path.resolve(__dirname, 'firebase-applet-config.json'),
     path.resolve(process.cwd(), 'firebase-applet-config.json'),
@@ -467,14 +472,32 @@ function loadFirebaseProjectId(): string {
   for (const file of candidates) {
     try {
       if (fs.existsSync(file)) {
-        const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { projectId?: string };
-        if (parsed.projectId) return parsed.projectId;
+        const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+          projectId?: string;
+          authDomain?: string;
+          oAuthClientId?: string;
+        };
+        const projectId = parsed.projectId || process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0024648348';
+        return {
+          projectId,
+          authDomain: parsed.authDomain || `${projectId}.firebaseapp.com`,
+          hasGoogleOAuthClient: Boolean(parsed.oAuthClientId && parsed.oAuthClientId.trim()),
+        };
       }
     } catch {
       // Fallback below
     }
   }
-  return process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0024648348';
+  const fallbackProject = process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0024648348';
+  return {
+    projectId: fallbackProject,
+    authDomain: `${fallbackProject}.firebaseapp.com`,
+    hasGoogleOAuthClient: false,
+  };
+}
+
+function loadFirebaseProjectId(): string {
+  return loadFirebaseAuthMeta().projectId;
 }
 
 function getFirebaseAdminAuth() {
@@ -519,6 +542,102 @@ function signVerificationAttestation(payload: string): string {
   return crypto.createHmac('sha256', secret).update(payload).digest('hex').slice(0, 32);
 }
 
+export const ALLOWED_GEMINI_CHAT_MODELS = [
+  'gemini-4-carbon',
+  'gemini-4-neon',
+  'gemini-4-hydrogen',
+  'gemini-3.1-flash-lite',
+] as const;
+
+export type GeminiChatModelId = (typeof ALLOWED_GEMINI_CHAT_MODELS)[number];
+
+export const ALLOWED_VIDEO_ASPECT_RATIOS = ['16:9', '9:16'] as const;
+export type VideoAspectRatio = (typeof ALLOWED_VIDEO_ASPECT_RATIOS)[number];
+
+export const ALLOWED_ANIMATION_IMAGE_MIMES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+] as const;
+
+export function getGeminiServerConfig() {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  return {
+    configured: Boolean(apiKey),
+    chatModels: [...ALLOWED_GEMINI_CHAT_MODELS],
+    videoModel: 'gemini-omni-1.2-flash',
+    videoAspectRatios: [...ALLOWED_VIDEO_ASPECT_RATIOS],
+  };
+}
+
+export function createServerGeminiClient(): GoogleGenAI | null {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) return null;
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
+
+export function mapGeminiUpstreamError(err: unknown): { status: number; message: string } {
+  const raw =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'object' && err !== null && 'message' in err
+      ? String((err as { message?: unknown }).message ?? '')
+      : String(err || '');
+  const numericStatus =
+    typeof err === 'object' && err !== null && 'status' in err && typeof (err as { status?: unknown }).status === 'number'
+      ? (err as { status: number }).status
+      : undefined;
+  const lower = raw.toLowerCase();
+
+  if (
+    numericStatus === 403 ||
+    lower.includes('permission_denied') ||
+    lower.includes('api_key_invalid') ||
+    lower.includes('api key not valid') ||
+    (numericStatus === 400 && lower.includes('api key'))
+  ) {
+    return {
+      status: 403,
+      message:
+        'Gemini could not authorize this request. Please verify your GEMINI_API_KEY in AI Studio Settings > Secrets.',
+    };
+  }
+
+  if (numericStatus === 429 || lower.includes('resource_exhausted') || lower.includes('quota')) {
+    return {
+      status: 429,
+      message:
+        'Quota limit or billing requirement reached for this Gemini model. Paid models (gemini-4-carbon, gemini-4-neon, and gemini-omni-1.2-flash) require a billing-enabled key in AI Studio Settings > Secrets.',
+    };
+  }
+
+  if (numericStatus === 404 || lower.includes('not_found')) {
+    return {
+      status: 404,
+      message: 'The selected Gemini model could not be found or is temporarily unavailable.',
+    };
+  }
+
+  if (lower.includes('safety') || lower.includes('blocked')) {
+    return {
+      status: 422,
+      message: 'The prompt or uploaded photo could not be processed due to content safety policies.',
+    };
+  }
+
+  return {
+    status: 502,
+    message: 'Gemini is temporarily unable to process this request. Please try again shortly.',
+  };
+}
+
 export async function createNexoraServer(httpServer?: http.Server) {
   const app = express();
 
@@ -547,7 +666,297 @@ export async function createNexoraServer(httpServer?: http.Server) {
     }
   );
 
+  // Interactions API image-to-video route (scoped 16mb JSON body limit for uploaded photos)
+  app.post(
+    '/api/ai/animate-image',
+    express.json({ limit: '16mb' }),
+    async (req: Request, res: Response) => {
+      try {
+        await verifyFirebaseBearerToken(req);
+      } catch {
+        res.status(401).json({ error: 'Please sign in with your verified account before generating AI video.' });
+        return;
+      }
+
+      const ai = createServerGeminiClient();
+      if (!ai) {
+        res.status(503).json({
+          error: 'GEMINI_API_KEY is not configured on the server. Add your key in AI Studio Settings > Secrets.',
+        });
+        return;
+      }
+
+      const body = (req.body || {}) as {
+        imageBase64?: unknown;
+        mimeType?: unknown;
+        prompt?: unknown;
+        aspectRatio?: unknown;
+      };
+
+      const aspectRatio =
+        typeof body.aspectRatio === 'string' &&
+        (ALLOWED_VIDEO_ASPECT_RATIOS as readonly string[]).includes(body.aspectRatio)
+          ? (body.aspectRatio as VideoAspectRatio)
+          : null;
+      if (!aspectRatio) {
+        res.status(400).json({ error: "Aspect ratio must be '16:9' (landscape) or '9:16' (portrait)." });
+        return;
+      }
+
+      const mimeType =
+        typeof body.mimeType === 'string' &&
+        (ALLOWED_ANIMATION_IMAGE_MIMES as readonly string[]).includes(body.mimeType.trim().toLowerCase())
+          ? body.mimeType.trim().toLowerCase()
+          : null;
+      if (!mimeType) {
+        res.status(400).json({ error: 'Please upload a valid PNG, JPEG, or WebP photo.' });
+        return;
+      }
+
+      const rawBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64.replace(/\s+/g, '') : '';
+      if (!rawBase64 || !/^[A-Za-z0-9+/=]+$/.test(rawBase64)) {
+        res.status(400).json({ error: 'Uploaded photo payload is missing or invalid.' });
+        return;
+      }
+      const byteSize = Math.floor((rawBase64.length * 3) / 4);
+      if (byteSize > 11 * 1024 * 1024) {
+        res.status(413).json({ error: 'Uploaded photo is too large. Please choose an image under 10 MB.' });
+        return;
+      }
+
+      const motionPrompt =
+        typeof body.prompt === 'string' && body.prompt.trim().length > 0
+          ? body.prompt.trim().slice(0, 2000)
+          : 'Subtle cinematic camera motion bringing the scene and natural lighting to life.';
+
+      try {
+        const interaction = await ai.interactions.create(
+          {
+            model: 'gemini-omni-1.2-flash',
+            input: [
+              {
+                type: 'image',
+                mime_type: mimeType,
+                data: rawBase64,
+              },
+              {
+                type: 'text',
+                text: motionPrompt,
+              },
+            ],
+            background: false,
+            store: false,
+            stream: false,
+            response_format: {
+              type: 'video',
+              aspect_ratio: aspectRatio,
+            },
+          },
+          { timeout: 300000 }
+        );
+
+        let videoPart = interaction.output_video;
+        if (!videoPart && Array.isArray(interaction.steps)) {
+          for (const step of interaction.steps) {
+            if (step.type === 'model_output' && Array.isArray(step.content)) {
+              const found = step.content.find((c) => c.type === 'video');
+              if (found) {
+                videoPart = found as unknown as typeof interaction.output_video;
+              }
+            }
+          }
+        }
+
+        if (!videoPart || (!videoPart.data && !videoPart.uri)) {
+          res.status(502).json({
+            error: 'Video generation finished without returning a video output. Please try a different photo or prompt.',
+          });
+          return;
+        }
+
+        res.json({
+          interactionId: interaction.id,
+          model: 'gemini-omni-1.2-flash',
+          aspectRatio,
+          mimeType: videoPart.mime_type || 'video/mp4',
+          videoBase64: videoPart.data || null,
+          videoUri: videoPart.uri || null,
+        });
+      } catch (err) {
+        const mapped = mapGeminiUpstreamError(err);
+        res.status(mapped.status).json({ error: mapped.message });
+      }
+    }
+  );
+
   app.use(express.json({ limit: '512kb' }));
+
+  app.get('/api/ai/status', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(getGeminiServerConfig());
+  });
+
+  app.post('/api/ai/chat', async (req: Request, res: Response) => {
+    try {
+      await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Please sign in with your verified account before chatting with Gemini.' });
+      return;
+    }
+
+    const ai = createServerGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server. Add your key in AI Studio Settings > Secrets.',
+      });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      model?: unknown;
+      systemInstruction?: unknown;
+      history?: unknown;
+      message?: unknown;
+    };
+
+    const model =
+      typeof body.model === 'string' &&
+      (ALLOWED_GEMINI_CHAT_MODELS as readonly string[]).includes(body.model)
+        ? (body.model as GeminiChatModelId)
+        : null;
+    if (!model) {
+      res.status(400).json({ error: 'Please choose a supported Gemini model.' });
+      return;
+    }
+
+    const message = typeof body.message === 'string' ? body.message.trim() : '';
+    if (!message || message.length > 16_000) {
+      res.status(400).json({ error: 'Please enter a message up to 16,000 characters.' });
+      return;
+    }
+
+    const systemInstruction =
+      typeof body.systemInstruction === 'string' && body.systemInstruction.trim().length > 0
+        ? body.systemInstruction.trim().slice(0, 4000)
+        : 'You are Nexora AI, a helpful assistant inside the Nexora social workspace.';
+
+    const formattedHistory: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
+    if (Array.isArray(body.history)) {
+      for (const item of body.history.slice(-40)) {
+        if (
+          typeof item === 'object' &&
+          item !== null &&
+          ((item as { role?: unknown }).role === 'user' || (item as { role?: unknown }).role === 'model') &&
+          typeof (item as { text?: unknown }).text === 'string'
+        ) {
+          const text = ((item as { text: string }).text || '').trim().slice(0, 16_000);
+          if (text) {
+            formattedHistory.push({
+              role: (item as { role: 'user' | 'model' }).role,
+              parts: [{ text }],
+            });
+          }
+        }
+      }
+    }
+
+    try {
+      const chat = ai.chats.create({
+        model,
+        config: {
+          systemInstruction,
+        },
+        history: formattedHistory,
+      });
+
+      const response = await chat.sendMessage({
+        message,
+      });
+
+      res.json({
+        model,
+        reply: response.text || '',
+      });
+    } catch (err) {
+      const mapped = mapGeminiUpstreamError(err);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
+  app.get('/api/auth/providers', (_req: Request, res: Response) => {
+    const meta = loadFirebaseAuthMeta();
+    const callbackUrl = `https://${meta.authDomain}/__/auth/handler`;
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      projectId: meta.projectId,
+      authDomain: meta.authDomain,
+      callbackUrl,
+      providers: [
+        {
+          id: 'google.com',
+          label: 'Google',
+          type: 'oauth',
+          provisionedInConfig: meta.hasGoogleOAuthClient,
+          requiresExternalCredentials: false,
+          setupNote: 'Provisioned with project Google OAuth client.',
+        },
+        {
+          id: 'github.com',
+          label: 'GitHub',
+          type: 'oauth',
+          provisionedInConfig: false,
+          requiresExternalCredentials: true,
+          setupNote:
+            'Requires GitHub OAuth App Client ID & Client Secret enabled in Firebase Console -> Authentication -> Sign-in method -> GitHub.',
+        },
+        {
+          id: 'apple.com',
+          label: 'Apple',
+          type: 'oauth',
+          provisionedInConfig: false,
+          requiresExternalCredentials: true,
+          setupNote:
+            'Requires Apple Services ID, Team ID, Key ID, and private key (.p8) enabled in Firebase Console -> Authentication -> Sign-in method -> Apple.',
+        },
+        {
+          id: 'microsoft.com',
+          label: 'Microsoft',
+          type: 'oauth',
+          provisionedInConfig: false,
+          requiresExternalCredentials: true,
+          setupNote:
+            'Requires Microsoft Entra ID Application (client) ID & Client Secret enabled in Firebase Console -> Authentication -> Sign-in method -> Microsoft.',
+        },
+        {
+          id: 'facebook.com',
+          label: 'Facebook',
+          type: 'oauth',
+          provisionedInConfig: false,
+          requiresExternalCredentials: true,
+          setupNote:
+            'Requires Meta/Facebook App ID & App Secret enabled in Firebase Console -> Authentication -> Sign-in method -> Facebook.',
+        },
+        {
+          id: 'phone',
+          label: 'Phone Number',
+          type: 'sms_otp',
+          provisionedInConfig: false,
+          requiresExternalCredentials: false,
+          setupNote:
+            'Uses Firebase Phone Authentication (SMS OTP + reCAPTCHA). Enable Phone provider and authorized domains in Firebase Console.',
+        },
+        {
+          id: 'password',
+          label: 'Email & Password',
+          type: 'email_password',
+          provisionedInConfig: false,
+          requiresExternalCredentials: false,
+          setupNote:
+            'Uses Firebase Email/Password authentication with mandatory email verification. Enable Email/Password in Firebase Console.',
+        },
+      ],
+    });
+  });
 
   app.get('/api/billing/status', (_req: Request, res: Response) => {
     const cfg = getStripeBillingConfig();

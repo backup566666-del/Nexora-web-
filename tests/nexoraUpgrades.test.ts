@@ -34,10 +34,15 @@ import { resolveInlineCompressionLimits } from '../src/services/storage/mediaUpl
 import { mapAuthErrorMessage } from '../src/services/auth/authService';
 import firebaseConfig from '../firebase-applet-config.json';
 import {
+  ALLOWED_ANIMATION_IMAGE_MIMES,
+  ALLOWED_GEMINI_CHAT_MODELS,
+  ALLOWED_VIDEO_ASPECT_RATIOS,
   getEmailProviderConfig,
+  getGeminiServerConfig,
   buildNexoraEmailHtml,
   dispatchNexoraEmail,
   getAndroidReleaseStatus,
+  mapGeminiUpstreamError,
 } from '../server';
 
 test('20 canonical badges exist with complete metadata and legacy alias normalization', () => {
@@ -858,7 +863,235 @@ test('workflow keystore decoder handles standard Base64/Base64URL while rejectin
   assert.ok(bogusRes.stderr.includes('lacks a valid JKS or PKCS12 keystore header'));
 });
 
+test('multi-provider auth supports all 7 providers with Phone E.164 normalization, friendly errors, and exact Create Account order', async () => {
+  const fs = await import('node:fs');
+  const authSvc = await import('../src/services/auth/authService');
 
+  assert.deepEqual(
+    authSvc.AUTH_PROVIDER_LIST.map((p) => p.id),
+    ['google.com', 'github.com', 'apple.com', 'microsoft.com', 'facebook.com', 'phone', 'password']
+  );
 
+  // Phone E.164 helpers
+  assert.equal(authSvc.normalizeE164Phone('+44', '07700 900123'), '+447700900123');
+  assert.equal(authSvc.normalizeE164Phone('+1', '+1 (415) 555-2671'), '+14155552671');
+  assert.equal(authSvc.validateE164Phone('+447700900123'), true);
+  assert.equal(authSvc.validateE164Phone('07700'), false);
+  assert.equal(authSvc.maskPhoneNumber('+14155552671'), '+14 •••• 2671');
 
+  // Account verification rules (verified email OR phone-only SMS user; unverified email blocked)
+  assert.equal(
+    authSvc.isUserAccountVerified({
+      emailVerified: true,
+      email: 'a@example.com',
+      phoneNumber: null,
+      providerData: [{ providerId: 'password' }],
+    } as unknown as import('firebase/auth').User),
+    true
+  );
+  assert.equal(
+    authSvc.isUserAccountVerified({
+      emailVerified: false,
+      email: null,
+      phoneNumber: '+14155552671',
+      providerData: [{ providerId: 'phone' }],
+    } as unknown as import('firebase/auth').User),
+    true
+  );
+  assert.equal(
+    authSvc.isUserAccountVerified({
+      emailVerified: false,
+      email: 'unverified@example.com',
+      phoneNumber: null,
+      providerData: [{ providerId: 'password' }],
+    } as unknown as import('firebase/auth').User),
+    false
+  );
+
+  // Friendly error messages for OTP, OAuth, and credential linking (zero auth/ raw codes)
+  for (const [code, fragment] of [
+    ['auth/operation-not-allowed', 'not enabled yet'],
+    ['auth/invalid-verification-code', 'verification code is incorrect'],
+    ['auth/code-expired', 'expired'],
+    ['auth/invalid-phone-number', 'valid phone number'],
+    ['auth/credential-already-in-use', 'already connected to another'],
+    ['auth/provider-already-linked', 'already connected to your'],
+  ] as const) {
+    const msg = authSvc.mapAuthErrorMessage({ code });
+    assert.ok(msg.toLowerCase().includes(fragment), `Expected "${fragment}" in "${msg}" for ${code}`);
+    assert.equal(msg.includes('auth/'), false);
+  }
+
+  // AuthView exact provider list & Create Account ordering
+  const authViewSrc = fs.readFileSync('src/pages/auth/AuthView.tsx', 'utf8');
+  for (const label of [
+    'Create your Nexora account',
+    'Continue with Google',
+    'Continue with GitHub',
+    'Continue with Apple',
+    'Continue with Microsoft',
+    'Continue with Facebook',
+    'Continue with Phone Number',
+    'Full Name',
+    'Username',
+    'Email Address',
+    'Confirm Password',
+    'Terms of Service and Privacy Policy',
+    'Create Account',
+    'Already have an account?',
+  ]) {
+    assert.ok(authViewSrc.includes(label), `AuthView must include "${label}"`);
+  }
+
+  // Verify exact Create Account button & field ordering in AuthView
+  const regSlice = authViewSrc.slice(authViewSrc.indexOf('/* CREATE ACCOUNT PAGE'));
+  const orderedTokens = [
+    "renderProviderButtons('register')",
+    '>\n                  OR\n                </span>',
+    'Full Name',
+    'Username',
+    'Email Address',
+    '>Password<',
+    'Confirm Password',
+    'Terms of Service and Privacy Policy',
+    'Create Account',
+    'Already have an account?',
+  ];
+  let lastIdx = -1;
+  for (const tok of orderedTokens) {
+    const idx = regSlice.indexOf(tok);
+    assert.ok(idx > lastIdx, `Expected "${tok}" in Create Account layout after previous section`);
+    lastIdx = idx;
+  }
+
+  // Firestore rules support both verified email and verified phone SMS claims
+  const rules = fs.readFileSync('firestore.rules', 'utf8');
+  assert.ok(rules.includes("'phone_number' in request.auth.token"));
+
+  // SettingsPage exposes Connected Sign-In Methods management
+  const settingsSrc = fs.readFileSync('src/pages/settings/SettingsPage.tsx', 'utf8');
+  assert.ok(settingsSrc.includes('Connected Sign-In Methods'));
+  assert.ok(settingsSrc.includes('linkOAuthProviderToCurrentUser'));
+  assert.ok(settingsSrc.includes('sendPhoneLinkOtp'));
+  assert.ok(settingsSrc.includes('unlinkProviderFromCurrentUser'));
+
+  // Server exposes /api/auth/providers without exposing apiKey or private secrets
+  const serverSrc = fs.readFileSync('server.ts', 'utf8');
+  assert.ok(serverSrc.includes("app.get('/api/auth/providers'"));
+  assert.ok(serverSrc.includes("'google.com'"));
+  assert.ok(serverSrc.includes("'github.com'"));
+  assert.ok(serverSrc.includes("'apple.com'"));
+  assert.ok(serverSrc.includes("'microsoft.com'"));
+  assert.ok(serverSrc.includes("'facebook.com'"));
+  assert.ok(serverSrc.includes("'phone'"));
+  assert.ok(serverSrc.includes("'password'"));
+});
+
+test('Gemini AI server config supports all 4 required chat models, omni video model, 16:9 & 9:16 aspect ratios, and clean error mapping', () => {
+  assert.deepEqual([...ALLOWED_GEMINI_CHAT_MODELS], [
+    'gemini-4-carbon',
+    'gemini-4-neon',
+    'gemini-4-hydrogen',
+    'gemini-3.1-flash-lite',
+  ]);
+  assert.deepEqual([...ALLOWED_VIDEO_ASPECT_RATIOS], ['16:9', '9:16']);
+  assert.deepEqual([...ALLOWED_ANIMATION_IMAGE_MIMES], ['image/jpeg', 'image/png', 'image/webp']);
+
+  const prevKey = process.env.GEMINI_API_KEY;
+  delete process.env.GEMINI_API_KEY;
+  try {
+    const unconfigured = getGeminiServerConfig();
+    assert.equal(unconfigured.configured, false);
+    assert.equal(unconfigured.videoModel, 'gemini-omni-1.2-flash');
+    assert.deepEqual(unconfigured.chatModels, [
+      'gemini-4-carbon',
+      'gemini-4-neon',
+      'gemini-4-hydrogen',
+      'gemini-3.1-flash-lite',
+    ]);
+    assert.deepEqual(unconfigured.videoAspectRatios, ['16:9', '9:16']);
+  } finally {
+    if (prevKey !== undefined) process.env.GEMINI_API_KEY = prevKey;
+  }
+
+  const err403 = mapGeminiUpstreamError({ status: 403, message: 'PERMISSION_DENIED AIzaSyFakeKey999' });
+  assert.equal(err403.status, 403);
+  assert.equal(err403.message.includes('AIzaSyFakeKey999'), false);
+
+  const err429 = mapGeminiUpstreamError({ status: 429, message: 'RESOURCE_EXHAUSTED quota exceeded' });
+  assert.equal(err429.status, 429);
+  assert.ok(err429.message.includes('gemini-4-carbon'));
+
+  const err404 = mapGeminiUpstreamError({ status: 404, message: 'NOT_FOUND' });
+  assert.equal(err404.status, 404);
+
+  const errSafety = mapGeminiUpstreamError(new Error('Response blocked by safety policy'));
+  assert.equal(errSafety.status, 422);
+});
+
+test('Gemini features respect server-only SDK boundary, avoid deprecated models/params, and wire chatbot & animation UI', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { GEMINI_CHAT_MODELS, CHATBOT_ROLE_PRESETS } = await import('../src/services/ai/geminiClientService');
+
+  assert.equal(GEMINI_CHAT_MODELS.length, 4);
+  const byId = new Map(GEMINI_CHAT_MODELS.map((m) => [m.id, m]));
+  assert.equal(byId.get('gemini-4-carbon')?.purpose, 'Deep reasoning tasks');
+  assert.equal(byId.get('gemini-4-neon')?.purpose, 'Complex interactive tasks');
+  assert.equal(byId.get('gemini-4-hydrogen')?.purpose, 'General tasks');
+  assert.equal(byId.get('gemini-3.1-flash-lite')?.purpose, 'Fast tasks');
+  assert.ok(CHATBOT_ROLE_PRESETS.length >= 3);
+
+  // Recursively ensure zero @google/genai imports or GEMINI_API_KEY usages in src/
+  const walkFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...walkFiles(full));
+      else if (/\.(ts|tsx)$/.test(entry.name)) out.push(full);
+    }
+    return out;
+  };
+  for (const file of walkFiles('src')) {
+    const contents = fs.readFileSync(file, 'utf8');
+    assert.equal(contents.includes('@google/genai'), false, `Client file ${file} must never import @google/genai`);
+    assert.equal(contents.includes('GEMINI_API_KEY'), false, `Client file ${file} must never read GEMINI_API_KEY`);
+  }
+
+  // Server uses modern SDK patterns cleanly
+  const serverSrc = fs.readFileSync('server.ts', 'utf8');
+  assert.ok(serverSrc.includes("import { GoogleGenAI } from '@google/genai'"));
+  assert.ok(serverSrc.includes("model: 'gemini-omni-1.2-flash'"));
+  assert.ok(serverSrc.includes('ai.interactions.create('));
+  assert.ok(serverSrc.includes('ai.chats.create('));
+  assert.ok(serverSrc.includes('await chat.sendMessage('));
+  assert.ok(serverSrc.includes("app.post('/api/ai/chat'"));
+  assert.ok(serverSrc.includes("'/api/ai/animate-image'"));
+  assert.ok(serverSrc.includes("app.get('/api/ai/status'"));
+  assert.equal(serverSrc.includes('thinkingBudget'), false);
+  assert.equal(serverSrc.includes('gemini-1.5'), false);
+  assert.equal(serverSrc.includes('gemini-2.0'), false);
+
+  // Metadata and .env.example alignment
+  const metadata = JSON.parse(fs.readFileSync('metadata.json', 'utf8'));
+  assert.ok(Array.isArray(metadata.majorCapabilities));
+  assert.ok(metadata.majorCapabilities.includes('MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API'));
+  const envExample = fs.readFileSync('.env.example', 'utf8');
+  assert.ok(envExample.includes('GEMINI_API_KEY='));
+
+  // UI & Navigation wiring checks
+  const chatPageSrc = fs.readFileSync('src/pages/chat/ChatPage.tsx', 'utf8');
+  assert.ok(chatPageSrc.includes('GeminiChatbotPanel'));
+  assert.ok(chatPageSrc.includes('Gemini AI'));
+
+  const createPageSrc = fs.readFileSync('src/pages/create/CreatePage.tsx', 'utf8');
+  assert.ok(createPageSrc.includes('AnimateImagePanel'));
+  assert.ok(createPageSrc.includes('Animate Photo (AI)'));
+
+  const shellSrc = fs.readFileSync('src/components/navigation/DashboardShell.tsx', 'utf8');
+  assert.ok(shellSrc.includes('Nexora AI Studio'));
+
+  const appSrc = fs.readFileSync('src/App.tsx', 'utf8');
+  assert.ok(appSrc.includes('NexoraAIPage'));
+});
 

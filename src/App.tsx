@@ -24,6 +24,7 @@ import { SpacesPage } from './pages/spaces/SpacesPage';
 import { ProfileCustomisationStudio } from './pages/studio/ProfileCustomisationStudio';
 import { SubscriptionsPage } from './pages/subscriptions/SubscriptionsPage';
 import { VibesPage } from './pages/vibes/VibesPage';
+import { NexoraAIPage } from './pages/ai/NexoraAIPage';
 import { logoutUser } from './services/auth/authService';
 import {
   getUserByUsername,
@@ -64,7 +65,7 @@ function NexoraAppContent() {
     getUserTier,
     loading,
     authReady,
-    emailVerified,
+    accountVerified,
     profileError,
     retryProfileLoad,
   } = useAuth();
@@ -95,7 +96,7 @@ function NexoraAppContent() {
   const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
-    if (!authReady || !user || !emailVerified || !profile?.uid) {
+    if (!authReady || !user || !accountVerified || !profile?.uid) {
       seenGiftNotifIdsRef.current.clear();
       giftObserverPrimedRef.current = false;
       setFollowingIds(new Set());
@@ -145,7 +146,7 @@ function NexoraAppContent() {
       u7();
       u8();
     };
-  }, [authReady, user?.uid, emailVerified, profile?.uid, isAdminDndActive]);
+  }, [authReady, user?.uid, accountVerified, profile?.uid, isAdminDndActive]);
 
   useEffect(() => {
     if (!incomingGiftToast) return;
@@ -232,8 +233,8 @@ function NexoraAppContent() {
     );
   }
 
-  // Signed in, awaiting email verification
-  if (!emailVerified) {
+  // Signed in, awaiting verification
+  if (!accountVerified) {
     return (
       <AuthView
         initialMode="verify-email"
@@ -539,6 +540,8 @@ function NexoraAppContent() {
         {activeSection === 'studio' && (
           <ProfileCustomisationStudio onNavigate={handleNavigate} />
         )}
+
+        {activeSection === 'ai' && <NexoraAIPage />}
 
         {activeSection === 'settings' && (
           <SettingsPage

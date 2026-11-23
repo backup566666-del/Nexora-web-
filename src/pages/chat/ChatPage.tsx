@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Ban,
   BellOff,
+  Bot,
   Check,
   CheckCheck,
   Clock,
@@ -44,6 +45,7 @@ import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { TierBadge } from '../../components/common/TierBadge';
 import { CustomisedAvatar } from '../../components/profile/CustomisedAvatar';
+import { GeminiChatbotPanel } from '../../components/ai/GeminiChatbotPanel';
 import { FriendlyErrorBanner } from '../../components/common/FriendlyErrorBanner';
 import { useAuth } from '../../hooks/useAuth';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
@@ -120,6 +122,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
   const [userPrefs, setUserPrefs] = useState<UserPreferences | null>(null);
   const [selectedConvId, setSelectedConvId] = useState<string | null>(initialConvId || null);
   const [mobileShowThread, setMobileShowThread] = useState<boolean>(Boolean(initialConvId));
+  const [showAiAssistant, setShowAiAssistant] = useState<boolean>(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activePartner, setActivePartner] = useState<UserProfile | null>(null);
   const [pendingOutbox, setPendingOutbox] = useState<PendingOutboxMessage[]>([]);
@@ -452,6 +455,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
   const selectConversation = (convId: string) => {
     setSelectedConvId(convId);
     setMobileShowThread(true);
+    setShowAiAssistant(false);
     setShowMessageSearch(false);
     setShowHeaderMenu(false);
     setChatError('');
@@ -773,12 +777,12 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
       {/* LEFT PANEL – CONVERSATIONS */}
       <aside
         className={`${
-          mobileShowThread && activeConv ? 'hidden lg:flex' : 'flex'
+          (mobileShowThread && activeConv) || showAiAssistant ? 'hidden lg:flex' : 'flex'
         } lg:col-span-4 border-r border-[#8B5CF6]/15 bg-[#0D0B16] flex-col min-h-0`}
       >
         <div className="p-4 sm:p-5 border-b border-white/[0.08] space-y-3.5">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
               <h1 className="font-display text-lg sm:text-xl font-bold text-white">Messages</h1>
               {unreadConvCount > 0 && (
                 <span className="px-2 py-0.5 rounded-full bg-[#7C3AED]/25 border border-[#8B5CF6]/40 text-[11px] font-mono-tabular font-semibold text-[#E9D5FF]">
@@ -786,16 +790,34 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                 </span>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setModalError('');
-                setShowNewChat(true);
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] hover:brightness-110 text-xs font-semibold text-white shadow-[0_4px_16px_rgba(124,58,237,0.35)] transition-all whitespace-nowrap min-h-[42px]"
-            >
-              <Plus size={14} /> New Chat
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAiAssistant((prev) => !prev);
+                  setMobileShowThread(false);
+                }}
+                aria-label="Toggle Gemini AI Chat"
+                className={`inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border text-xs font-semibold transition-all whitespace-nowrap min-h-[42px] ${
+                  showAiAssistant
+                    ? 'bg-[#7C3AED] border-[#8B5CF6] text-white'
+                    : 'bg-[#161423] border-[#8B5CF6]/30 hover:border-[#8B5CF6] text-[#E9D5FF]'
+                }`}
+              >
+                <Bot size={14} className={showAiAssistant ? 'text-white' : 'text-[#C084FC]'} />
+                <span>Gemini AI</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setModalError('');
+                  setShowNewChat(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] hover:brightness-110 text-xs font-semibold text-white shadow-[0_4px_16px_rgba(124,58,237,0.35)] transition-all whitespace-nowrap min-h-[42px]"
+              >
+                <Plus size={14} /> New Chat
+              </button>
+            </div>
           </div>
 
           {/* Search Conversations */}
@@ -1041,13 +1063,32 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
         </div>
       </aside>
 
-      {/* RIGHT PANEL – ACTIVE CONVERSATION */}
+      {/* RIGHT PANEL – ACTIVE CONVERSATION OR GEMINI AI */}
       <section
         className={`${
-          !mobileShowThread || !activeConv ? 'hidden lg:flex' : 'flex'
+          !showAiAssistant && (!mobileShowThread || !activeConv) ? 'hidden lg:flex' : 'flex'
         } lg:col-span-8 flex-col min-h-0 bg-[#08070F]`}
       >
-        {activeConv ? (
+        {showAiAssistant ? (
+          <div className="flex flex-col h-full min-h-0 p-3 sm:p-4 gap-3">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setShowAiAssistant(false)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#161423] border border-white/10 text-xs font-semibold text-[#CBD5E1] hover:text-white"
+              >
+                <ArrowLeft size={14} />
+                <span>Back to Messages</span>
+              </button>
+              <span className="text-[11px] text-[#94A3B8]">
+                Gemini 4 &amp; 3.1 Multi-Turn Assistant
+              </span>
+            </div>
+            <div className="flex-1 min-h-0">
+              <GeminiChatbotPanel compact />
+            </div>
+          </div>
+        ) : activeConv ? (
           <>
             {/* Active Conversation Header */}
             <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-white/[0.08] bg-[#0D0B16] flex items-center justify-between gap-2 sm:gap-4">

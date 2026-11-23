@@ -12,7 +12,8 @@ export type NavSection =
   | 'notifications'
   | 'analytics'
   | 'subscriptions'
-  | 'studio';
+  | 'studio'
+  | 'ai';
 
 export type AudienceType = 'public' | 'followers' | 'space';
 export type PostType = 'text' | 'photo' | 'video' | 'poll' | 'repost';

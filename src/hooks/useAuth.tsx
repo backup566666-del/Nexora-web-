@@ -6,6 +6,7 @@ import {
   ensureVerifiedTokenClaims,
   getUserPrivate,
   getUserProfile,
+  isUserAccountVerified,
 } from '../services/auth/authService';
 import {
   bootstrapFounderGovernance,
@@ -91,6 +92,7 @@ interface AuthContextValue {
   loading: boolean;
   authReady: boolean;
   emailVerified: boolean;
+  accountVerified: boolean;
   profileError: string | null;
   getBadgeVariant: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType | null;
   getUserBadges: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType[];
@@ -122,6 +124,7 @@ const AuthContext = createContext<AuthContextValue>({
   loading: true,
   authReady: false,
   emailVerified: false,
+  accountVerified: false,
   profileError: null,
   getBadgeVariant: () => null,
   getUserBadges: () => [],
@@ -135,6 +138,7 @@ const AuthContext = createContext<AuthContextValue>({
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [emailVerified, setEmailVerified] = useState(false);
+  const [accountVerified, setAccountVerified] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [privateInfo, setPrivateInfo] = useState<UserPrivate | null>(null);
   const [myRole, setMyRole] = useState<PlatformRole | null>(null);
@@ -162,6 +166,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (!firebaseUser) {
       setEmailVerified(false);
+      setAccountVerified(false);
       setProfile(null);
       setPrivateInfo(null);
       setMyRole(null);
@@ -169,8 +174,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (!firebaseUser.emailVerified) {
-      setEmailVerified(false);
+    const isVerifiedAccount = isUserAccountVerified(firebaseUser);
+    if (!isVerifiedAccount) {
+      setEmailVerified(Boolean(firebaseUser.emailVerified));
+      setAccountVerified(false);
       setProfile(null);
       setPrivateInfo(null);
       setMyRole(null);
@@ -188,13 +195,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         let finalProfile = await ensureUserDocuments(firebaseUser);
         const freshPrivate = await getUserPrivate(firebaseUser.uid);
 
-        if ((firebaseUser.email || '').toLowerCase() === FOUNDER_OWNER_EMAIL.toLowerCase()) {
+        if (
+          firebaseUser.emailVerified &&
+          (firebaseUser.email || '').toLowerCase() === FOUNDER_OWNER_EMAIL.toLowerCase()
+        ) {
           await bootstrapFounderGovernance(firebaseUser, finalProfile);
           const updated = await getUserProfile(firebaseUser.uid);
           if (updated) finalProfile = updated;
         }
 
-        setEmailVerified(true);
+        setEmailVerified(Boolean(firebaseUser.emailVerified));
+        setAccountVerified(true);
         setProfile(finalProfile);
         setPrivateInfo(
           freshPrivate
@@ -214,6 +225,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           { feature: 'auth:profile-sync' }
         );
         setEmailVerified(Boolean(firebaseUser.emailVerified));
+        setAccountVerified(isUserAccountVerified(firebaseUser));
         setProfileError(readable);
         throw err;
       } finally {
@@ -229,6 +241,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!auth.currentUser) {
       setUser(null);
       setEmailVerified(false);
+      setAccountVerified(false);
       setProfile(null);
       setPrivateInfo(null);
       setMyRole(null);
@@ -238,13 +251,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     if (reloadAuthUser) {
       await auth.currentUser.reload();
-      if (auth.currentUser.emailVerified) {
+      if (isUserAccountVerified(auth.currentUser)) {
         await auth.currentUser.getIdToken(true);
       }
     }
     const updatedUser = auth.currentUser;
     setUser(updatedUser);
-    await loadProfileForUser(updatedUser, Boolean(reloadAuthUser && updatedUser.emailVerified));
+    await loadProfileForUser(updatedUser, Boolean(reloadAuthUser && isUserAccountVerified(updatedUser)));
   }, [loadProfileForUser]);
 
   const retryProfileLoad = useCallback(async () => {
@@ -263,11 +276,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let previousUid: string | null = null;
     const unsubscribe = onIdTokenChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
-      setEmailVerified(Boolean(firebaseUser?.emailVerified));
+      const nextEmailVerified = Boolean(firebaseUser?.emailVerified);
+      const nextAccountVerified = isUserAccountVerified(firebaseUser);
+      setEmailVerified(nextEmailVerified);
+      setAccountVerified(nextAccountVerified);
 
-      // Only reload full profile documents when user identity or verified status initializes/changes
+      // Only reload full profile documents when user identity or verification state initializes/changes
       const nextUid = firebaseUser?.uid ?? null;
-      if (nextUid === previousUid && firebaseUser && profile?.uid === nextUid && emailVerified === firebaseUser.emailVerified) {
+      if (
+        nextUid === previousUid &&
+        firebaseUser &&
+        profile?.uid === nextUid &&
+        accountVerified === nextAccountVerified
+      ) {
         return;
       }
       previousUid = nextUid;
@@ -282,7 +303,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
     return () => unsubscribe();
-  }, [loadProfileForUser, profile?.uid, emailVerified]);
+  }, [loadProfileForUser, profile?.uid, accountVerified]);
 
   // Subscribe to global platform config (readable even before sign-in so registration gates work)
   useEffect(() => {
@@ -291,7 +312,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Subscribe to RBAC role, trusted badges, subscriptions, studio catalog, user preferences, and announcements
   useEffect(() => {
-    if (!authReady || !user || !emailVerified || !profile?.uid) {
+    if (!authReady || !user || !accountVerified || !profile?.uid) {
       setMyRole(null);
       setBadgesMap({});
       setAnnouncements([]);
@@ -324,7 +345,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       u8();
       u9();
     };
-  }, [authReady, user?.uid, emailVerified, profile?.uid]);
+  }, [authReady, user?.uid, accountVerified, profile?.uid]);
 
   const isOwnerAccount = Boolean(
     (emailVerified && (user?.email || '').toLowerCase() === FOUNDER_OWNER_EMAIL.toLowerCase()) ||
@@ -340,16 +361,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Subscribe to private multi-device admin presence ONLY for active Owner/Admin staff
   useEffect(() => {
-    if (!authReady || !user?.uid || !emailVerified || !profile?.uid || !isActiveStaff) {
+    if (!authReady || !user?.uid || !accountVerified || !profile?.uid || !isActiveStaff) {
       setMyAdminPresencePrivate(null);
       return;
     }
     return subscribeMyAdminPresencePrivate(user.uid, setMyAdminPresencePrivate);
-  }, [authReady, user?.uid, emailVerified, profile?.uid, isActiveStaff]);
+  }, [authReady, user?.uid, accountVerified, profile?.uid, isActiveStaff]);
 
   // Standard member online presence heartbeat (only runs when NOT active staff; staff use Advanced Admin Presence)
   useEffect(() => {
-    if (!authReady || !user?.uid || !emailVerified || !profile?.uid || isActiveStaff) return;
+    if (!authReady || !user?.uid || !accountVerified || !profile?.uid || isActiveStaff) return;
     const allowOnline = privateInfo?.privacySettings?.showOnlineStatus !== false;
     void setUserOnlinePresence(user.uid, allowOnline);
 
@@ -389,7 +410,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Advanced Admin Presence Engine: 5-minute inactivity -> idle, resume -> online (unless manual DND/Invisible/Idle)
   useEffect(() => {
-    if (!authReady || !user?.uid || !emailVerified || !profile?.uid || !isActiveStaff || !myRole) {
+    if (!authReady || !user?.uid || !accountVerified || !profile?.uid || !isActiveStaff || !myRole) {
       return;
     }
 
@@ -477,7 +498,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [
     authReady,
     user?.uid,
-    emailVerified,
+    accountVerified,
     profile?.uid,
     isActiveStaff,
     myRole?.role,
@@ -618,6 +639,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         authReady,
         emailVerified,
+        accountVerified,
         profileError,
         getBadgeVariant,
         getUserBadges,

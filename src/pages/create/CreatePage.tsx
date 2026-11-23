@@ -21,6 +21,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { CoverEditorModal } from '../../components/media/CoverEditorModal';
+import { AnimateImagePanel } from '../../components/ai/AnimateImagePanel';
 import { PostComposer } from '../../features/posts/PostComposer';
 import { useAuth } from '../../hooks/useAuth';
 import { updateUserProfileFields } from '../../services/auth/authService';
@@ -35,7 +36,7 @@ interface CreatePageProps {
   onDone: (goTo: 'home' | 'vibes' | 'spaces' | 'profile') => void;
 }
 
-type StudioMode = 'post' | 'photo-editor' | 'vibe' | 'story' | 'covers';
+type StudioMode = 'post' | 'photo-editor' | 'vibe' | 'animate' | 'story' | 'covers';
 type CropAspect = 'original' | '1:1' | '4:5' | '16:9' | '9:16';
 type StickerKind = 'none' | 'NEXORA' | 'VIBES' | 'STUDIO' | 'LIVE';
 
@@ -489,6 +490,7 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
           { id: 'post', label: 'Post, Poll & Community', icon: Type },
           { id: 'photo-editor', label: 'Photo Studio', icon: Sliders },
           { id: 'vibe', label: 'Video & Vibes Studio', icon: Film },
+          { id: 'animate', label: 'Animate Photo (AI)', icon: Sparkles },
           { id: 'story', label: '24h Story', icon: Layers },
           { id: 'covers', label: 'Cover & Thumbnail Editor', icon: ImageIcon },
         ].map((tab) => {
@@ -1179,6 +1181,39 @@ export function CreatePage({ spaces, users, onDone }: CreatePageProps) {
           </div>
           {storyError && <p className="text-xs text-rose-400">{storyError}</p>}
         </form>
+      )}
+
+      {/* 3b. AI Photo-to-Video Animation Studio */}
+      {mode === 'animate' && (
+        <AnimateImagePanel
+          onSendVideoToVibes={async (blob, captionHint) => {
+            const uploaded = await uploadBlobAsset(
+              blob,
+              'nexora_animated_vibe.mp4',
+              `vibes/${profile.uid}/clips`,
+              'video'
+            );
+            setVibeUrl(uploaded.url);
+            if (!vibeCaption.trim() && captionHint.trim()) {
+              setVibeCaption(captionHint.trim());
+            }
+            setMode('vibe');
+          }}
+          onSendVideoToStory={async (blob, captionHint) => {
+            const uploaded = await uploadBlobAsset(
+              blob,
+              'nexora_animated_story.mp4',
+              `stories/${profile.uid}`,
+              'video'
+            );
+            setStoryMode('video');
+            setStoryMediaUrl(uploaded.url);
+            if (!storyText.trim() && captionHint.trim()) {
+              setStoryText(captionHint.trim());
+            }
+            setMode('story');
+          }}
+        />
       )}
 
       {/* 5. Cover & Thumbnail Editor */}
