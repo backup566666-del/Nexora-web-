@@ -10,6 +10,7 @@ import {
   Gift,
   Heart,
   Home,
+  LayoutGrid,
   LogOut,
   Megaphone,
   MessageSquare,
@@ -22,7 +23,6 @@ import {
   Sparkles,
   Tag,
   User as UserIcon,
-  UserPlus,
   X,
 } from 'lucide-react';
 import { NexoraLogo } from '../branding/NexoraLogo';
@@ -40,10 +40,7 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
   searchDirectoryUsers,
-  subscribeFollowingIds,
-  toggleFollowUser,
 } from '../../services/firebase/socialService';
-import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import {
   NavSection,
   NotificationCategory,
@@ -53,18 +50,24 @@ import {
   UserProfile,
 } from '../../types/nexora';
 import { inferCategoryFromNotificationType } from '../../services/notifications/notificationDispatcher';
-import {
-  formatCompactCount,
-  formatRelativeTime,
-} from '../../utils/validation';
+import { formatRelativeTime } from '../../utils/validation';
 
-type ProfileTab = 'posts' | 'videos' | 'photos' | 'tagged' | 'collabs' | 'gifts' | 'spaces' | 'saved';
+type ProfileTab =
+  | 'posts'
+  | 'videos'
+  | 'photos'
+  | 'tagged'
+  | 'collabs'
+  | 'gifts'
+  | 'spaces'
+  | 'saved';
 
 interface DashboardShellProps {
   activeSection: NavSection;
   onNavigate: (section: NavSection, targetId?: string, profileTab?: ProfileTab) => void;
   onOpenSearch?: (query?: string) => void;
   onOpenAdminSettings?: () => void;
+  onOpenCustomizeHomepage?: () => void;
   onOpenUserProfile: (uid: string) => void;
   notifications: NotificationItem[];
   spaces: Space[];
@@ -73,21 +76,48 @@ interface DashboardShellProps {
   children: React.ReactNode;
 }
 
-const NAV_ITEMS: {
+const MOBILE_NAV_ITEMS: {
   id: NavSection;
   label: string;
   icon: React.ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
 }[] = [
   { id: 'home', label: 'Home', icon: Home },
   { id: 'vibes', label: 'Vibes', icon: Film },
-  { id: 'create', label: 'Nexora', icon: PlusSquare },
+  { id: 'create', label: 'Create', icon: PlusSquare },
   { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'spaces', label: 'Spaces', icon: Compass },
   { id: 'profile', label: 'Profile', icon: UserIcon },
 ];
 
+const DESKTOP_PRIMARY_NAV: {
+  id: NavSection;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+}[] = [
+  { id: 'home', label: 'Home Feed', icon: Home },
+  { id: 'vibes', label: 'Vibes', icon: Film },
+  { id: 'spaces', label: 'Spaces', icon: Compass },
+  { id: 'chat', label: 'Messages', icon: MessageSquare },
+  { id: 'create', label: 'Create', icon: PlusSquare },
+  { id: 'search', label: 'Explore', icon: Search },
+  { id: 'notifications', label: 'Notifications', icon: Bell },
+];
+
+const DESKTOP_STUDIO_NAV: {
+  id: NavSection;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  accent?: boolean;
+}[] = [
+  { id: 'analytics', label: 'Creator Analytics', icon: BarChart3 },
+  { id: 'studio', label: 'Profile Studio', icon: Palette },
+  { id: 'ai', label: 'Nexora AI Studio', icon: Sparkles, accent: true },
+  { id: 'subscriptions', label: 'Membership', icon: CreditCard },
+  { id: 'settings', label: 'Settings', icon: Settings },
+];
+
 const SECTION_LABELS: Record<NavSection, string> = {
-  home: 'Feed',
+  home: 'Home Feed',
   vibes: 'Vibes',
   create: 'Create Studio',
   chat: 'Messages',
@@ -140,6 +170,7 @@ export function DashboardShell({
   onNavigate,
   onOpenSearch,
   onOpenAdminSettings,
+  onOpenCustomizeHomepage,
   onOpenUserProfile,
   notifications,
   spaces,
@@ -151,19 +182,15 @@ export function DashboardShell({
     profile,
     myRole,
     myAdminSelfStatus,
-    adminPresenceMap,
     announcements,
     platformConfig,
     effectiveTier,
     getUserBadges,
-    getUserTier,
   } = useAuth();
-  const [navPhase, setNavPhase] = useState<'expanded' | 'logo-only' | 'hidden'>('expanded');
   const [dockVisible, setDockVisible] = useState(true);
   const lastScrollY = useRef(0);
   const scrollDeltaAccumRef = useRef(0);
   const scrollRafRef = useRef<number | null>(null);
-  const phaseTimerRef = useRef<number | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [remoteSearchUsers, setRemoteSearchUsers] = useState<UserProfile[]>([]);
@@ -172,24 +199,7 @@ export function DashboardShell({
   const [showNotifs, setShowNotifs] = useState(false);
   const [notifFilter, setNotifFilter] = useState<'all' | 'unread' | NotificationCategory>('all');
   const [showAccountMenu, setShowAccountMenu] = useState(false);
-  const [followedUids, setFollowedUids] = useState<Record<string, boolean>>({});
-  const [followBusyUids, setFollowBusyUids] = useState<Record<string, boolean>>({});
-  const [followError, setFollowError] = useState('');
   const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (!profile?.uid) {
-      setFollowedUids({});
-      return;
-    }
-    return subscribeFollowingIds(profile.uid, (followingSet) => {
-      const next: Record<string, boolean> = {};
-      followingSet.forEach((id) => {
-        next[id] = true;
-      });
-      setFollowedUids(next);
-    });
-  }, [profile?.uid]);
 
   useEffect(() => {
     const clean = searchQuery.trim();
@@ -214,7 +224,6 @@ export function DashboardShell({
     scrollDeltaAccumRef.current = 0;
 
     if (activeSection === 'vibes' || activeSection === 'chat') {
-      setNavPhase('expanded');
       return;
     }
 
@@ -225,8 +234,6 @@ export function DashboardShell({
       lastScrollY.current = currentY;
 
       if (Math.abs(delta) < 2) return;
-
-      // Reset directional accumulator when scroll direction flips
       if (
         (delta > 0 && scrollDeltaAccumRef.current < 0) ||
         (delta < 0 && scrollDeltaAccumRef.current > 0)
@@ -235,35 +242,15 @@ export function DashboardShell({
       }
       scrollDeltaAccumRef.current += delta;
 
-      // Floating bottom dock hysteresis: smooth hide on scroll down, reveal on scroll up
       if (currentY <= 48) {
         setDockVisible(true);
         scrollDeltaAccumRef.current = 0;
-      } else if (scrollDeltaAccumRef.current > 18 && currentY > 72) {
+      } else if (scrollDeltaAccumRef.current > 24 && currentY > 72) {
         setDockVisible(false);
         scrollDeltaAccumRef.current = 0;
       } else if (scrollDeltaAccumRef.current < -12) {
         setDockVisible(true);
         scrollDeltaAccumRef.current = 0;
-      }
-
-      // Top bar adaptive transition
-      if (Math.abs(delta) < 6) return;
-      if (phaseTimerRef.current) {
-        window.clearTimeout(phaseTimerRef.current);
-        phaseTimerRef.current = null;
-      }
-
-      if (delta < 0 && currentY > 60) {
-        setNavPhase('logo-only');
-        phaseTimerRef.current = window.setTimeout(() => {
-          setNavPhase('hidden');
-        }, 280);
-      } else if (delta > 0 || currentY <= 40) {
-        setNavPhase((prev) => (prev === 'hidden' ? 'logo-only' : 'expanded'));
-        phaseTimerRef.current = window.setTimeout(() => {
-          setNavPhase('expanded');
-        }, 140);
       }
     };
 
@@ -277,7 +264,6 @@ export function DashboardShell({
     return () => {
       window.removeEventListener('scroll', handleScroll);
       if (scrollRafRef.current !== null) window.cancelAnimationFrame(scrollRafRef.current);
-      if (phaseTimerRef.current) window.clearTimeout(phaseTimerRef.current);
     };
   }, [activeSection]);
 
@@ -298,26 +284,6 @@ export function DashboardShell({
       (n) => (n.category || inferCategoryFromNotificationType(n.type)) === notifFilter
     );
   }, [notifications, notifFilter]);
-
-  const trendingHashtags = useMemo(() => {
-    const counts = new Map<string, number>();
-    posts.forEach((p) => {
-      (p.hashtags || []).forEach((tag) => {
-        counts.set(tag, (counts.get(tag) || 0) + 1);
-      });
-    });
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6);
-  }, [posts]);
-
-  const suggestedCreators = useMemo(() => {
-    if (!profile) return [];
-    return users
-      .filter((u) => u.uid !== profile.uid)
-      .sort((a, b) => (b.followersCount || 0) - (a.followersCount || 0))
-      .slice(0, 4);
-  }, [users, profile]);
 
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -348,8 +314,18 @@ export function DashboardShell({
   }, [searchQuery, users, remoteSearchUsers, spaces, posts]);
 
   const isActiveStaff = Boolean(myRole && myRole.active);
-  const visibleNavItems = useMemo(() => {
-    return NAV_ITEMS.filter((item) => {
+  const visibleMobileNavItems = useMemo(() => {
+    return MOBILE_NAV_ITEMS.filter((item) => {
+      if (isActiveStaff) return true;
+      if (item.id === 'vibes' && !platformConfig.features.vibesEnabled) return false;
+      if (item.id === 'spaces' && !platformConfig.features.spacesEnabled) return false;
+      if (item.id === 'chat' && !platformConfig.features.chatEnabled) return false;
+      return true;
+    });
+  }, [isActiveStaff, platformConfig.features]);
+
+  const visibleDesktopPrimaryNav = useMemo(() => {
+    return DESKTOP_PRIMARY_NAV.filter((item) => {
       if (isActiveStaff) return true;
       if (item.id === 'vibes' && !platformConfig.features.vibesEnabled) return false;
       if (item.id === 'spaces' && !platformConfig.features.spacesEnabled) return false;
@@ -406,126 +382,701 @@ export function DashboardShell({
   };
 
   return (
-    <div className="min-h-screen bg-[#06060A] text-[#F8FAFC] flex flex-col relative">
+    <div className="min-h-screen bg-[#06060A] text-[#F8FAFC] flex relative">
       {/* Subtle atmospheric top glow */}
       <div
         aria-hidden="true"
-        className="pointer-events-none fixed inset-x-0 top-0 h-80 bg-[radial-gradient(ellipse_70%_50%_at_50%_-10%,rgba(124,58,237,0.16),transparent)] z-0"
+        className="pointer-events-none fixed inset-x-0 top-0 h-72 bg-[radial-gradient(ellipse_75%_55%_at_55%_-10%,rgba(124,58,237,0.14),transparent)] z-0"
       />
 
-      {/* Reveal trigger when adaptive navbar hides */}
-      {navPhase === 'hidden' && (
-        <button
-          type="button"
-          onClick={() => setNavPhase('expanded')}
-          onMouseEnter={() => setNavPhase('expanded')}
-          aria-label="Reveal Nexora navigation"
-          className="fixed top-2.5 left-1/2 -translate-x-1/2 z-50 px-3.5 py-1.5 rounded-xl bg-[#0D0B16]/90 border border-[#8B5CF6]/30 shadow-[0_8px_30px_rgba(0,0,0,0.65)] backdrop-blur-md transition-opacity"
-        >
-          <NexoraLogo variant="icon" size="xs" />
-        </button>
-      )}
+      {/* Desktop Left Navigation Rail */}
+      <aside className="hidden lg:flex lg:flex-col lg:w-[232px] xl:w-[252px] shrink-0 border-r border-white/[0.07] bg-[#08070F]/95 backdrop-blur-xl sticky top-0 h-screen z-30">
+        <div className="h-14 px-5 flex items-center justify-between border-b border-white/[0.06] shrink-0">
+          <button
+            type="button"
+            onClick={() => onNavigate('home')}
+            className="focus-visible:outline-none"
+          >
+            <NexoraLogo variant="horizontal" size="sm" />
+          </button>
+        </div>
 
-      {/* Unified Adaptive Desktop Top Navigation */}
-      <header
-        onFocus={() => setNavPhase('expanded')}
-        className={`sticky top-0 z-40 border-b border-[#8B5CF6]/15 bg-[#08070F]/90 backdrop-blur-xl transition-all duration-300 ease-out ${
-          navPhase === 'hidden'
-            ? '-translate-y-full opacity-0 pointer-events-none'
-            : 'translate-y-0 opacity-100'
-        }`}
-      >
-        <div className="max-w-[1760px] mx-auto px-3 sm:px-4 lg:px-8 h-14 md:h-16 flex items-center justify-between gap-2 sm:gap-6">
-          {/* Left: Nexora Logo + Contextual Section Title */}
-          <div className="flex items-center gap-2.5 sm:gap-3.5 shrink-0 min-w-0">
-            <button
-              type="button"
-              onClick={() => onNavigate('home')}
-              className="shrink-0 focus-visible:outline-none"
-            >
-              <NexoraLogo
-                variant={navPhase === 'logo-only' ? 'icon' : 'horizontal'}
-                size="sm"
-              />
-            </button>
-            {navPhase !== 'logo-only' && (
-              <span className="hidden sm:inline-flex items-center gap-3 text-xs font-medium text-[#94A3B8]">
-                <span aria-hidden="true" className="h-4 w-px bg-white/10" />
-                <span className="font-display text-sm font-semibold text-white tracking-tight">
-                  {SECTION_LABELS[activeSection]}
-                </span>
-              </span>
-            )}
+        <nav
+          aria-label="Primary desktop navigation"
+          className="flex-1 overflow-y-auto px-3 py-4 space-y-6 no-scrollbar"
+        >
+          <div className="space-y-1">
+            {visibleDesktopPrimaryNav.map((item) => {
+              const Icon = item.icon;
+              const active = activeSection === item.id;
+              const count =
+                item.id === 'chat'
+                  ? unreadChatCount
+                  : item.id === 'notifications'
+                  ? unreadCount
+                  : 0;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onNavigate(item.id)}
+                  aria-current={active ? 'page' : undefined}
+                  className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl text-[13px] transition-all whitespace-nowrap ${
+                    active
+                      ? 'bg-[#7C3AED]/20 border border-[#8B5CF6]/40 text-white font-semibold shadow-[0_4px_18px_rgba(124,58,237,0.2)]'
+                      : 'border border-transparent text-[#94A3B8] hover:text-white hover:bg-white/[0.04] font-medium'
+                  }`}
+                >
+                  <span className="flex items-center gap-3 min-w-0">
+                    <Icon
+                      size={17}
+                      className={active ? 'text-[#C084FC] shrink-0' : 'text-[#7C6E9B] shrink-0'}
+                    />
+                    <span className="truncate">{item.label}</span>
+                  </span>
+                  {count > 0 && (
+                    <span
+                      className={`font-mono-tabular text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+                        item.id === 'chat'
+                          ? 'bg-emerald-400 text-[#06060A]'
+                          : 'bg-[#7C3AED] text-white'
+                      }`}
+                    >
+                      {count > 99 ? '99+' : count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
-          {/* Right: PWA Install + Search + Notifications + Settings + User Identity */}
-          <div
-            className={`flex items-center gap-1.5 sm:gap-2.5 shrink-0 transition-opacity duration-200 ${
-              navPhase === 'logo-only'
-                ? 'opacity-0 pointer-events-none w-0 overflow-hidden'
-                : 'opacity-100'
+          <div className="pt-4 border-t border-white/[0.06] space-y-1">
+            <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">
+              Studio &amp; Platform
+            </p>
+            {DESKTOP_STUDIO_NAV.map((item) => {
+              const Icon = item.icon;
+              const active = activeSection === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onNavigate(item.id)}
+                  aria-current={active ? 'page' : undefined}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] transition-all whitespace-nowrap ${
+                    active
+                      ? 'bg-[#7C3AED]/20 border border-[#8B5CF6]/40 text-white font-semibold'
+                      : item.accent
+                      ? 'border border-transparent text-[#E9D5FF] hover:bg-[#7C3AED]/15 font-medium'
+                      : 'border border-transparent text-[#94A3B8] hover:text-white hover:bg-white/[0.04] font-medium'
+                  }`}
+                >
+                  <Icon
+                    size={16}
+                    className={
+                      active || item.accent ? 'text-[#C084FC] shrink-0' : 'text-[#64748B] shrink-0'
+                    }
+                  />
+                  <span className="truncate">{item.label}</span>
+                </button>
+              );
+            })}
+            {onOpenCustomizeHomepage && (
+              <button
+                type="button"
+                onClick={onOpenCustomizeHomepage}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] border border-transparent text-[#94A3B8] hover:text-white hover:bg-white/[0.04] font-medium transition-all whitespace-nowrap"
+              >
+                <LayoutGrid size={16} className="text-[#C084FC] shrink-0" />
+                <span className="truncate">Customize Homepage</span>
+              </button>
+            )}
+          </div>
+        </nav>
+
+        {/* Bottom Profile Identity Card */}
+        <div className="p-3 border-t border-white/[0.06] shrink-0">
+          <button
+            type="button"
+            onClick={() => onNavigate('profile')}
+            className={`w-full flex items-center gap-2.5 p-2 rounded-xl border transition-colors text-left ${
+              activeSection === 'profile'
+                ? 'bg-[#7C3AED]/15 border-[#8B5CF6]/40'
+                : 'bg-[#0D0B16]/80 border-white/[0.07] hover:border-[#8B5CF6]/35'
             }`}
           >
-            <div className="hidden sm:block">
-              <PWAInstallButton variant="compact" />
+            <div className="relative shrink-0">
+              <CustomisedAvatar
+                src={profile.avatarUrl}
+                alt={profile.displayName}
+                sizeClass="w-9 h-9"
+                customisation={profile.profileCustomisation}
+              />
+              {isActiveStaff && (
+                <span className="absolute -bottom-0.5 -right-0.5">
+                  <PresenceBadge status={myAdminSelfStatus} size="xs" showOffline />
+                </span>
+              )}
             </div>
-            {/* Mobile / Tablet / Laptop Search Button */}
-            <button
-              type="button"
-              onClick={() => {
-                setShowMobileSearch(true);
-                setShowNotifs(false);
-                setShowAccountMenu(false);
-              }}
-              aria-label="Search Nexora"
-              className="xl:hidden p-2 sm:p-2.5 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 text-[#CBD5E1] hover:text-white transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center"
-            >
-              <Search size={16} />
-            </button>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-white truncate flex items-center gap-1">
+                <span className="truncate">{profile.displayName}</span>
+                <BadgeStrip badges={selfBadges} size={11} max={1} interactive={false} />
+              </p>
+              <p className="text-[11px] text-[#94A3B8] truncate">
+                @{profile.username}
+              </p>
+            </div>
+            <TierBadge tier={effectiveTier} showFree={false} size="xs" />
+          </button>
+        </div>
+      </aside>
 
-            {/* Global Live Search (Wide Desktop) */}
-            <div className="relative hidden xl:block w-64 2xl:w-72">
-              <Search
-                size={15}
-                className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7C6E9B]"
-              />
-              <input
-                type="text"
-                value={searchQuery}
-                onFocus={() => setSearchFocused(true)}
-                onBlur={() => setTimeout(() => setSearchFocused(false), 180)}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    setSearchFocused(false);
-                    if (onOpenSearch) {
-                      onOpenSearch(searchQuery.trim());
-                    } else {
-                      onNavigate('search', searchQuery.trim());
-                    }
-                  }
+      {/* Main Column */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Top Utility Header (Hidden on mobile Vibes for true full-screen short-video feel) */}
+        <header
+          className={`sticky top-0 z-40 border-b border-white/[0.07] bg-[#08070F]/90 backdrop-blur-xl ${
+            activeSection === 'vibes' ? 'hidden lg:block' : 'block'
+          }`}
+        >
+          <div className="max-w-[1680px] mx-auto px-3 sm:px-5 lg:px-7 h-12 lg:h-14 flex items-center justify-between gap-2 sm:gap-4">
+            {/* Left: Mobile Logo + Section Heading */}
+            <div className="flex items-center gap-2.5 min-w-0">
+              <button
+                type="button"
+                onClick={() => onNavigate('home')}
+                className="lg:hidden shrink-0 focus-visible:outline-none"
+                aria-label="Nexora Home"
+              >
+                <NexoraLogo variant="icon" size="xs" />
+              </button>
+              <h1 className="font-display text-sm sm:text-base font-semibold text-white tracking-tight truncate">
+                {SECTION_LABELS[activeSection]}
+              </h1>
+            </div>
+
+            {/* Right: Inline Search (md+), Alerts, Settings shortcut, Account */}
+            <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+              <div className="hidden md:block">
+                <PWAInstallButton variant="compact" />
+              </div>
+
+              {/* Mobile Search Trigger */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMobileSearch(true);
+                  setShowNotifs(false);
+                  setShowAccountMenu(false);
                 }}
-                placeholder="Search people, spaces, posts..."
-                className="w-full pl-9 pr-8 py-2 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 focus:border-[#8B5CF6] outline-none text-xs text-white placeholder:text-[#64748B] transition-colors"
-              />
-              {searchQuery && (
+                aria-label="Search Nexora"
+                className="md:hidden min-w-[40px] min-h-[40px] rounded-xl bg-[#0E0C18] border border-white/[0.08] hover:border-[#8B5CF6]/45 text-[#CBD5E1] hover:text-white flex items-center justify-center transition-colors"
+              >
+                <Search size={16} />
+              </button>
+
+              {/* Inline Search Input (Tablet & Desktop) */}
+              <div className="relative hidden md:block w-56 lg:w-72 xl:w-80">
+                <Search
+                  size={14}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7C6E9B]"
+                />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => setTimeout(() => setSearchFocused(false), 180)}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      setSearchFocused(false);
+                      if (onOpenSearch) onOpenSearch(searchQuery.trim());
+                      else onNavigate('search', searchQuery.trim());
+                    }
+                  }}
+                  placeholder="Search people, spaces, posts..."
+                  className="w-full pl-9 pr-8 py-1.5 rounded-xl bg-[#0E0C18] border border-white/[0.09] focus:border-[#8B5CF6] outline-none text-xs text-white placeholder:text-[#64748B] transition-colors h-9"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#64748B] hover:text-white"
+                    aria-label="Clear search"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+
+                {searchFocused && searchQuery.trim().length > 0 && (
+                  <div className="absolute right-0 mt-2 w-80 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-3 space-y-3 z-50">
+                    {searchResults.users.length === 0 &&
+                    searchResults.spaces.length === 0 &&
+                    searchResults.posts.length === 0 ? (
+                      <p className="text-xs text-[#64748B] px-2 py-3 text-center">
+                        No matches found for &ldquo;{searchQuery}&rdquo;
+                      </p>
+                    ) : (
+                      <>
+                        {searchResults.users.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-[11px] font-semibold text-[#94A3B8] px-2">People</p>
+                            {searchResults.users.map((u) => (
+                              <button
+                                key={u.uid}
+                                type="button"
+                                onClick={() => {
+                                  onOpenUserProfile(u.uid);
+                                  setSearchQuery('');
+                                }}
+                                className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
+                              >
+                                <ResilientImage
+                                  src={u.avatarUrl}
+                                  alt={u.displayName}
+                                  className="w-8 h-8 rounded-full object-cover shrink-0"
+                                />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
+                                    <span className="truncate">{u.displayName}</span>
+                                    <BadgeStrip
+                                      badges={getUserBadges(u.uid, u.verified)}
+                                      size={12}
+                                      max={2}
+                                      interactive={false}
+                                    />
+                                  </p>
+                                  <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {searchResults.spaces.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-[11px] font-semibold text-[#94A3B8] px-2">Spaces</p>
+                            {searchResults.spaces.map((s) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                onClick={() => {
+                                  onNavigate('spaces', s.id);
+                                  setSearchQuery('');
+                                }}
+                                className="w-full flex items-center justify-between p-2 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
+                              >
+                                <span className="text-xs font-medium text-white truncate">
+                                  {s.name}
+                                </span>
+                                <span className="text-[11px] text-[#94A3B8] shrink-0 font-mono-tabular">
+                                  {s.membersCount} members
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {searchResults.posts.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-[11px] font-semibold text-[#94A3B8] px-2">Posts</p>
+                            {searchResults.posts.map((p) => (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => {
+                                  onNavigate('home');
+                                  setSearchQuery('');
+                                }}
+                                className="w-full p-2 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
+                              >
+                                <p className="text-xs text-white truncate">{p.text}</p>
+                                <p className="text-[11px] text-[#64748B] truncate">
+                                  by {p.authorName}
+                                </p>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setSearchFocused(false);
+                        if (onOpenSearch) onOpenSearch(searchQuery.trim());
+                        else onNavigate('search', searchQuery.trim());
+                      }}
+                      className="w-full py-2 px-3 rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/30 text-xs font-semibold text-[#E9D5FF] hover:bg-[#7C3AED]/30 transition-colors"
+                    >
+                      Explore full results
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Notifications Center */}
+              <div className="relative">
                 <button
                   type="button"
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#64748B] hover:text-white"
-                  aria-label="Clear search"
+                  onClick={() => {
+                    setShowNotifs((v) => !v);
+                    setShowAccountMenu(false);
+                  }}
+                  aria-label="Notifications"
+                  className="relative min-w-[40px] min-h-[40px] rounded-xl bg-[#0E0C18] border border-white/[0.08] hover:border-[#8B5CF6]/45 text-[#CBD5E1] hover:text-white flex items-center justify-center transition-colors"
                 >
-                  <X size={13} />
+                  <Bell size={16} />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[17px] h-[17px] px-1 rounded-full bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-[10px] font-bold text-white flex items-center justify-center font-mono-tabular">
+                      {unreadCount}
+                    </span>
+                  )}
                 </button>
-              )}
 
-              {searchFocused && searchQuery.trim().length > 0 && (
-                <div className="absolute right-0 mt-2 w-80 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-3 space-y-3 z-50">
+                {showNotifs && (
+                  <div className="fixed inset-x-3 top-14 sm:absolute sm:inset-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl overflow-hidden z-50">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+                      <span className="font-display text-sm font-semibold text-white">
+                        Notifications {unreadCount > 0 ? `(${unreadCount})` : ''}
+                      </span>
+                      <div className="flex items-center gap-3">
+                        {unreadCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => void markAllNotificationsRead(notifications)}
+                            className="text-xs text-[#C084FC] hover:underline"
+                          >
+                            Mark all read
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowNotifs(false);
+                            onNavigate('settings');
+                          }}
+                          className="text-xs text-[#94A3B8] hover:text-white"
+                        >
+                          Preferences
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 px-3 py-2 border-b border-white/[0.06] overflow-x-auto no-scrollbar">
+                      {NOTIF_FILTERS.map((flt) => (
+                        <button
+                          key={flt.id}
+                          type="button"
+                          onClick={() => setNotifFilter(flt.id)}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold whitespace-nowrap transition-colors ${
+                            notifFilter === flt.id
+                              ? 'bg-[#7C3AED] text-white'
+                              : 'bg-white/[0.04] text-[#94A3B8] hover:text-white'
+                          }`}
+                        >
+                          {flt.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="max-h-80 overflow-y-auto divide-y divide-white/[0.06]">
+                      {filteredNotifications.length === 0 ? (
+                        <p className="text-xs text-[#64748B] py-8 text-center">
+                          No notifications in this filter.
+                        </p>
+                      ) : (
+                        filteredNotifications.map((n) => (
+                          <button
+                            key={n.id}
+                            type="button"
+                            onClick={() => void handleNotificationClick(n)}
+                            className={`w-full text-left p-3.5 flex items-start gap-3 text-xs hover:bg-white/[0.03] transition-colors ${
+                              n.read ? 'opacity-70' : 'bg-[#7C3AED]/10'
+                            }`}
+                          >
+                            <div className="relative shrink-0">
+                              <ResilientImage
+                                src={n.actorAvatar}
+                                alt={n.actorName}
+                                className="w-8 h-8 rounded-full object-cover"
+                              />
+                              <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-[#0D0B16] border border-white/15 flex items-center justify-center">
+                                <NotificationGlyph type={n.type} />
+                              </span>
+                            </div>
+                            <div className="min-w-0 flex-1 space-y-0.5">
+                              <p className="text-white leading-snug">
+                                <span className="font-semibold">{n.actorName}</span>{' '}
+                                <span className="text-[#CBD5E1]">{n.preview}</span>
+                              </p>
+                              <p className="text-[11px] text-[#64748B]">
+                                {formatRelativeTime(n.createdAt)}
+                              </p>
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+
+                    <div className="px-4 py-2.5 border-t border-white/10 bg-[#0A0812]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowNotifs(false);
+                          onNavigate('notifications');
+                        }}
+                        className="w-full py-2 rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/30 text-xs font-semibold text-[#E9D5FF] hover:bg-[#7C3AED]/30 transition-colors"
+                      >
+                        Open Notification Centre
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Mobile Settings Button (Desktop already has Settings in Left Rail + Menu) */}
+              <button
+                type="button"
+                onClick={() => onNavigate('settings')}
+                aria-label="Settings"
+                className={`lg:hidden min-w-[40px] min-h-[40px] rounded-xl border transition-colors flex items-center justify-center ${
+                  activeSection === 'settings'
+                    ? 'bg-[#7C3AED] border-[#8B5CF6] text-white'
+                    : 'bg-[#0E0C18] border-white/[0.08] text-[#CBD5E1] hover:text-white'
+                }`}
+              >
+                <Settings size={16} />
+              </button>
+
+              {/* Account Dropdown Menu */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAccountMenu((v) => !v);
+                    setShowNotifs(false);
+                  }}
+                  className="flex items-center gap-2 p-1 sm:pl-1.5 sm:pr-2.5 rounded-xl bg-[#0E0C18] border border-white/[0.08] hover:border-[#8B5CF6]/45 transition-colors min-h-[40px]"
+                >
+                  <div className="relative shrink-0">
+                    <ResilientImage
+                      src={profile.avatarUrl}
+                      alt={profile.displayName}
+                      className="w-7 h-7 rounded-full object-cover ring-1 ring-[#8B5CF6]/50"
+                    />
+                    {isActiveStaff && (
+                      <span className="absolute -bottom-0.5 -right-0.5">
+                        <PresenceBadge status={myAdminSelfStatus} size="xs" showOffline />
+                      </span>
+                    )}
+                  </div>
+                  <span className="hidden sm:inline text-xs font-medium text-white max-w-[115px] truncate">
+                    {profile.displayName}
+                  </span>
+                </button>
+
+                {showAccountMenu && (
+                  <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-1.5rem)] bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-2 space-y-1 z-50">
+                    <div className="px-3 py-2.5 border-b border-white/10">
+                      <p className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
+                        <span className="truncate">{profile.displayName}</span>
+                        <BadgeStrip badges={selfBadges} size={13} max={3} interactive={false} />
+                        <TierBadge tier={effectiveTier} showFree={false} size="xs" />
+                      </p>
+                      <p className="text-[11px] text-[#94A3B8] truncate">@{profile.username}</p>
+                      {isActiveStaff && (
+                        <div className="pt-1.5">
+                          <PresenceBadge status={myAdminSelfStatus} size="xs" showOffline showLabel />
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        onNavigate('profile');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                    >
+                      <UserIcon size={14} /> View Profile
+                    </button>
+                    {onOpenCustomizeHomepage && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAccountMenu(false);
+                          onOpenCustomizeHomepage();
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E9D5FF] hover:bg-[#7C3AED]/15 text-left font-medium"
+                      >
+                        <LayoutGrid size={14} className="text-[#C084FC]" /> Customize Homepage
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        if (onOpenSearch) onOpenSearch('');
+                        else onNavigate('search');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                    >
+                      <Search size={14} /> Search &amp; Discovery
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        onNavigate('notifications');
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                    >
+                      <span className="flex items-center gap-2.5">
+                        <Bell size={14} /> Notification Centre
+                      </span>
+                      {unreadCount > 0 && (
+                        <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded bg-[#7C3AED] text-white font-semibold">
+                          {unreadCount}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        onNavigate('analytics');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                    >
+                      <BarChart3 size={14} /> Creator Analytics
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        onNavigate('studio');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                    >
+                      <Palette size={14} /> Profile Customisation Studio
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        onNavigate('ai');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E9D5FF] hover:bg-[#7C3AED]/15 text-left font-medium"
+                    >
+                      <Sparkles size={14} className="text-[#C084FC]" /> Nexora AI Studio
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        onNavigate('subscriptions');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E9D5FF] hover:bg-[#7C3AED]/15 text-left font-medium"
+                    >
+                      <CreditCard size={14} className="text-[#C084FC]" /> Nexora Membership
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        onNavigate('settings');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                    >
+                      <Settings size={14} /> Account, Privacy &amp; Settings
+                    </button>
+                    {isActiveStaff && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAccountMenu(false);
+                          if (onOpenAdminSettings) onOpenAdminSettings();
+                          else onNavigate('settings');
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-sky-300 bg-sky-500/10 hover:bg-sky-500/20 text-left font-medium"
+                      >
+                        <Shield size={14} /> Nexora Administration
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void logoutUser(profile.uid)}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-rose-400 hover:bg-rose-500/10 text-left"
+                    >
+                      <LogOut size={14} /> Log Out
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Mobile Search Overlay */}
+        {showMobileSearch && (
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-start justify-center p-3 sm:p-6 pt-14 md:hidden"
+            onClick={() => setShowMobileSearch(false)}
+          >
+            <div
+              className="w-full max-w-lg bg-[#0E0C18] border border-[#8B5CF6]/30 rounded-2xl shadow-2xl p-4 space-y-3"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search
+                    size={15}
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7C6E9B]"
+                  />
+                  <input
+                    type="text"
+                    autoFocus
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        setShowMobileSearch(false);
+                        if (onOpenSearch) onOpenSearch(searchQuery.trim());
+                        else onNavigate('search', searchQuery.trim());
+                      }
+                    }}
+                    placeholder="Search people, spaces, posts..."
+                    className="w-full pl-9 pr-8 py-2.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/25 focus:border-[#8B5CF6] outline-none text-sm text-white placeholder:text-[#64748B]"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#64748B] hover:text-white p-1"
+                      aria-label="Clear search"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMobileSearch(false)}
+                  className="px-3 py-2.5 rounded-xl bg-white/[0.06] text-xs font-semibold text-[#CBD5E1] hover:text-white min-h-[42px]"
+                >
+                  Close
+                </button>
+              </div>
+
+              {searchQuery.trim().length > 0 ? (
+                <div className="max-h-[60vh] overflow-y-auto space-y-3">
                   {searchResults.users.length === 0 &&
                   searchResults.spaces.length === 0 &&
                   searchResults.posts.length === 0 ? (
-                    <p className="text-xs text-[#64748B] px-2 py-3 text-center">
+                    <p className="text-xs text-[#64748B] py-6 text-center">
                       No matches found for &ldquo;{searchQuery}&rdquo;
                     </p>
                   ) : (
@@ -540,13 +1091,14 @@ export function DashboardShell({
                               onClick={() => {
                                 onOpenUserProfile(u.uid);
                                 setSearchQuery('');
+                                setShowMobileSearch(false);
                               }}
-                              className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
+                              className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
                             >
                               <ResilientImage
                                 src={u.avatarUrl}
                                 alt={u.displayName}
-                                className="w-8 h-8 rounded-full object-cover shrink-0"
+                                className="w-9 h-9 rounded-full object-cover shrink-0"
                               />
                               <div className="min-w-0">
                                 <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
@@ -574,12 +1126,11 @@ export function DashboardShell({
                               onClick={() => {
                                 onNavigate('spaces', s.id);
                                 setSearchQuery('');
+                                setShowMobileSearch(false);
                               }}
-                              className="w-full flex items-center justify-between p-2 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
+                              className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
                             >
-                              <span className="text-xs font-medium text-white truncate">
-                                {s.name}
-                              </span>
+                              <span className="text-xs font-medium text-white truncate">{s.name}</span>
                               <span className="text-[11px] text-[#94A3B8] shrink-0 font-mono-tabular">
                                 {s.membersCount} members
                               </span>
@@ -597,836 +1148,111 @@ export function DashboardShell({
                               onClick={() => {
                                 onNavigate('home');
                                 setSearchQuery('');
+                                setShowMobileSearch(false);
                               }}
-                              className="w-full p-2 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
+                              className="w-full p-2.5 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
                             >
                               <p className="text-xs text-white truncate">{p.text}</p>
-                              <p className="text-[11px] text-[#64748B] truncate">
-                                by {p.authorName}
-                              </p>
+                              <p className="text-[11px] text-[#64748B] truncate">by {p.authorName}</p>
                             </button>
                           ))}
                         </div>
                       )}
                     </>
                   )}
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      setSearchFocused(false);
-                      if (onOpenSearch) {
-                        onOpenSearch(searchQuery.trim());
-                      } else {
-                        onNavigate('search', searchQuery.trim());
-                      }
-                    }}
-                    className="w-full py-2 px-3 rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/30 text-xs font-semibold text-[#E9D5FF] hover:bg-[#7C3AED]/30 transition-colors"
-                  >
-                    Explore full results in Search & Discovery
-                  </button>
                 </div>
-              )}
-            </div>
-
-            {/* Notifications Center */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowNotifs((v) => !v);
-                  setShowAccountMenu(false);
-                }}
-                aria-label="Notifications"
-                className="relative p-2 sm:p-2.5 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 text-[#CBD5E1] hover:text-white transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center"
-              >
-                <Bell size={16} />
-                {unreadCount > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-[10px] font-bold text-white flex items-center justify-center font-mono-tabular">
-                    {unreadCount}
-                  </span>
-                )}
-              </button>
-
-              {showNotifs && (
-                <div className="fixed inset-x-3 top-16 sm:absolute sm:inset-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96 bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl overflow-hidden z-50">
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-                    <span className="font-display text-sm font-semibold text-white">
-                      Notifications {unreadCount > 0 ? `(${unreadCount})` : ''}
-                    </span>
-                    <div className="flex items-center gap-3">
-                      {unreadCount > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => void markAllNotificationsRead(notifications)}
-                          className="text-xs text-[#C084FC] hover:underline"
-                        >
-                          Mark all read
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowNotifs(false);
-                          onNavigate('settings');
-                        }}
-                        className="text-xs text-[#94A3B8] hover:text-white"
-                      >
-                        Preferences
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Category filter tabs */}
-                  <div className="flex items-center gap-1 px-3 py-2 border-b border-white/[0.06] overflow-x-auto">
-                    {NOTIF_FILTERS.map((flt) => (
-                      <button
-                        key={flt.id}
-                        type="button"
-                        onClick={() => setNotifFilter(flt.id)}
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold whitespace-nowrap transition-colors ${
-                          notifFilter === flt.id
-                            ? 'bg-[#7C3AED] text-white'
-                            : 'bg-white/[0.04] text-[#94A3B8] hover:text-white'
-                        }`}
-                      >
-                        {flt.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="max-h-80 overflow-y-auto divide-y divide-white/[0.06]">
-                    {filteredNotifications.length === 0 ? (
-                      <p className="text-xs text-[#64748B] py-8 text-center">
-                        No notifications in this filter.
-                      </p>
-                    ) : (
-                      filteredNotifications.map((n) => (
-                        <button
-                          key={n.id}
-                          type="button"
-                          onClick={() => void handleNotificationClick(n)}
-                          className={`w-full text-left p-3.5 flex items-start gap-3 text-xs hover:bg-white/[0.03] transition-colors ${
-                            n.read ? 'opacity-70' : 'bg-[#7C3AED]/10'
-                          }`}
-                        >
-                          <div className="relative shrink-0">
-                            <ResilientImage
-                              src={n.actorAvatar}
-                              alt={n.actorName}
-                              className="w-8 h-8 rounded-full object-cover"
-                            />
-                            <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-[#0D0B16] border border-white/15 flex items-center justify-center">
-                              <NotificationGlyph type={n.type} />
-                            </span>
-                          </div>
-                          <div className="min-w-0 flex-1 space-y-0.5">
-                            <p className="text-white leading-snug">
-                              <span className="font-semibold">{n.actorName}</span>{' '}
-                              <span className="text-[#CBD5E1]">{n.preview}</span>
-                            </p>
-                            <p className="text-[11px] text-[#64748B]">
-                              {formatRelativeTime(n.createdAt)}
-                            </p>
-                          </div>
-                        </button>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="px-4 py-2.5 border-t border-white/10 bg-[#0A0812] flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowNotifs(false);
-                        onNavigate('notifications');
-                      }}
-                      className="w-full py-2 rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/30 text-xs font-semibold text-[#E9D5FF] hover:bg-[#7C3AED]/30 transition-colors"
-                    >
-                      Open Notification Centre
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Settings Shortcut */}
-            <button
-              type="button"
-              onClick={() => onNavigate('settings')}
-              aria-label="Settings"
-              className={`p-2 sm:p-2.5 rounded-xl border transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center ${
-                activeSection === 'settings'
-                  ? 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] border-[#8B5CF6] text-white'
-                  : 'bg-[#0E0C18] border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 text-[#CBD5E1] hover:text-white'
-              }`}
-            >
-              <Settings size={16} />
-            </button>
-
-            {/* User Account Menu */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAccountMenu((v) => !v);
-                  setShowNotifs(false);
-                }}
-                className="flex items-center gap-2 p-1 sm:pl-1.5 sm:pr-3 rounded-xl bg-[#0E0C18] border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/50 transition-colors min-h-[40px]"
-              >
-                <div className="relative shrink-0">
-                  <ResilientImage
-                    src={profile.avatarUrl}
-                    alt={profile.displayName}
-                    className="w-7 h-7 rounded-full object-cover ring-1 ring-[#8B5CF6]/50"
-                  />
-                  {isActiveStaff && (
-                    <span className="absolute -bottom-0.5 -right-0.5">
-                      <PresenceBadge status={myAdminSelfStatus} size="xs" showOffline />
-                    </span>
-                  )}
-                </div>
-                <span className="hidden sm:inline text-xs font-medium text-white max-w-[115px] truncate">
-                  {profile.displayName}
-                </span>
-              </button>
-
-              {showAccountMenu && (
-                <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-1.5rem)] bg-[#0E0C18] border border-[#8B5CF6]/25 rounded-2xl shadow-2xl p-2 space-y-1 z-50">
-                    <div className="px-3 py-2.5 border-b border-white/10">
-                    <p className="text-xs font-semibold text-white truncate flex items-center gap-1.5">
-                      <span className="truncate">{profile.displayName}</span>
-                      <BadgeStrip badges={selfBadges} size={13} max={3} />
-                      <TierBadge tier={effectiveTier} showFree={false} size="xs" />
-                    </p>
-                    <p className="text-[11px] text-[#94A3B8] truncate">@{profile.username}</p>
-                    {isActiveStaff && (
-                      <div className="pt-1.5">
-                        <PresenceBadge status={myAdminSelfStatus} size="xs" showOffline showLabel />
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAccountMenu(false);
-                      onNavigate('profile');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
-                  >
-                    <UserIcon size={14} /> View Profile
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAccountMenu(false);
-                      if (onOpenSearch) onOpenSearch('');
-                      else onNavigate('search');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
-                  >
-                    <Search size={14} /> Search & Discovery
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAccountMenu(false);
-                      onNavigate('notifications');
-                    }}
-                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
-                  >
-                    <span className="flex items-center gap-2.5">
-                      <Bell size={14} /> Notification Centre
-                    </span>
-                    {unreadCount > 0 && (
-                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded bg-[#7C3AED] text-white font-semibold">
-                        {unreadCount}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAccountMenu(false);
-                      onNavigate('analytics');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
-                  >
-                    <BarChart3 size={14} /> Creator Analytics
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAccountMenu(false);
-                      onNavigate('studio');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
-                  >
-                    <Palette size={14} /> Profile Customisation Studio
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAccountMenu(false);
-                      onNavigate('ai');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E9D5FF] hover:bg-[#7C3AED]/15 text-left font-medium"
-                  >
-                    <Sparkles size={14} className="text-[#C084FC]" /> Nexora AI Studio
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAccountMenu(false);
-                      onNavigate('subscriptions');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E9D5FF] hover:bg-[#7C3AED]/15 text-left font-medium"
-                  >
-                    <CreditCard size={14} className="text-[#C084FC]" /> Nexora Membership
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAccountMenu(false);
-                      onNavigate('settings');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
-                  >
-                    <Settings size={14} /> Account, Privacy & Settings
-                  </button>
-                  {isActiveStaff && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowAccountMenu(false);
-                        if (onOpenAdminSettings) {
-                          onOpenAdminSettings();
-                        } else {
-                          onNavigate('settings');
-                        }
-                      }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-sky-300 bg-sky-500/10 hover:bg-sky-500/20 text-left font-medium"
-                    >
-                      <Shield size={14} /> Nexora Administration
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => void logoutUser(profile.uid)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-rose-400 hover:bg-rose-500/10 text-left"
-                  >
-                    <LogOut size={14} /> Log Out
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Mobile / Tablet / Laptop Search Overlay */}
-      {showMobileSearch && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-start justify-center p-3 sm:p-6 pt-16 xl:hidden"
-          onClick={() => setShowMobileSearch(false)}
-        >
-          <div
-            className="w-full max-w-lg bg-[#0E0C18] border border-[#8B5CF6]/30 rounded-2xl shadow-2xl p-4 space-y-3"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <Search
-                  size={15}
-                  className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7C6E9B]"
-                />
-                <input
-                  type="text"
-                  autoFocus
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      setShowMobileSearch(false);
-                      if (onOpenSearch) onOpenSearch(searchQuery.trim());
-                      else onNavigate('search', searchQuery.trim());
-                    }
-                  }}
-                  placeholder="Search people, spaces, posts..."
-                  className="w-full pl-9 pr-8 py-2.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/25 focus:border-[#8B5CF6] outline-none text-sm text-white placeholder:text-[#64748B]"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#64748B] hover:text-white p-1"
-                    aria-label="Clear search"
-                  >
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowMobileSearch(false)}
-                className="px-3 py-2.5 rounded-xl bg-white/[0.06] text-xs font-semibold text-[#CBD5E1] hover:text-white min-h-[42px]"
-              >
-                Close
-              </button>
-            </div>
-
-            {searchQuery.trim().length > 0 ? (
-              <div className="max-h-[60vh] overflow-y-auto space-y-3">
-                {searchResults.users.length === 0 &&
-                searchResults.spaces.length === 0 &&
-                searchResults.posts.length === 0 ? (
-                  <p className="text-xs text-[#64748B] py-6 text-center">
-                    No matches found for &ldquo;{searchQuery}&rdquo;
-                  </p>
-                ) : (
-                  <>
-                    {searchResults.users.length > 0 && (
-                      <div className="space-y-1">
-                        <p className="text-[11px] font-semibold text-[#94A3B8] px-2">People</p>
-                        {searchResults.users.map((u) => (
-                          <button
-                            key={u.uid}
-                            type="button"
-                            onClick={() => {
-                              onOpenUserProfile(u.uid);
-                              setSearchQuery('');
-                              setShowMobileSearch(false);
-                            }}
-                            className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
-                          >
-                            <ResilientImage
-                              src={u.avatarUrl}
-                              alt={u.displayName}
-                              className="w-9 h-9 rounded-full object-cover shrink-0"
-                            />
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
-                                <span className="truncate">{u.displayName}</span>
-                                <BadgeStrip
-                                  badges={getUserBadges(u.uid, u.verified)}
-                                  size={12}
-                                  max={2}
-                                  interactive={false}
-                                />
-                              </p>
-                              <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {searchResults.spaces.length > 0 && (
-                      <div className="space-y-1">
-                        <p className="text-[11px] font-semibold text-[#94A3B8] px-2">Spaces</p>
-                        {searchResults.spaces.map((s) => (
-                          <button
-                            key={s.id}
-                            type="button"
-                            onClick={() => {
-                              onNavigate('spaces', s.id);
-                              setSearchQuery('');
-                              setShowMobileSearch(false);
-                            }}
-                            className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
-                          >
-                            <span className="text-xs font-medium text-white truncate">{s.name}</span>
-                            <span className="text-[11px] text-[#94A3B8] shrink-0 font-mono-tabular">
-                              {s.membersCount} members
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {searchResults.posts.length > 0 && (
-                      <div className="space-y-1">
-                        <p className="text-[11px] font-semibold text-[#94A3B8] px-2">Posts</p>
-                        {searchResults.posts.map((p) => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() => {
-                              onNavigate('home');
-                              setSearchQuery('');
-                              setShowMobileSearch(false);
-                            }}
-                            className="w-full p-2.5 rounded-xl hover:bg-[#7C3AED]/15 text-left transition-colors"
-                          >
-                            <p className="text-xs text-white truncate">{p.text}</p>
-                            <p className="text-[11px] text-[#64748B] truncate">by {p.authorName}</p>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            ) : (
-              <p className="text-xs text-[#64748B] py-4 text-center">
-                Type a name, @username, space, or keyword to search Nexora.
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setShowMobileSearch(false);
-                if (onOpenSearch) onOpenSearch(searchQuery.trim());
-                else onNavigate('search', searchQuery.trim());
-              }}
-              className="w-full min-h-[40px] rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/30 text-xs font-semibold text-[#E9D5FF]"
-            >
-              Open Full Search & Discovery
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Active Platform Announcements Banner */}
-      {activeBannerAnnouncements.length > 0 && (
-        <div className="relative z-10 max-w-[1640px] w-full mx-auto px-4 lg:px-8 pt-3 space-y-2">
-          {activeBannerAnnouncements.slice(0, 2).map((ann) => (
-            <div
-              key={ann.id}
-              className={`flex items-center justify-between gap-4 px-4 py-2.5 rounded-xl border text-xs ${
-                ann.severity === 'security'
-                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-100'
-                  : ann.severity === 'warning'
-                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-100'
-                  : 'bg-[#7C3AED]/15 border-[#8B5CF6]/30 text-[#E9D5FF]'
-              }`}
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                {ann.severity === 'security' || ann.severity === 'warning' ? (
-                  <AlertTriangle size={14} className="shrink-0" />
-                ) : (
-                  <Megaphone size={14} className="shrink-0 text-[#C084FC]" />
-                )}
-                <p className="truncate">
-                  <span className="font-semibold">{ann.title}:</span> {ann.message}
+              ) : (
+                <p className="text-xs text-[#64748B] py-4 text-center">
+                  Type a name, @username, space, or keyword to search Nexora.
                 </p>
-              </div>
+              )}
               <button
                 type="button"
-                onClick={() =>
-                  setDismissedAnnouncementIds((prev) => [...prev, ann.id])
-                }
-                aria-label="Dismiss announcement"
-                className="p-1 rounded-lg hover:bg-white/10 shrink-0"
+                onClick={() => {
+                  setShowMobileSearch(false);
+                  if (onOpenSearch) onOpenSearch(searchQuery.trim());
+                  else onNavigate('search', searchQuery.trim());
+                }}
+                className="w-full min-h-[40px] rounded-xl bg-[#7C3AED]/20 border border-[#8B5CF6]/30 text-xs font-semibold text-[#E9D5FF]"
               >
-                <X size={13} />
+                Open Full Search &amp; Discovery
               </button>
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* Section-Specific Responsive Viewport Architectures */}
-      {activeSection === 'vibes' && (
-        <main className="relative z-10 flex-1 flex flex-col pb-24 md:pb-28">{children}</main>
-      )}
-
-      {activeSection === 'chat' && (
-        <main className="relative z-10 flex-1 max-w-[1720px] w-full mx-auto px-2 sm:px-4 lg:px-8 pt-2 sm:pt-4 pb-24 flex flex-col">
-          {children}
-        </main>
-      )}
-
-      {activeSection === 'spaces' && (
-        <main className="relative z-10 flex-1 max-w-[1720px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28">
-          {children}
-        </main>
-      )}
-
-      {activeSection === 'profile' && (
-        <main className="relative z-10 flex-1 max-w-[1400px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28">
-          {children}
-        </main>
-      )}
-
-      {activeSection === 'create' && (
-        <main className="relative z-10 flex-1 max-w-[1400px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28">
-          {children}
-        </main>
-      )}
-
-      {(activeSection === 'settings' ||
-        activeSection === 'search' ||
-        activeSection === 'notifications' ||
-        activeSection === 'analytics' ||
-        activeSection === 'subscriptions' ||
-        activeSection === 'studio' ||
-        activeSection === 'ai') && (
-        <main className="relative z-10 flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28">
-          {children}
-        </main>
-      )}
-
-      {activeSection === 'home' && (
-        <div className="relative z-10 flex-1 max-w-[1640px] w-full mx-auto px-3 sm:px-4 lg:px-8 pt-4 sm:pt-6 pb-28 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
-          {/* Left Desktop Column: Identity & Quick Spaces */}
-          <aside className="hidden lg:block lg:col-span-3 space-y-6">
-            <div className="sticky top-24 space-y-6">
-              {/* Identity Summary */}
-              <div className="p-5 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 space-y-4">
-                <div className="flex items-center gap-3.5">
-                  <CustomisedAvatar
-                    src={profile.avatarUrl}
-                    alt={profile.displayName}
-                    sizeClass="w-12 h-12"
-                    customisation={profile.profileCustomisation}
-                  />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <button
-                        type="button"
-                        onClick={() => onNavigate('profile')}
-                        className="font-display text-sm font-semibold text-white hover:text-[#C084FC] truncate text-left"
-                      >
-                        {profile.displayName}
-                      </button>
-                      <BadgeStrip badges={selfBadges} size={13} max={2} />
-                      <TierBadge tier={effectiveTier} showFree={false} size="xs" />
-                    </div>
-                    <p className="text-xs text-[#94A3B8] truncate">@{profile.username}</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2 pt-3 border-t border-white/[0.08] text-center">
-                  <div>
-                    <p className="font-mono-tabular text-sm font-semibold text-white">
-                      {formatCompactCount(profile.postsCount)}
-                    </p>
-                    <p className="text-[11px] text-[#94A3B8]">Posts</p>
-                  </div>
-                  <div>
-                    <p className="font-mono-tabular text-sm font-semibold text-white">
-                      {formatCompactCount(profile.followersCount)}
-                    </p>
-                    <p className="text-[11px] text-[#94A3B8]">Followers</p>
-                  </div>
-                  <div>
-                    <p className="font-mono-tabular text-sm font-semibold text-white">
-                      {formatCompactCount(profile.followingCount)}
-                    </p>
-                    <p className="text-[11px] text-[#94A3B8]">Following</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/[0.08]">
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('analytics')}
-                    className="min-h-[36px] px-2.5 rounded-xl bg-[#120F1E] border border-white/10 hover:border-[#8B5CF6]/40 text-[11px] font-semibold text-[#CBD5E1] hover:text-white inline-flex items-center justify-center gap-1.5"
-                  >
-                    <BarChart3 size={13} className="text-[#C084FC]" /> Analytics
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('studio')}
-                    className="min-h-[36px] px-2.5 rounded-xl bg-[#120F1E] border border-white/10 hover:border-[#8B5CF6]/40 text-[11px] font-semibold text-[#CBD5E1] hover:text-white inline-flex items-center justify-center gap-1.5"
-                  >
-                    <Palette size={13} className="text-[#C084FC]" /> Studio
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('notifications')}
-                    className="min-h-[36px] px-2.5 rounded-xl bg-[#120F1E] border border-white/10 hover:border-[#8B5CF6]/40 text-[11px] font-semibold text-[#CBD5E1] hover:text-white inline-flex items-center justify-center gap-1.5"
-                  >
-                    <Bell size={13} className="text-[#C084FC]" /> Alerts
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('subscriptions')}
-                    className="min-h-[36px] px-2.5 rounded-xl bg-[#7C3AED]/15 border border-[#8B5CF6]/30 hover:bg-[#7C3AED]/25 text-[11px] font-semibold text-[#E9D5FF] inline-flex items-center justify-center gap-1.5"
-                  >
-                    <CreditCard size={13} className="text-[#C084FC]" /> Plans
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('ai')}
-                    className="col-span-2 min-h-[38px] px-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9]/25 to-[#9333EA]/25 border border-[#8B5CF6]/40 hover:border-[#8B5CF6] text-[11px] font-semibold text-white inline-flex items-center justify-center gap-1.5"
-                  >
-                    <Sparkles size={13} className="text-[#C084FC]" /> Nexora AI Studio
-                  </button>
-                </div>
-              </div>
-
-              {/* Spaces Quick Directory */}
-              <div className="p-5 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h2 className="font-display text-sm font-semibold text-white">
-                    Featured Spaces
-                  </h2>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('spaces')}
-                    className="text-xs text-[#C084FC] hover:underline"
-                  >
-                    Explore
-                  </button>
-                </div>
-                <div className="space-y-1.5">
-                  {spaces.slice(0, 4).map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => onNavigate('spaces', s.id)}
-                      className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-[#7C3AED]/10 text-left transition-colors"
-                    >
-                      <ResilientImage
-                        src={s.coverUrl}
-                        alt={s.name}
-                        className="w-10 h-10 rounded-xl object-cover shrink-0"
-                      />
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-white truncate">{s.name}</p>
-                        <p className="text-[11px] text-[#94A3B8] truncate">
-                          {s.category} · {s.membersCount} members
-                        </p>
-                      </div>
-                    </button>
-                  ))}
-                  {spaces.length === 0 && (
-                    <p className="text-xs text-[#64748B]">No Spaces created yet.</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </aside>
-
-          {/* Center Discussion Feed */}
-          <main className="lg:col-span-9 xl:col-span-6 min-w-0">{children}</main>
-
-          {/* Right Desktop Rail: Suggested Creators & Topics */}
-          <aside className="hidden xl:block xl:col-span-3 space-y-6">
-            <div className="sticky top-24 space-y-6">
-              <div className="p-5 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 space-y-3.5">
-                <h2 className="font-display text-sm font-semibold text-white">
-                  People to Follow
-                </h2>
-                <div className="space-y-3">
-                  {suggestedCreators.length === 0 ? (
-                    <p className="text-xs text-[#64748B]">
-                      Invite collaborators to see creators here.
-                    </p>
+        {/* Active Platform Announcements Banner */}
+        {activeBannerAnnouncements.length > 0 && (
+          <div className="relative z-10 max-w-[1680px] w-full mx-auto px-3 sm:px-5 lg:px-7 pt-3 space-y-2">
+            {activeBannerAnnouncements.slice(0, 2).map((ann) => (
+              <div
+                key={ann.id}
+                className={`flex items-center justify-between gap-4 px-4 py-2.5 rounded-xl border text-xs ${
+                  ann.severity === 'security'
+                    ? 'bg-rose-500/10 border-rose-500/30 text-rose-100'
+                    : ann.severity === 'warning'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-100'
+                    : 'bg-[#7C3AED]/15 border-[#8B5CF6]/30 text-[#E9D5FF]'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {ann.severity === 'security' || ann.severity === 'warning' ? (
+                    <AlertTriangle size={14} className="shrink-0" />
                   ) : (
-                    suggestedCreators.map((u) => {
-                      const isFollowed = Boolean(followedUids[u.uid]);
-                      const isBusy = Boolean(followBusyUids[u.uid]);
-                      return (
-                        <div key={u.uid} className="flex items-center justify-between gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => onOpenUserProfile(u.uid)}
-                            className="flex items-center gap-2.5 min-w-0 text-left"
-                          >
-                            <div className="relative shrink-0">
-                              <CustomisedAvatar
-                                src={u.avatarUrl}
-                                alt={u.displayName}
-                                sizeClass="w-9 h-9"
-                                customisation={u.profileCustomisation}
-                              />
-                              {(() => {
-                                const rec = adminPresenceMap[u.uid];
-                                return rec && rec.status !== 'offline' ? (
-                                  <span className="absolute -bottom-0.5 -right-0.5">
-                                    <PresenceBadge status={rec.status} size="xs" />
-                                  </span>
-                                ) : null;
-                              })()}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1">
-                                <span className="truncate">{u.displayName}</span>
-                                <BadgeStrip
-                                  badges={getUserBadges(u.uid, u.verified)}
-                                  size={12}
-                                  max={2}
-                                  interactive={false}
-                                />
-                                <TierBadge tier={getUserTier(u.uid, u.subscriptionTier)} showFree={false} size="xs" />
-                              </p>
-                              <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
-                            </div>
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isBusy}
-                            onClick={async () => {
-                              if (isBusy) return;
-                              setFollowError('');
-                              setFollowBusyUids((prev) => ({ ...prev, [u.uid]: true }));
-                              try {
-                                const next = await toggleFollowUser(profile, u, isFollowed);
-                                setFollowedUids((prev) => ({ ...prev, [u.uid]: next }));
-                              } catch (err) {
-                                setFollowError(
-                                  extractReadableErrorMessage(err, 'Unable to update follow status.')
-                                );
-                              } finally {
-                                setFollowBusyUids((prev) => ({ ...prev, [u.uid]: false }));
-                              }
-                            }}
-                            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors shrink-0 disabled:opacity-60 disabled:cursor-not-allowed ${
-                              isFollowed
-                                ? 'bg-white/10 text-white'
-                                : 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white'
-                            }`}
-                          >
-                            <UserPlus size={12} />
-                            {isBusy ? '...' : isFollowed ? 'Following' : 'Follow'}
-                          </button>
-                        </div>
-                      );
-                    })
+                    <Megaphone size={14} className="shrink-0 text-[#C084FC]" />
                   )}
-                  {followError && (
-                    <p className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/25 rounded-lg px-2.5 py-1.5">
-                      {followError}
-                    </p>
-                  )}
+                  <p className="truncate">
+                    <span className="font-semibold">{ann.title}:</span> {ann.message}
+                  </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDismissedAnnouncementIds((prev) => [...prev, ann.id])
+                  }
+                  aria-label="Dismiss announcement"
+                  className="p-1 rounded-lg hover:bg-white/10 shrink-0"
+                >
+                  <X size={13} />
+                </button>
               </div>
+            ))}
+          </div>
+        )}
 
-              {trendingHashtags.length > 0 && (
-                <div className="p-5 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 space-y-3">
-                  <h2 className="font-display text-sm font-semibold text-white">
-                    Active Topics
-                  </h2>
-                  <div className="space-y-2">
-                    {trendingHashtags.map(([tag, count]) => (
-                      <div
-                        key={tag}
-                        className="flex items-center justify-between text-xs text-[#CBD5E1]"
-                      >
-                        <span className="font-medium text-[#C084FC]">#{tag}</span>
-                        <span className="font-mono-tabular text-[#64748B]">{count} posts</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </aside>
-        </div>
-      )}
+        {/* Section Viewports (HomePage controls its own customized layout directly!) */}
+        {activeSection === 'vibes' && (
+          <main className="relative z-10 flex-1 flex flex-col pb-16 lg:pb-0">{children}</main>
+        )}
 
-      {/* Floating Glassmorphic Bottom Dock (Mobile, Tablet & Desktop) */}
+        {activeSection === 'chat' && (
+          <main className="relative z-10 flex-1 max-w-[1680px] w-full mx-auto px-2 sm:px-4 lg:px-7 pt-2 sm:pt-4 pb-20 lg:pb-5 flex flex-col">
+            {children}
+          </main>
+        )}
+
+        {activeSection === 'home' && (
+          <main className="relative z-10 flex-1 max-w-[1680px] w-full mx-auto px-3 sm:px-5 lg:px-7 pt-4 sm:pt-5 pb-24 lg:pb-10">
+            {children}
+          </main>
+        )}
+
+        {activeSection !== 'vibes' && activeSection !== 'chat' && activeSection !== 'home' && (
+          <main className="relative z-10 flex-1 max-w-[1520px] w-full mx-auto px-3 sm:px-5 lg:px-7 pt-4 sm:pt-6 pb-24 lg:pb-10">
+            {children}
+          </main>
+        )}
+      </div>
+
+      {/* Mobile & Tablet Floating Bottom Dock */}
       <FloatingBottomDock
-        items={visibleNavItems}
+        items={visibleMobileNavItems}
         activeSection={activeSection}
         onNavigate={(section) => onNavigate(section)}
         unreadChatCount={unreadChatCount}
         visible={dockVisible}
       />
 
-      {/* Offline Connectivity Banner */}
       <OfflineIndicator />
     </div>
   );

@@ -13,6 +13,7 @@ import {
   Globe,
   History,
   KeyRound,
+  LayoutGrid,
   LifeBuoy,
   Link2,
   Lock,
@@ -46,6 +47,7 @@ import { PlatformAnalyticsPanel } from '../../components/settings/admin/Platform
 import { PlatformManagementPanel } from '../../components/settings/admin/PlatformManagementPanel';
 import { SystemDiagnosticsPanel } from '../../components/settings/admin/SystemDiagnosticsPanel';
 import { VerificationCentrePanel } from '../../components/settings/admin/VerificationCentrePanel';
+import { HomepageCustomizationPanel } from '../../components/settings/HomepageCustomizationPanel';
 import { useAuth } from '../../hooks/useAuth';
 import {
   AUTH_PROVIDER_LIST,
@@ -104,6 +106,7 @@ interface SettingsPageProps {
   vibes?: Vibe[];
   spaces?: Space[];
   initialAdminOpen?: boolean;
+  initialPersonalSection?: 'all' | 'customize-homepage';
   onNavigate?: (section: NavSection) => void;
 }
 
@@ -145,6 +148,7 @@ export function SettingsPage({
   vibes = [],
   spaces = [],
   initialAdminOpen = false,
+  initialPersonalSection = 'all',
   onNavigate,
 }: SettingsPageProps) {
   const {
@@ -167,6 +171,9 @@ export function SettingsPage({
   const [viewMode, setViewMode] = useState<'personal' | 'admin'>(
     initialAdminOpen && canAccessAdmin ? 'admin' : 'personal'
   );
+  const [personalTab, setPersonalTab] = useState<
+    'all' | 'customize-homepage' | 'account' | 'privacy' | 'badges' | 'support'
+  >(initialPersonalSection);
 
   // Sync viewMode if triggered externally (e.g. account dropdown shortcut)
   useEffect(() => {
@@ -176,6 +183,13 @@ export function SettingsPage({
       setViewMode('personal');
     }
   }, [initialAdminOpen, canAccessAdmin, viewMode]);
+
+  useEffect(() => {
+    if (initialPersonalSection === 'customize-homepage') {
+      setViewMode('personal');
+      setPersonalTab('customize-homepage');
+    }
+  }, [initialPersonalSection]);
 
   // Personal Privacy & Notification Preferences state
   const [privacy, setPrivacy] = useState<PrivacySettings>(() => withPrivacyDefaults());
@@ -644,9 +658,48 @@ export function SettingsPage({
           </div>
         </div>
       ) : (
-        /* STANDARD ACCOUNT & PRIVACY SETTINGS */
-        <div className="space-y-6 max-w-[1040px]">
+        /* STANDARD ACCOUNT, CUSTOMIZATION & PRIVACY SETTINGS */
+        <div className="space-y-6 max-w-[1080px]">
+          {/* Personal Settings Section Switcher */}
+          <nav
+            aria-label="Settings sections"
+            className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 border-b border-white/[0.08]"
+          >
+            {[
+              { id: 'all', label: 'All Settings' },
+              { id: 'customize-homepage', label: 'Customize Homepage', icon: LayoutGrid },
+              { id: 'account', label: 'Account & Sign-In' },
+              { id: 'privacy', label: 'Privacy & Alerts' },
+              { id: 'badges', label: 'Verification & Badges' },
+              { id: 'support', label: 'Support & Blocked' },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const active = personalTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setPersonalTab(tab.id as typeof personalTab)}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap transition min-h-[40px] ${
+                    active
+                      ? 'bg-[#7C3AED] text-white shadow-[0_2px_14px_rgba(124,58,237,0.35)]'
+                      : 'text-[#94A3B8] hover:text-white hover:bg-white/[0.04]'
+                  }`}
+                >
+                  {Icon && <Icon size={13} />}
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Customize Homepage Workspace */}
+          {(personalTab === 'all' || personalTab === 'customize-homepage') && (
+            <HomepageCustomizationPanel onOpenHome={() => onNavigate?.('home')} />
+          )}
+
           {/* Account Security & Multi-Badge Summary */}
+          {(personalTab === 'all' || personalTab === 'account') && (
           <section className="p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <h2 className="font-display text-base font-semibold text-white flex items-center gap-2">
@@ -721,8 +774,10 @@ export function SettingsPage({
               </button>
             </div>
           </section>
+          )}
 
           {/* Connected Sign-In Methods & Multi-Provider Account Security */}
+          {(personalTab === 'all' || personalTab === 'account') && (
           <section className="p-5 sm:p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-4">
             <div className="space-y-1">
               <h2 className="font-display text-base font-semibold text-white flex items-center gap-2">
@@ -1020,9 +1075,10 @@ export function SettingsPage({
               </div>
             )}
           </section>
+          )}
 
           {/* Staff Presence Control (Only shown to Owner & Authorized Active Admins) */}
-          {canAccessAdmin && myRole && (
+          {(personalTab === 'all' || personalTab === 'account') && canAccessAdmin && myRole && (
             <section className="p-5 sm:p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/25 space-y-3">
               <AdminPresenceSelector
                 currentMode={myAdminManualMode}
@@ -1035,7 +1091,7 @@ export function SettingsPage({
           )}
 
           {/* Membership, Studio & Creator Hub Shortcuts */}
-          {onNavigate && (
+          {(personalTab === 'all' || personalTab === 'account') && onNavigate && (
             <section className="p-5 sm:p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div className="space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1082,6 +1138,7 @@ export function SettingsPage({
           )}
 
           {/* Install Nexora App (PWA / Android Home Screen / Desktop Standalone) */}
+          {(personalTab === 'all' || personalTab === 'account') && (
           <section className="p-5 sm:p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="space-y-1">
               <h2 className="font-display text-base font-semibold text-white flex items-center gap-2">
@@ -1095,9 +1152,10 @@ export function SettingsPage({
               <PWAInstallButton variant="card" />
             </div>
           </section>
+          )}
 
           {/* User-Facing Badge Applications & Confidential Identity Submission */}
-          {!isFounderAccount && (
+          {(personalTab === 'all' || personalTab === 'badges') && !isFounderAccount && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Badge Application */}
               <form
@@ -1318,6 +1376,7 @@ export function SettingsPage({
           )}
 
           {/* Privacy, Tagging, Collaborations & Dual Notification Preferences */}
+          {(personalTab === 'all' || personalTab === 'privacy') && (
           <form
             onSubmit={handleSavePrivacy}
             className="p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-6"
@@ -1495,8 +1554,10 @@ export function SettingsPage({
               {savingPrivacy ? 'Saving...' : 'Save Preferences'}
             </button>
           </form>
+          )}
 
           {/* Support & Account Appeal Submission */}
+          {(personalTab === 'all' || personalTab === 'support') && (
           <form
             onSubmit={handleSubmitSupportTicket}
             className="p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-4"
@@ -1563,8 +1624,10 @@ export function SettingsPage({
               <Send size={13} /> {submittingSupport ? 'Submitting...' : 'Submit Support Request'}
             </button>
           </form>
+          )}
 
           {/* Blocked Users */}
+          {(personalTab === 'all' || personalTab === 'support') && (
           <section className="p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-3">
             <h2 className="font-display text-base font-semibold text-white">Blocked Accounts</h2>
             {blockedUsers.length === 0 ? (
@@ -1588,6 +1651,7 @@ export function SettingsPage({
               </div>
             )}
           </section>
+          )}
         </div>
       )}
     </div>

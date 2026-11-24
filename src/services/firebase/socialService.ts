@@ -36,6 +36,7 @@ import {
   CollaboratorProfileSummary,
   Conversation,
   GiftTransaction,
+  HomepageCustomization,
   MessageType,
   NotificationItem,
   NotificationTargetType,
@@ -62,6 +63,7 @@ import {
   extractMentions,
   normalizeUsername,
   sanitizeString,
+  withHomepageCustomizationDefaults,
 } from '../../utils/validation';
 
 // --- Notifications Helper ---
@@ -1077,6 +1079,14 @@ export async function incrementVibeView(vibeId: string): Promise<void> {
   }
 }
 
+export async function deleteVibe(vibeId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'vibes', vibeId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `vibes/${vibeId}`);
+  }
+}
+
 export async function repostVibe(vibe: Vibe, actor: UserProfile): Promise<void> {
   try {
     await updateDoc(doc(db, 'vibes', vibe.id), {
@@ -2039,7 +2049,7 @@ export async function unblockUserAccount(currentUid: string, targetUid: string, 
   }
 }
 
-// --- Per-User Preferences (Pinned Chats, Muted Chats, Recent Searches) ---
+// --- Per-User Preferences (Pinned Chats, Muted Chats, Recent Searches & Homepage Customization) ---
 export function subscribeUserPreferences(
   uid: string,
   callback: (prefs: UserPreferences) => void
@@ -2054,6 +2064,7 @@ export function subscribeUserPreferences(
           pinnedConvIds: Array.isArray(data.pinnedConvIds) ? data.pinnedConvIds : [],
           mutedConvIds: Array.isArray(data.mutedConvIds) ? data.mutedConvIds : [],
           recentSearches: Array.isArray(data.recentSearches) ? data.recentSearches : [],
+          homepagePrefs: withHomepageCustomizationDefaults(data.homepagePrefs),
           updatedAt: data.updatedAt,
         });
       } else {
@@ -2062,6 +2073,7 @@ export function subscribeUserPreferences(
           pinnedConvIds: [],
           mutedConvIds: [],
           recentSearches: [],
+          homepagePrefs: withHomepageCustomizationDefaults(),
         });
       }
     },
@@ -2071,6 +2083,7 @@ export function subscribeUserPreferences(
         pinnedConvIds: [],
         mutedConvIds: [],
         recentSearches: [],
+        homepagePrefs: withHomepageCustomizationDefaults(),
       })
   );
 }
@@ -2078,16 +2091,36 @@ export function subscribeUserPreferences(
 async function upsertUserPreferences(
   uid: string,
   current: UserPreferences | null | undefined,
-  patch: Partial<Pick<UserPreferences, 'pinnedConvIds' | 'mutedConvIds' | 'recentSearches'>>
+  patch: Partial<
+    Pick<UserPreferences, 'pinnedConvIds' | 'mutedConvIds' | 'recentSearches' | 'homepagePrefs'>
+  >
 ): Promise<void> {
-  const nextPayload = {
+  const nextHomepage = patch.homepagePrefs ?? current?.homepagePrefs;
+  const nextPayload: Record<string, unknown> = {
     uid,
     pinnedConvIds: (patch.pinnedConvIds ?? current?.pinnedConvIds ?? []).slice(0, 30),
     mutedConvIds: (patch.mutedConvIds ?? current?.mutedConvIds ?? []).slice(0, 100),
     recentSearches: (patch.recentSearches ?? current?.recentSearches ?? []).slice(0, 20),
     updatedAt: serverTimestamp(),
   };
+  if (nextHomepage) {
+    nextPayload.homepagePrefs = withHomepageCustomizationDefaults(nextHomepage);
+  }
   await setDoc(doc(db, 'user_preferences', uid), nextPayload);
+}
+
+export async function saveHomepageCustomization(
+  uid: string,
+  currentPrefs: UserPreferences | null | undefined,
+  nextHomepagePrefs: Partial<HomepageCustomization>
+): Promise<HomepageCustomization> {
+  const sanitized = withHomepageCustomizationDefaults(nextHomepagePrefs);
+  try {
+    await upsertUserPreferences(uid, currentPrefs, { homepagePrefs: sanitized });
+    return sanitized;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `user_preferences/${uid}`);
+  }
 }
 
 export async function togglePinConversation(

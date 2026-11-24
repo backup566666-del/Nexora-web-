@@ -192,13 +192,35 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidHomepagePrefs(hp) {
+      return hp is map
+        && hp.keys().hasAll([
+          'layout', 'showStories', 'showRecommendedCreators', 'showSuggestedSpaces',
+          'showTrendingTopics', 'showVibesShelf', 'feedDensity', 'defaultFeedFilter', 'sectionOrder'
+        ])
+        && hp.keys().hasOnly([
+          'layout', 'showStories', 'showRecommendedCreators', 'showSuggestedSpaces',
+          'showTrendingTopics', 'showVibesShelf', 'feedDensity', 'defaultFeedFilter', 'sectionOrder'
+        ])
+        && hp.layout in ['command', 'editorial', 'stream']
+        && hp.showStories is bool
+        && hp.showRecommendedCreators is bool
+        && hp.showSuggestedSpaces is bool
+        && hp.showTrendingTopics is bool
+        && hp.showVibesShelf is bool
+        && hp.feedDensity in ['comfortable', 'compact']
+        && hp.defaultFeedFilter in ['all', 'trending', 'media', 'discussions', 'polls']
+        && isBoundedStringList(hp.sectionOrder, 6, 32);
+    }
+
     function isValidUserPreferences(data) {
       return data.keys().hasAll(['uid', 'pinnedConvIds', 'mutedConvIds', 'recentSearches', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'pinnedConvIds', 'mutedConvIds', 'recentSearches', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'pinnedConvIds', 'mutedConvIds', 'recentSearches', 'homepagePrefs', 'updatedAt'])
         && isValidId(data.uid)
         && isBoundedStringList(data.pinnedConvIds, 30, 128)
         && isBoundedStringList(data.mutedConvIds, 100, 128)
         && isBoundedStringList(data.recentSearches, 20, 80)
+        && (!('homepagePrefs' in data) || isValidHomepagePrefs(data.homepagePrefs))
         && data.updatedAt is timestamp;
     }
 

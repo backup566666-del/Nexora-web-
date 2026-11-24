@@ -48,6 +48,7 @@ interface PostCardProps {
   usersDirectory?: UserProfile[];
   authorTier?: SubscriptionTier;
   authorCustomisation?: ProfileCustomisation | null;
+  compact?: boolean;
 }
 
 export function PostCard({
@@ -58,6 +59,7 @@ export function PostCard({
   usersDirectory = [],
   authorTier,
   authorCustomisation,
+  compact = false,
 }: PostCardProps) {
   const { profile, effectiveTier, getUserBadges, getUserTier } = useAuth();
   const postBadges = getUserBadges(post.authorId, post.authorVerified);
@@ -205,7 +207,11 @@ export function PostCard({
   const totalVotes = (post.pollCounts || []).reduce((acc, n) => acc + n, 0);
 
   return (
-    <article className="p-4 sm:p-5 rounded-2xl bg-[#0D0B16]/75 hover:bg-[#0D0B16] transition-colors border border-white/[0.06] hover:border-[#8B5CF6]/20 space-y-3.5">
+    <article
+      className={`rounded-2xl bg-[#0D0B16]/80 hover:bg-[#0D0B16] transition-colors border border-white/[0.06] hover:border-[#8B5CF6]/20 ${
+        compact ? 'p-3 sm:p-3.5 space-y-2.5' : 'p-4 sm:p-5 space-y-3.5'
+      }`}
+    >
       {actionError && (
         <FriendlyErrorBanner message={actionError} onDismiss={() => setActionError('')} />
       )}

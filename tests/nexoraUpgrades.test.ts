@@ -5,6 +5,7 @@ import {
   APPLICATION_ELIGIBLE_BADGES,
   BADGE_CATALOG,
   DEFAULT_BADGE_CONFIGS,
+  DEFAULT_HOMEPAGE_CUSTOMIZATION,
   FREE_GIFT_CATALOG,
   computePostEngagementScore,
   isValidUsername,
@@ -12,7 +13,9 @@ import {
   normalizeBadgeType,
   normalizeUsername,
   rankTrendingPosts,
+  sanitizeHomepageCustomization,
   sanitizeString,
+  withHomepageCustomizationDefaults,
   withPrivacyDefaults,
 } from '../src/utils/validation';
 import {
@@ -1083,6 +1086,11 @@ test('Gemini features respect server-only SDK boundary, avoid deprecated models/
   const chatPageSrc = fs.readFileSync('src/pages/chat/ChatPage.tsx', 'utf8');
   assert.ok(chatPageSrc.includes('GeminiChatbotPanel'));
   assert.ok(chatPageSrc.includes('Gemini AI'));
+  const chatBadgeMatches = [...chatPageSrc.matchAll(/<BadgeStrip\b[^>]*>/g)].map((m) => m[0]);
+  assert.ok(chatBadgeMatches.length >= 2);
+  for (const tag of chatBadgeMatches) {
+    assert.ok(tag.includes('interactive={false}'), `ChatPage BadgeStrip inside button must set interactive={false}: ${tag}`);
+  }
 
   const createPageSrc = fs.readFileSync('src/pages/create/CreatePage.tsx', 'utf8');
   assert.ok(createPageSrc.includes('AnimateImagePanel'));
@@ -1094,4 +1102,162 @@ test('Gemini features respect server-only SDK boundary, avoid deprecated models/
   const appSrc = fs.readFileSync('src/App.tsx', 'utf8');
   assert.ok(appSrc.includes('NexoraAIPage'));
 });
+
+test('Homepage customization defaults, sanitization, and Firestore rules validation work end to end', async () => {
+  const fs = await import('node:fs');
+
+  // Defaults & normalization
+  const defaults = withHomepageCustomizationDefaults(undefined);
+  assert.deepEqual(defaults, DEFAULT_HOMEPAGE_CUSTOMIZATION);
+  assert.equal(defaults.layout, 'command');
+  assert.equal(defaults.showStories, true);
+  assert.equal(defaults.showRecommendedCreators, true);
+  assert.equal(defaults.showSuggestedSpaces, true);
+  assert.equal(defaults.showTrendingTopics, true);
+  assert.equal(defaults.feedDensity, 'comfortable');
+  assert.equal(defaults.defaultFeedFilter, 'all');
+  assert.deepEqual(defaults.sectionOrder, ['stories', 'creators', 'spaces', 'trending']);
+
+  // Sanitization rejects invalid enum values, deduplicates sectionOrder, and appends missing sections
+  const sanitized = sanitizeHomepageCustomization({
+    layout: 'unknown_layout' as unknown as 'command',
+    showStories: false,
+    showTrendingTopics: false,
+    feedDensity: 'compact',
+    defaultFeedFilter: 'trending',
+    sectionOrder: ['trending', 'trending', 'spaces', 'invalid' as unknown as 'stories'],
+  });
+  assert.equal(sanitized.layout, 'command');
+  assert.equal(sanitized.showStories, false);
+  assert.equal(sanitized.showRecommendedCreators, true);
+  assert.equal(sanitized.showTrendingTopics, false);
+  assert.equal(sanitized.feedDensity, 'compact');
+  assert.equal(sanitized.defaultFeedFilter, 'trending');
+  assert.deepEqual(sanitized.sectionOrder, ['trending', 'spaces', 'stories', 'creators']);
+
+  // Firestore rules enforce isValidHomepagePrefs on user_preferences
+  const rules = fs.readFileSync('firestore.rules', 'utf8');
+  assert.ok(rules.includes('function isValidHomepagePrefs('));
+  assert.ok(rules.includes('isValidHomepagePrefs(data.homepagePrefs)'));
+});
+
+test('Redesigned Home, Vibes, Chat, Spaces, Navigation, and Settings Customization modules are properly wired', async () => {
+  const fs = await import('node:fs');
+
+  // Settings -> Customize Homepage wiring
+  const settingsSrc = fs.readFileSync('src/pages/settings/SettingsPage.tsx', 'utf8');
+  assert.ok(settingsSrc.includes('HomepageCustomizationPanel'));
+  assert.ok(settingsSrc.includes('Customize Homepage'));
+
+  const panelSrc = fs.readFileSync('src/components/settings/HomepageCustomizationPanel.tsx', 'utf8');
+  assert.ok(panelSrc.includes('saveHomepageCustomization'));
+  assert.ok(panelSrc.toLowerCase().includes('show or hide'));
+  assert.ok(panelSrc.includes('Homepage Layout Mode'));
+
+  // HomePage customization integration & layout modes
+  const homeSrc = fs.readFileSync('src/pages/home/HomePage.tsx', 'utf8');
+  assert.ok(homeSrc.includes('withHomepageCustomizationDefaults'));
+  assert.ok(homeSrc.includes('Command Studio'));
+  assert.ok(homeSrc.includes('Editorial Showcase'));
+  assert.ok(homeSrc.includes('Focus Stream'));
+  assert.ok(homeSrc.includes('showStories'));
+  assert.ok(homeSrc.includes('showRecommendedCreators'));
+  assert.ok(homeSrc.includes('showSuggestedSpaces'));
+  assert.ok(homeSrc.includes('showTrendingTopics'));
+  assert.ok(homeSrc.includes('sectionOrder'));
+  assert.ok(homeSrc.includes('Customize Homepage'));
+
+  // Vibes vertical snap scrolling, playback scrubbing, and management modal
+  const vibesSrc = fs.readFileSync('src/pages/vibes/VibesPage.tsx', 'utf8');
+  assert.ok(vibesSrc.includes('For You'));
+  assert.ok(vibesSrc.includes('Following'));
+  assert.ok(vibesSrc.includes('snap-y snap-mandatory'));
+  assert.ok(vibesSrc.includes('type="range"'));
+  assert.ok(vibesSrc.includes('Manage Your Vibes'));
+  assert.ok(vibesSrc.includes('deleteVibe'));
+
+  // Spaces & Navigation responsive structure
+  const spacesSrc = fs.readFileSync('src/pages/spaces/SpacesPage.tsx', 'utf8');
+  assert.ok(spacesSrc.includes('Space Pulse'));
+  assert.ok(spacesSrc.includes('Explore Spaces'));
+
+  const dockSrc = fs.readFileSync('src/components/navigation/FloatingBottomDock.tsx', 'utf8');
+  assert.ok(dockSrc.includes('lg:hidden'));
+
+  // No non-interactive BadgeStrip regression inside redesigned pages
+  for (const file of [
+    'src/pages/home/HomePage.tsx',
+    'src/pages/vibes/VibesPage.tsx',
+    'src/pages/spaces/SpacesPage.tsx',
+  ]) {
+    const content = fs.readFileSync(file, 'utf8');
+    const buttonBlocks = [...content.matchAll(/<button[\s\S]*?<\/button>/g)].map((m) => m[0]);
+    for (const block of buttonBlocks) {
+      if (block.includes('<BadgeStrip')) {
+        assert.ok(
+          block.includes('interactive={false}'),
+          `Button in ${file} containing <BadgeStrip> must set interactive={false}`
+        );
+      }
+    }
+  }
+});
+
+test('Signature N logo animation, SplashScreen, and real Firebase auth loading experience are wired cleanly', async () => {
+  const fs = await import('node:fs');
+  const authSvc = await import('../src/services/auth/authService');
+
+  // 1. Privacy-safe Email-or-Username resolution
+  assert.equal(await authSvc.resolveLoginIdentifierToEmail('creator@nexora.social'), 'creator@nexora.social');
+  await assert.rejects(
+    () => authSvc.resolveLoginIdentifierToEmail('   '),
+    /enter your email address or username/i
+  );
+  await assert.rejects(
+    () => authSvc.resolveLoginIdentifierToEmail('ab'),
+    /valid email address or username/i
+  );
+
+  // 2. Multi-piece SVG N logo animation component checks
+  const logoSrc = fs.readFileSync('src/components/branding/AnimatedNexoraLogo.tsx', 'utf8');
+  assert.ok(logoSrc.includes('SEPARATED_TRANSFORMS'));
+  assert.ok(logoSrc.includes('nexora-shard-orbit-1'));
+  assert.ok(logoSrc.includes('nexora-shard-orbit-5'));
+  assert.ok(logoSrc.includes('nexora-orbit-ring'));
+  assert.ok(logoSrc.includes('nexora-pulse-ring'));
+  assert.ok(logoSrc.includes('nexora-glow-burst'));
+  assert.ok(logoSrc.includes('useReducedMotion'));
+  assert.ok(logoSrc.includes('NEXORA'));
+
+  // 3. Startup Splash Screen checks
+  const splashSrc = fs.readFileSync('src/components/branding/NexoraSplashScreen.tsx', 'utf8');
+  assert.ok(splashSrc.includes('AnimatedNexoraLogo'));
+  assert.ok(splashSrc.includes('nexora-loading-sweep'));
+  assert.ok(splashSrc.includes('authReady'));
+
+  const appSrc = fs.readFileSync('src/App.tsx', 'utf8');
+  assert.ok(appSrc.includes('NexoraSplashScreen'));
+  assert.ok(appSrc.includes('nexora_splash_done'));
+  assert.ok(appSrc.includes('authTransitionState'));
+  assert.ok(appSrc.includes('justSignedIn'));
+
+  // 4. Premium Login UI, Real Auth Messages, Remember Me, Forgot Password, and All 7 Providers
+  const authViewSrc = fs.readFileSync('src/pages/auth/AuthView.tsx', 'utf8');
+  for (const token of [
+    'Welcome Back',
+    'Email or Username',
+    'Remember Me',
+    'Forgot Password?',
+    'Log In',
+    'Connecting to Nexora...',
+    'Verifying your account...',
+    'Preparing your Nexora experience...',
+    'Welcome back!',
+    'abortRealAuthFailure',
+    'NexoraParticleBackdrop',
+  ]) {
+    assert.ok(authViewSrc.includes(token), `AuthView must include "${token}"`);
+  }
+});
+
 

@@ -4,6 +4,11 @@ import {
   BadgeConfig,
   BadgeDefinition,
   CustomisationItem,
+  HomepageCustomization,
+  HomepageFeedDensity,
+  HomepageFeedSort,
+  HomepageLayoutMode,
+  HomepageSectionId,
   InternalRole,
   NotificationCategory,
   PlatformConfig,
@@ -619,6 +624,100 @@ export function withPrivacyDefaults(settings?: Partial<PrivacySettings> | null):
     },
   };
 }
+
+export const ALL_HOMEPAGE_SECTIONS: {
+  id: HomepageSectionId;
+  label: string;
+  description: string;
+}[] = [
+  {
+    id: 'stories',
+    label: 'Stories',
+    description: '24-hour visual updates from creators and people you follow',
+  },
+  {
+    id: 'creators',
+    label: 'Recommended Creators',
+    description: 'Suggested verified and active creators to follow',
+  },
+  {
+    id: 'spaces',
+    label: 'Suggested Spaces',
+    description: 'Top communities matched by activity and interest',
+  },
+  {
+    id: 'trending',
+    label: 'Trending Topics',
+    description: 'Live hashtags and active conversations across Nexora',
+  },
+];
+
+export const DEFAULT_HOMEPAGE_CUSTOMIZATION: HomepageCustomization = {
+  layout: 'command',
+  showStories: true,
+  showRecommendedCreators: true,
+  showSuggestedSpaces: true,
+  showTrendingTopics: true,
+  showVibesShelf: true,
+  feedDensity: 'comfortable',
+  defaultFeedFilter: 'all',
+  sectionOrder: ['stories', 'creators', 'spaces', 'trending'],
+};
+
+const VALID_HOMEPAGE_LAYOUTS: HomepageLayoutMode[] = ['command', 'editorial', 'stream'];
+const VALID_HOMEPAGE_DENSITIES: HomepageFeedDensity[] = ['comfortable', 'compact'];
+const VALID_HOMEPAGE_SORTS: HomepageFeedSort[] = ['all', 'trending', 'media', 'discussions', 'polls'];
+const VALID_HOMEPAGE_SECTIONS: HomepageSectionId[] = ['stories', 'creators', 'spaces', 'trending'];
+
+export function withHomepageCustomizationDefaults(
+  raw?: Partial<HomepageCustomization> | null
+): HomepageCustomization {
+  const layout: HomepageLayoutMode =
+    raw?.layout && VALID_HOMEPAGE_LAYOUTS.includes(raw.layout)
+      ? raw.layout
+      : DEFAULT_HOMEPAGE_CUSTOMIZATION.layout;
+
+  const feedDensity: HomepageFeedDensity =
+    raw?.feedDensity && VALID_HOMEPAGE_DENSITIES.includes(raw.feedDensity)
+      ? raw.feedDensity
+      : DEFAULT_HOMEPAGE_CUSTOMIZATION.feedDensity;
+
+  const defaultFeedFilter: HomepageFeedSort =
+    raw?.defaultFeedFilter && VALID_HOMEPAGE_SORTS.includes(raw.defaultFeedFilter)
+      ? raw.defaultFeedFilter
+      : DEFAULT_HOMEPAGE_CUSTOMIZATION.defaultFeedFilter;
+
+  const seen = new Set<HomepageSectionId>();
+  const ordered: HomepageSectionId[] = [];
+  if (Array.isArray(raw?.sectionOrder)) {
+    for (const item of raw.sectionOrder) {
+      if (VALID_HOMEPAGE_SECTIONS.includes(item) && !seen.has(item)) {
+        seen.add(item);
+        ordered.push(item);
+      }
+    }
+  }
+  for (const fallbackId of VALID_HOMEPAGE_SECTIONS) {
+    if (!seen.has(fallbackId)) {
+      seen.add(fallbackId);
+      ordered.push(fallbackId);
+    }
+  }
+
+  return {
+    layout,
+    showStories: raw?.showStories !== false,
+    showRecommendedCreators: raw?.showRecommendedCreators !== false,
+    showSuggestedSpaces: raw?.showSuggestedSpaces !== false,
+    showTrendingTopics: raw?.showTrendingTopics !== false,
+    showVibesShelf: raw?.showVibesShelf !== false,
+    feedDensity,
+    defaultFeedFilter,
+    sectionOrder: ordered,
+  };
+}
+
+export const sanitizeHomepageCustomization = withHomepageCustomizationDefaults;
 
 export const DEFAULT_PLATFORM_CONFIG: PlatformConfig = {
   platformName: 'NEXORA',

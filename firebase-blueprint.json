@@ -665,13 +665,27 @@
     },
     "UserPreferences": {
       "title": "UserPreferences",
-      "description": "Per-user chat pins/mutes and search history.",
+      "description": "Per-user chat pins/mutes, search history, and customizable homepage layout preferences.",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
         "pinnedConvIds": { "type": "array" },
         "mutedConvIds": { "type": "array" },
         "recentSearches": { "type": "array" },
+        "homepagePrefs": {
+          "type": "object",
+          "properties": {
+            "layout": { "type": "string", "enum": ["command", "editorial", "stream"] },
+            "showStories": { "type": "boolean" },
+            "showRecommendedCreators": { "type": "boolean" },
+            "showSuggestedSpaces": { "type": "boolean" },
+            "showTrendingTopics": { "type": "boolean" },
+            "showVibesShelf": { "type": "boolean" },
+            "feedDensity": { "type": "string", "enum": ["comfortable", "compact"] },
+            "defaultFeedFilter": { "type": "string", "enum": ["all", "trending", "media", "discussions", "polls"] },
+            "sectionOrder": { "type": "array" }
+          }
+        },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "pinnedConvIds", "mutedConvIds", "recentSearches", "updatedAt"]

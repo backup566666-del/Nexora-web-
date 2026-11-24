@@ -16,6 +16,7 @@ import {
   Search,
   Send,
   Shield,
+  Sparkles,
   Upload,
   UserCheck,
   UserPlus,
@@ -225,6 +226,21 @@ export function SpacesPage({
     }
   };
 
+  const unreadInvitesCount = spaceInvites.filter((i) => !i.read).length;
+
+  const navItems: Array<{
+    id: 'discover' | 'mine' | 'invites' | 'joined' | 'create';
+    label: string;
+    icon: React.ComponentType<{ size?: number }>;
+    badge?: number;
+  }> = [
+    { id: 'discover', label: 'Discover', icon: Compass },
+    { id: 'mine', label: 'My Spaces', icon: Layers },
+    { id: 'invites', label: 'Invites', icon: Mail, badge: unreadInvitesCount },
+    { id: 'joined', label: 'Joined', icon: UserCheck },
+    { id: 'create', label: 'Create Space', icon: FolderPlus },
+  ];
+
   const filteredSpaces = spaces.filter((s) => {
     if (s.status === 'suspended' && !canManageAllCommunities) return false;
     if (s.status === 'pending' && s.ownerId !== profile.uid && !canManageAllCommunities) {
@@ -243,47 +259,61 @@ export function SpacesPage({
     return true;
   });
 
-  // Dedicated Space Detail Interior View (Non-Discord clean editorial layout)
+  // Dedicated Space Detail Interior View (Responsive Hero + Tabs + Workspace + Pulse Rail)
   if (activeSpace) {
     const nonMembers = users.filter(
       (u) => u.uid !== profile.uid && !spaceMembers.some((m) => m.uid === u.uid)
     );
+    const ownerProfile = users.find((u) => u.uid === activeSpace.ownerId);
+
     return (
-      <div className="space-y-6">
-        <button
-          type="button"
-          onClick={() => {
-            setActiveSpaceId(null);
-            setInVoiceRoom(false);
-          }}
-          className="inline-flex items-center gap-2 text-xs font-medium text-[#94A3B8] hover:text-white"
-        >
-          <ArrowLeft size={15} /> Back to Explore Spaces
-        </button>
+      <div className="space-y-5">
+        <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveSpaceId(null);
+              setInVoiceRoom(false);
+            }}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs font-medium text-[#CBD5E1] hover:text-white transition-colors"
+          >
+            <ArrowLeft size={14} /> Back to Explore Spaces
+          </button>
+          <span className="text-[11px] font-mono-tabular text-[#94A3B8]">
+            {formatCompactCount(activeSpace.membersCount)} members · {events.length} events
+          </span>
+        </div>
 
         {actionError && (
           <FriendlyErrorBanner message={actionError} onDismiss={() => setActionError('')} />
         )}
 
-        <div className="relative rounded-3xl overflow-hidden border border-[#8B5CF6]/25 min-h-[220px] sm:aspect-[16/5]">
+        {/* Panoramic Hero Cover */}
+        <div className="relative rounded-3xl overflow-hidden border border-[#8B5CF6]/25 min-h-[230px] sm:min-h-[260px] lg:aspect-[16/5] shadow-[0_18px_50px_rgba(0,0,0,0.55)]">
           <ResilientImage
             src={activeSpace.coverUrl}
             alt={activeSpace.name}
             style={{ objectPosition: `50% ${activeSpace.coverPositionY ?? 50}%` }}
             className="w-full h-full object-cover"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/25 p-4 sm:p-6 lg:p-9 flex flex-col justify-end">
+          <div className="absolute inset-0 bg-gradient-to-t from-[#06060A] via-[#06060A]/65 to-black/25 p-5 sm:p-7 lg:p-9 flex flex-col justify-end">
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
               <div className="space-y-2 max-w-2xl">
-                <p className="text-xs font-medium text-[#C084FC]">
-                  {activeSpace.category}
-                  {activeSpace.isPrivate ? ' · Private Space' : ' · Open Space'}
+                <p className="text-xs font-semibold text-[#C084FC] inline-flex items-center gap-1.5">
+                  <span>{activeSpace.category}</span>
+                  <span>·</span>
+                  <span className="inline-flex items-center gap-1">
+                    {activeSpace.isPrivate && <Lock size={11} />}
+                    {activeSpace.isPrivate ? 'Private Space' : 'Open Space'}
+                  </span>
                 </p>
-                <h1 className="font-display text-2xl lg:text-4xl font-bold text-white inline-flex items-center gap-2">
+                <h1 className="font-display text-2xl sm:text-3xl lg:text-4xl font-bold text-white inline-flex items-center gap-2 tracking-tight">
                   {activeSpace.name}
                   {activeSpace.verified && <VerifiedBadge size={22} />}
                 </h1>
-                <p className="text-sm text-[#E2E8F0]">{activeSpace.description}</p>
+                <p className="text-xs sm:text-sm text-[#E2E8F0] leading-relaxed">
+                  {activeSpace.description}
+                </p>
                 <p className="text-xs text-[#CBD5E1] font-mono-tabular">
                   Owner @{activeSpace.ownerUsername} · Created{' '}
                   {activeSpace.createdAt?.toDate
@@ -301,7 +331,7 @@ export function SpacesPage({
                   <button
                     type="button"
                     onClick={() => setShowInviteModal(true)}
-                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-semibold text-white"
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-semibold text-white transition-colors"
                   >
                     <UserPlus size={14} /> Invite Members
                   </button>
@@ -310,7 +340,7 @@ export function SpacesPage({
                   <button
                     type="button"
                     onClick={() => setEditingCover(true)}
-                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-black/65 border border-white/20 text-xs font-medium text-white hover:bg-black/85"
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-black/70 border border-white/20 text-xs font-medium text-white hover:bg-black/90 transition-colors"
                   >
                     <Edit3 size={13} /> Edit Cover
                   </button>
@@ -322,8 +352,8 @@ export function SpacesPage({
                     }
                     className={`px-5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                       isMemberOfActive
-                        ? 'bg-white/15 hover:bg-white/25 text-white'
-                        : 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white'
+                        ? 'bg-white/15 hover:bg-white/25 text-white border border-white/15'
+                        : 'bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-white shadow-[0_4px_18px_rgba(124,58,237,0.4)]'
                     }`}
                   >
                     {isMemberOfActive ? 'Joined' : 'Join Space'}
@@ -334,11 +364,11 @@ export function SpacesPage({
           </div>
         </div>
 
-        {/* Inner Space Navigation */}
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar border-b border-white/[0.08] pb-3.5">
+        {/* Inner Space Navigation Strip */}
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar border-b border-white/[0.08] pb-3">
           {[
             { id: 'posts', label: 'Community Posts' },
-            { id: 'discussions', label: 'Discussions' },
+            { id: 'discussions', label: `Discussions (${discussions.length})` },
             { id: 'members', label: `Members (${spaceMembers.length})` },
             { id: 'events', label: `Events (${events.length})` },
             { id: 'voice', label: 'Audio Lounge' },
@@ -348,9 +378,9 @@ export function SpacesPage({
               key={item.id}
               type="button"
               onClick={() => setSpaceInnerTab(item.id as typeof spaceInnerTab)}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap ${
+              className={`px-4 py-2 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap min-h-[38px] ${
                 spaceInnerTab === item.id
-                  ? 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white'
+                  ? 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white shadow-[0_4px_14px_rgba(124,58,237,0.3)]'
                   : 'text-[#94A3B8] hover:text-white hover:bg-white/[0.05]'
               }`}
             >
@@ -359,301 +389,433 @@ export function SpacesPage({
           ))}
         </div>
 
-        {spaceInnerTab === 'posts' && (
-          <div className="max-w-3xl space-y-5">
-            {isMemberOfActive && (
-              <PostComposer spaces={spaces} users={users} defaultSpaceId={activeSpace.id} />
-            )}
-            {spacePosts.length === 0 ? (
-              <p className="text-xs text-[#64748B] py-6">
-                No community posts in {activeSpace.name} yet.
-              </p>
-            ) : (
-              spacePosts.map((p) => (
-                <PostCard
-                  key={p.id}
-                  post={p}
-                  isSaved={savedPostIds.includes(p.id)}
-                  onOpenProfile={onOpenProfile}
-                  usersDirectory={users}
-                />
-              ))
-            )}
-          </div>
-        )}
-
-        {spaceInnerTab === 'discussions' && (
-          <div className="max-w-3xl rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 overflow-hidden">
-            {!isMemberOfActive ? (
-              <div className="p-10 text-center space-y-3">
-                <MessageSquare size={22} className="mx-auto text-[#A855F7]" />
-                <p className="text-sm text-white font-semibold">Join this Space to participate</p>
-                <button
-                  type="button"
-                  onClick={() => void toggleSpaceMembership(activeSpace, profile, false)}
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white"
-                >
-                  Join Space
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="p-5 space-y-3 max-h-[440px] overflow-y-auto">
-                  {discussions.length === 0 ? (
-                    <p className="text-xs text-[#64748B]">
-                      Start a community discussion thread below.
+        {/* 2-Column Space Interior Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <div className="lg:col-span-8 min-w-0">
+            {spaceInnerTab === 'posts' && (
+              <div className="space-y-5">
+                {isMemberOfActive && (
+                  <PostComposer spaces={spaces} users={users} defaultSpaceId={activeSpace.id} />
+                )}
+                {spacePosts.length === 0 ? (
+                  <div className="p-8 rounded-2xl bg-[#0D0B16] border border-white/[0.07] text-center space-y-2">
+                    <Sparkles size={20} className="mx-auto text-[#A855F7]" />
+                    <p className="text-sm font-semibold text-white">No posts in {activeSpace.name} yet</p>
+                    <p className="text-xs text-[#94A3B8]">
+                      {isMemberOfActive
+                        ? 'Share the first post with your community above.'
+                        : 'Join this Space to share posts and updates.'}
                     </p>
-                  ) : (
-                    discussions.map((d) => {
-                      const adminStatus = getAdminEffectiveStatus(d.authorId);
-                      const badgeStatus = adminStatus && adminStatus !== 'offline' ? adminStatus : null;
-                      return (
-                        <div key={d.id} className="flex items-start gap-3">
-                          <div className="relative shrink-0">
-                            <ResilientImage
-                              src={d.authorAvatar}
-                              alt={d.authorName}
-                              className="w-8 h-8 rounded-full object-cover"
-                            />
-                            {badgeStatus && (
-                              <span className="absolute -bottom-0.5 -right-0.5">
-                                <PresenceBadge status={badgeStatus} size="xs" />
-                              </span>
-                            )}
-                          </div>
-                          <div className="space-y-0.5 min-w-0">
-                            <div className="flex items-center gap-2 text-xs flex-wrap">
-                              <span className="font-semibold text-white inline-flex items-center gap-1">
-                                {d.authorName}
-                                <BadgeStrip badges={getUserBadges(d.authorId)} size={12} max={2} />
-                                {badgeStatus && <PresenceBadge status={badgeStatus} size="xs" />}
-                              </span>
-                              <span className="text-[#64748B]">
-                                {formatRelativeTime(d.createdAt)}
-                              </span>
-                            </div>
-                            <p className="text-sm text-[#CBD5E1] break-words">{d.text}</p>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    if (!discussionInput.trim()) return;
-                    setActionError('');
-                    try {
-                      await sendSpaceDiscussion({
-                        spaceId: activeSpace.id,
-                        author: profile,
-                        text: discussionInput,
-                        channel: 'general',
-                      });
-                      setDiscussionInput('');
-                    } catch (err) {
-                      setActionError(extractReadableErrorMessage(err, "Your discussion message wasn't sent. Please try again."));
-                    }
-                  }}
-                  className="p-4 border-t border-white/10 flex gap-2"
-                >
-                  <input
-                    type="text"
-                    value={discussionInput}
-                    onChange={(e) => setDiscussionInput(e.target.value)}
-                    placeholder={`Message ${activeSpace.name} discussion...`}
-                    className="flex-1 px-4 py-2.5 rounded-xl bg-[#06060A] border border-white/10 text-sm text-white outline-none"
-                  />
-                  <button
-                    type="submit"
-                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white"
-                    aria-label="Send discussion message"
-                  >
-                    <Send size={15} />
-                  </button>
-                </form>
-              </>
+                  </div>
+                ) : (
+                  spacePosts.map((p) => (
+                    <PostCard
+                      key={p.id}
+                      post={p}
+                      isSaved={savedPostIds.includes(p.id)}
+                      onOpenProfile={onOpenProfile}
+                      usersDirectory={users}
+                    />
+                  ))
+                )}
+              </div>
             )}
-          </div>
-        )}
 
-        {spaceInnerTab === 'members' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {spaceMembers.map((m) => {
-              const adminStatus = getAdminEffectiveStatus(m.uid);
-              const badgeStatus = adminStatus && adminStatus !== 'offline' ? adminStatus : null;
-              return (
-                <div
-                  key={m.uid}
-                  className="p-4 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 flex items-center justify-between gap-3"
-                >
-                  <button
-                    type="button"
-                    onClick={() => onOpenProfile(m.uid)}
-                    className="flex items-center gap-3 text-left min-w-0"
-                  >
-                    <div className="relative shrink-0">
-                      <ResilientImage
-                        src={m.avatarUrl}
-                        alt={m.displayName}
-                        className="w-11 h-11 rounded-full object-cover"
-                      />
-                      {badgeStatus && (
-                        <span className="absolute -bottom-0.5 -right-0.5">
-                          <PresenceBadge status={badgeStatus} size="xs" />
-                        </span>
+            {spaceInnerTab === 'discussions' && (
+              <div className="rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 overflow-hidden">
+                {!isMemberOfActive ? (
+                  <div className="p-10 text-center space-y-3">
+                    <MessageSquare size={22} className="mx-auto text-[#A855F7]" />
+                    <p className="text-sm text-white font-semibold">Join this Space to participate</p>
+                    <button
+                      type="button"
+                      onClick={() => void toggleSpaceMembership(activeSpace, profile, false)}
+                      className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white"
+                    >
+                      Join Space
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="p-5 space-y-3.5 max-h-[460px] overflow-y-auto">
+                      {discussions.length === 0 ? (
+                        <p className="text-xs text-[#64748B]">
+                          Start a community discussion thread below.
+                        </p>
+                      ) : (
+                        discussions.map((d) => {
+                          const adminStatus = getAdminEffectiveStatus(d.authorId);
+                          const badgeStatus =
+                            adminStatus && adminStatus !== 'offline' ? adminStatus : null;
+                          return (
+                            <div key={d.id} className="flex items-start gap-3">
+                              <div className="relative shrink-0">
+                                <ResilientImage
+                                  src={d.authorAvatar}
+                                  alt={d.authorName}
+                                  className="w-8 h-8 rounded-full object-cover"
+                                />
+                                {badgeStatus && (
+                                  <span className="absolute -bottom-0.5 -right-0.5">
+                                    <PresenceBadge status={badgeStatus} size="xs" />
+                                  </span>
+                                )}
+                              </div>
+                              <div className="space-y-0.5 min-w-0">
+                                <div className="flex items-center gap-2 text-xs flex-wrap">
+                                  <span className="font-semibold text-white inline-flex items-center gap-1">
+                                    {d.authorName}
+                                    <BadgeStrip badges={getUserBadges(d.authorId)} size={12} max={2} />
+                                    {badgeStatus && <PresenceBadge status={badgeStatus} size="xs" />}
+                                  </span>
+                                  <span className="text-[#64748B]">
+                                    {formatRelativeTime(d.createdAt)}
+                                  </span>
+                                </div>
+                                <p className="text-sm text-[#CBD5E1] break-words">{d.text}</p>
+                              </div>
+                            </div>
+                          );
+                        })
                       )}
                     </div>
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        if (!discussionInput.trim()) return;
+                        setActionError('');
+                        try {
+                          await sendSpaceDiscussion({
+                            spaceId: activeSpace.id,
+                            author: profile,
+                            text: discussionInput,
+                            channel: 'general',
+                          });
+                          setDiscussionInput('');
+                        } catch (err) {
+                          setActionError(
+                            extractReadableErrorMessage(
+                              err,
+                              "Your discussion message wasn't sent. Please try again."
+                            )
+                          );
+                        }
+                      }}
+                      className="p-4 border-t border-white/10 flex gap-2"
+                    >
+                      <input
+                        type="text"
+                        value={discussionInput}
+                        onChange={(e) => setDiscussionInput(e.target.value)}
+                        placeholder={`Message ${activeSpace.name} discussion...`}
+                        className="flex-1 px-4 py-2.5 rounded-xl bg-[#06060A] border border-white/10 focus:border-[#8B5CF6] text-sm text-white outline-none"
+                      />
+                      <button
+                        type="submit"
+                        className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white"
+                        aria-label="Send discussion message"
+                      >
+                        <Send size={15} />
+                      </button>
+                    </form>
+                  </>
+                )}
+              </div>
+            )}
+
+            {spaceInnerTab === 'members' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {spaceMembers.map((m) => {
+                  const adminStatus = getAdminEffectiveStatus(m.uid);
+                  const badgeStatus = adminStatus && adminStatus !== 'offline' ? adminStatus : null;
+                  return (
+                    <div
+                      key={m.uid}
+                      className="p-4 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 hover:border-[#8B5CF6]/40 transition-colors flex items-center justify-between gap-3"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onOpenProfile(m.uid)}
+                        className="flex items-center gap-3 text-left min-w-0 w-full"
+                      >
+                        <div className="relative shrink-0">
+                          <ResilientImage
+                            src={m.avatarUrl}
+                            alt={m.displayName}
+                            className="w-11 h-11 rounded-full object-cover"
+                          />
+                          {badgeStatus && (
+                            <span className="absolute -bottom-0.5 -right-0.5">
+                              <PresenceBadge status={badgeStatus} size="xs" />
+                            </span>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1 max-w-full">
+                            <span className="truncate">{m.displayName}</span>
+                            <BadgeStrip
+                              badges={getUserBadges(m.uid)}
+                              size={12}
+                              max={2}
+                              interactive={false}
+                            />
+                            <TierBadge
+                              tier={getUserTier(
+                                m.uid,
+                                users.find((u) => u.uid === m.uid)?.subscriptionTier
+                              )}
+                              showFree={false}
+                            />
+                            {badgeStatus && <PresenceBadge status={badgeStatus} size="xs" />}
+                          </p>
+                          <p className="text-[11px] text-[#94A3B8] truncate">
+                            @{m.username} · {m.role}
+                          </p>
+                        </div>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {spaceInnerTab === 'events' && (
+              <div className="space-y-4">
+                {isMemberOfActive && (
+                  <button
+                    type="button"
+                    onClick={() => setShowEventModal(true)}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white"
+                  >
+                    <Calendar size={14} /> Schedule Event
+                  </button>
+                )}
+                {events.length === 0 ? (
+                  <div className="p-8 rounded-2xl bg-[#0D0B16] border border-white/[0.07] text-center space-y-1.5">
+                    <Calendar size={20} className="mx-auto text-[#8B5CF6]" />
+                    <p className="text-xs font-semibold text-white">No events scheduled yet</p>
+                  </div>
+                ) : (
+                  events.map((ev) => (
+                    <div
+                      key={ev.id}
+                      className="p-5 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <h3 className="font-display text-base font-semibold text-white">{ev.title}</h3>
+                        <span className="font-mono-tabular text-xs text-[#C084FC]">
+                          {ev.scheduledFor}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#94A3B8] leading-relaxed">{ev.description}</p>
+                      <p className="text-[11px] text-[#64748B]">Hosted by {ev.hostName}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {spaceInnerTab === 'voice' && (
+              <div className="p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <h3 className="font-display text-base font-semibold text-white flex items-center gap-2">
+                      <Volume2 size={18} className="text-[#A855F7]" /> Live Audio Stage
+                    </h3>
+                    <p className="text-xs text-[#94A3B8]">
+                      Drop-in voice conversation for {activeSpace.name} members.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setInVoiceRoom((v) => !v)}
+                    className={`px-4 py-2 rounded-xl text-xs font-semibold shrink-0 ${
+                      inVoiceRoom
+                        ? 'bg-rose-600 text-white'
+                        : 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white'
+                    }`}
+                  >
+                    {inVoiceRoom ? 'Leave Audio Lounge' : 'Join Audio Lounge'}
+                  </button>
+                </div>
+
+                {inVoiceRoom && (
+                  <div className="p-4 rounded-xl bg-[#06060A] border border-white/10 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <ResilientImage
+                        src={profile.avatarUrl}
+                        alt={profile.displayName}
+                        className="w-10 h-10 rounded-full object-cover border-2 border-[#8B5CF6] shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-white truncate">
+                          {profile.displayName}
+                        </p>
+                        <p className="text-[11px] text-[#A855F7]">
+                          {micMuted ? 'Microphone muted' : 'Connected on stage'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setMicMuted((m) => !m)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-white shrink-0"
+                    >
+                      {micMuted ? <MicOff size={14} /> : <Mic size={14} />}
+                      {micMuted ? 'Unmute' : 'Mute'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {spaceInnerTab === 'moderation' && canModerate && (
+              <div className="p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-4">
+                <h3 className="font-display text-base font-semibold text-white flex items-center gap-2">
+                  <Shield size={17} className="text-[#A855F7]" /> Roles & Member Moderation
+                </h3>
+                <div className="divide-y divide-white/[0.06]">
+                  {spaceMembers.map((m) => (
+                    <div key={m.uid} className="py-3 flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-semibold text-white">{m.displayName}</p>
+                        <p className="text-[11px] text-[#94A3B8]">
+                          @{m.username} · {m.role}
+                        </p>
+                      </div>
+                      {m.uid !== activeSpace.ownerId && activeSpace.ownerId === profile.uid && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void updateSpaceMemberRole(
+                                activeSpace.id,
+                                m.uid,
+                                m.role === 'admin' ? 'member' : 'admin'
+                              )
+                            }
+                            className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-white"
+                          >
+                            {m.role === 'admin' ? 'Demote to Member' : 'Promote to Admin'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void removeSpaceMember(activeSpace, m.uid)}
+                            className="px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-xs text-rose-300"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right Sticky Space Context Rail (Desktop) */}
+          <aside className="lg:col-span-4 space-y-4 lg:sticky lg:top-20">
+            <div className="p-5 rounded-2xl bg-[#0D0B16] border border-white/[0.08] space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold text-white uppercase tracking-wider">
+                  Space Pulse
+                </h3>
+                <span className="text-[11px] text-[#C084FC]">{activeSpace.category}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="p-2.5 rounded-xl bg-[#06060A] border border-white/[0.05]">
+                  <p className="text-sm font-bold text-white font-mono-tabular">
+                    {formatCompactCount(activeSpace.membersCount)}
+                  </p>
+                  <p className="text-[10px] text-[#94A3B8]">Members</p>
+                </div>
+                <div className="p-2.5 rounded-xl bg-[#06060A] border border-white/[0.05]">
+                  <p className="text-sm font-bold text-white font-mono-tabular">
+                    {spacePosts.length}
+                  </p>
+                  <p className="text-[10px] text-[#94A3B8]">Posts</p>
+                </div>
+                <div className="p-2.5 rounded-xl bg-[#06060A] border border-white/[0.05]">
+                  <p className="text-sm font-bold text-white font-mono-tabular">
+                    {events.length}
+                  </p>
+                  <p className="text-[10px] text-[#94A3B8]">Events</p>
+                </div>
+              </div>
+
+              {ownerProfile && (
+                <div className="pt-3 border-t border-white/[0.06] space-y-2">
+                  <p className="text-[11px] font-medium text-[#94A3B8]">Hosted by</p>
+                  <button
+                    type="button"
+                    onClick={() => onOpenProfile(ownerProfile.uid)}
+                    className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-white/[0.04] transition-colors text-left"
+                  >
+                    <ResilientImage
+                      src={ownerProfile.avatarUrl}
+                      alt={ownerProfile.displayName}
+                      className="w-9 h-9 rounded-full object-cover shrink-0"
+                    />
                     <div className="min-w-0">
                       <p className="text-xs font-semibold text-white truncate inline-flex items-center gap-1 max-w-full">
-                        <span className="truncate">{m.displayName}</span>
-                        <BadgeStrip badges={getUserBadges(m.uid)} size={12} max={2} interactive={false} />
-                        <TierBadge
-                          tier={getUserTier(m.uid, users.find((u) => u.uid === m.uid)?.subscriptionTier)}
-                          showFree={false}
+                        <span className="truncate">{ownerProfile.displayName}</span>
+                        <BadgeStrip
+                          badges={getUserBadges(ownerProfile.uid)}
+                          size={12}
+                          max={2}
+                          interactive={false}
                         />
-                        {badgeStatus && <PresenceBadge status={badgeStatus} size="xs" />}
                       </p>
                       <p className="text-[11px] text-[#94A3B8] truncate">
-                        @{m.username} · {m.role}
+                        @{ownerProfile.username}
                       </p>
                     </div>
                   </button>
                 </div>
-              );
-            })}
-          </div>
-        )}
-
-        {spaceInnerTab === 'events' && (
-          <div className="space-y-4 max-w-3xl">
-            {isMemberOfActive && (
-              <button
-                type="button"
-                onClick={() => setShowEventModal(true)}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white"
-              >
-                <Calendar size={14} /> Schedule Event
-              </button>
-            )}
-            {events.length === 0 ? (
-              <p className="text-xs text-[#64748B]">No events scheduled yet.</p>
-            ) : (
-              events.map((ev) => (
-                <div
-                  key={ev.id}
-                  className="p-5 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/15 space-y-2"
-                >
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-display text-base font-semibold text-white">{ev.title}</h3>
-                    <span className="font-mono-tabular text-xs text-[#C084FC]">
-                      {ev.scheduledFor}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#94A3B8]">{ev.description}</p>
-                  <p className="text-[11px] text-[#64748B]">Hosted by {ev.hostName}</p>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-
-        {spaceInnerTab === 'voice' && (
-          <div className="max-w-2xl p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-5">
-            <div className="flex items-center justify-between">
-              <div className="space-y-1">
-                <h3 className="font-display text-base font-semibold text-white flex items-center gap-2">
-                  <Volume2 size={18} className="text-[#A855F7]" /> Live Audio Stage
-                </h3>
-                <p className="text-xs text-[#94A3B8]">
-                  Drop-in voice conversation for {activeSpace.name} members.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setInVoiceRoom((v) => !v)}
-                className={`px-4 py-2 rounded-xl text-xs font-semibold ${
-                  inVoiceRoom
-                    ? 'bg-rose-600 text-white'
-                    : 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white'
-                }`}
-              >
-                {inVoiceRoom ? 'Leave Audio Lounge' : 'Join Audio Lounge'}
-              </button>
+              )}
             </div>
 
-            {inVoiceRoom && (
-              <div className="p-4 rounded-xl bg-[#06060A] border border-white/10 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <ResilientImage
-                    src={profile.avatarUrl}
-                    alt={profile.displayName}
-                    className="w-10 h-10 rounded-full object-cover border-2 border-[#8B5CF6]"
-                  />
-                  <div>
-                    <p className="text-xs font-semibold text-white">{profile.displayName}</p>
-                    <p className="text-[11px] text-[#A855F7]">
-                      {micMuted ? 'Microphone muted' : 'Connected on stage'}
-                    </p>
-                  </div>
-                </div>
+            <div className="p-5 rounded-2xl bg-[#0D0B16] border border-white/[0.08] space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold text-white">Upcoming Events</h3>
                 <button
                   type="button"
-                  onClick={() => setMicMuted((m) => !m)}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-white"
+                  onClick={() => setSpaceInnerTab('events')}
+                  className="text-[11px] text-[#C084FC] hover:text-white"
                 >
-                  {micMuted ? <MicOff size={14} /> : <Mic size={14} />}
-                  {micMuted ? 'Unmute' : 'Mute'}
+                  View all
                 </button>
               </div>
-            )}
-          </div>
-        )}
-
-        {spaceInnerTab === 'moderation' && canModerate && (
-          <div className="max-w-3xl p-6 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-4">
-            <h3 className="font-display text-base font-semibold text-white flex items-center gap-2">
-              <Shield size={17} className="text-[#A855F7]" /> Roles & Member Moderation
-            </h3>
-            <div className="divide-y divide-white/[0.06]">
-              {spaceMembers.map((m) => (
-                <div key={m.uid} className="py-3 flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-semibold text-white">{m.displayName}</p>
-                    <p className="text-[11px] text-[#94A3B8]">
-                      @{m.username} · {m.role}
-                    </p>
-                  </div>
-                  {m.uid !== activeSpace.ownerId && activeSpace.ownerId === profile.uid && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void updateSpaceMemberRole(
-                            activeSpace.id,
-                            m.uid,
-                            m.role === 'admin' ? 'member' : 'admin'
-                          )
-                        }
-                        className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-white"
-                      >
-                        {m.role === 'admin' ? 'Demote to Member' : 'Promote to Admin'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void removeSpaceMember(activeSpace, m.uid)}
-                        className="px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-xs text-rose-300"
-                      >
-                        Remove
-                      </button>
+              {events.length === 0 ? (
+                <p className="text-xs text-[#64748B]">No scheduled events yet.</p>
+              ) : (
+                <div className="space-y-2.5">
+                  {events.slice(0, 2).map((ev) => (
+                    <div
+                      key={ev.id}
+                      className="p-3 rounded-xl bg-[#06060A] border border-white/[0.06] space-y-1"
+                    >
+                      <p className="text-xs font-semibold text-white truncate">{ev.title}</p>
+                      <p className="text-[11px] font-mono-tabular text-[#C084FC]">
+                        {ev.scheduledFor}
+                      </p>
                     </div>
-                  )}
+                  ))}
                 </div>
-              ))}
+              )}
+              {isMemberOfActive && (
+                <button
+                  type="button"
+                  onClick={() => setShowEventModal(true)}
+                  className="w-full py-2 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-xs font-semibold text-white transition-colors"
+                >
+                  + Schedule Event
+                </button>
+              )}
             </div>
-          </div>
-        )}
+          </aside>
+        </div>
 
         {/* Invite Members Modal */}
         {showInviteModal && (
@@ -663,7 +825,7 @@ export function SpacesPage({
                 <h3 className="font-display text-base font-semibold text-white">
                   Invite to {activeSpace.name}
                 </h3>
-                <button type="button" onClick={() => setShowInviteModal(false)}>
+                <button type="button" onClick={() => setShowInviteModal(false)} aria-label="Close invite modal">
                   <X size={18} className="text-[#94A3B8]" />
                 </button>
               </div>
@@ -687,7 +849,9 @@ export function SpacesPage({
                             className="w-8 h-8 rounded-full object-cover shrink-0"
                           />
                           <div className="min-w-0">
-                            <p className="text-xs font-semibold text-white truncate">{u.displayName}</p>
+                            <p className="text-xs font-semibold text-white truncate">
+                              {u.displayName}
+                            </p>
                             <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
                           </div>
                         </div>
@@ -700,7 +864,12 @@ export function SpacesPage({
                               await sendSpaceInviteNotification(activeSpace, profile, u.uid);
                               setInvitedUids((prev) => [...prev, u.uid]);
                             } catch (err) {
-                              setActionError(extractReadableErrorMessage(err, 'Unable to send invitation right now.'));
+                              setActionError(
+                                extractReadableErrorMessage(
+                                  err,
+                                  'Unable to send invitation right now.'
+                                )
+                              );
                             }
                           }}
                           className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
@@ -739,7 +908,9 @@ export function SpacesPage({
                   setEventDate('');
                   setShowEventModal(false);
                 } catch (err) {
-                  setActionError(extractReadableErrorMessage(err, 'Unable to schedule event right now.'));
+                  setActionError(
+                    extractReadableErrorMessage(err, 'Unable to schedule event right now.')
+                  );
                 }
               }}
               className="w-full max-w-md bg-[#0D0B16] border border-[#8B5CF6]/25 rounded-2xl p-6 space-y-4"
@@ -748,7 +919,11 @@ export function SpacesPage({
                 <h3 className="font-display text-base font-semibold text-white">
                   Schedule Space Event
                 </h3>
-                <button type="button" onClick={() => setShowEventModal(false)}>
+                <button
+                  type="button"
+                  onClick={() => setShowEventModal(false)}
+                  aria-label="Close event modal"
+                >
                   <X size={18} className="text-[#94A3B8]" />
                 </button>
               </div>
@@ -799,26 +974,48 @@ export function SpacesPage({
     );
   }
 
-  // SPACES DESKTOP EXPLORE LAYOUT (Left Sidebar + Explore Spaces Grid)
+  // SPACES WORKSPACE (Mobile horizontal segmented bar + Desktop Left Sidebar + Explore Grid)
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-      {/* LEFT SIDEBAR: Discover, My Spaces, Invites, Joined, Create Space */}
-      <aside className="lg:col-span-3 space-y-5">
-        <div className="sticky top-24 p-4 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-1.5">
-          {[
-            { id: 'discover', label: 'Discover', icon: Compass },
-            { id: 'mine', label: 'My Spaces', icon: Layers },
-            { id: 'invites', label: 'Invites', icon: Mail, badge: spaceInvites.filter((i) => !i.read).length },
-            { id: 'joined', label: 'Joined', icon: UserCheck },
-            { id: 'create', label: 'Create Space', icon: FolderPlus },
-          ].map((item) => {
+    <div className="space-y-5 lg:space-y-0 lg:grid lg:grid-cols-12 lg:gap-7 items-start">
+      {/* MOBILE HORIZONTAL SEGMENTED TAB STRIP */}
+      <div className="lg:hidden flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          const active = sidebarTab === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setSidebarTab(item.id)}
+              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 min-h-[40px] transition-all ${
+                active
+                  ? 'bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-white shadow-[0_4px_16px_rgba(124,58,237,0.35)]'
+                  : 'bg-[#0D0B16] border border-white/[0.08] text-[#CBD5E1]'
+              }`}
+            >
+              <Icon size={14} />
+              <span>{item.label}</span>
+              {item.badge && item.badge > 0 ? (
+                <span className="px-1.5 py-0.5 rounded-md bg-black/35 text-[10px] font-mono-tabular">
+                  {item.badge}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* DESKTOP LEFT SIDEBAR */}
+      <aside className="hidden lg:block lg:col-span-3 space-y-5">
+        <div className="sticky top-20 p-4 rounded-2xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-1.5">
+          {navItems.map((item) => {
             const Icon = item.icon;
             const active = sidebarTab === item.id;
             return (
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setSidebarTab(item.id as typeof sidebarTab)}
+                onClick={() => setSidebarTab(item.id)}
                 className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-xs font-semibold transition-all ${
                   active
                     ? 'bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-white shadow-[0_4px_18px_rgba(124,58,237,0.35)]'
@@ -845,7 +1042,7 @@ export function SpacesPage({
         {sidebarTab === 'create' ? (
           <form
             onSubmit={handleCreateSpace}
-            className="max-w-3xl p-4 sm:p-7 rounded-3xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-6"
+            className="max-w-3xl p-5 sm:p-7 rounded-3xl bg-[#0D0B16] border border-[#8B5CF6]/20 space-y-6"
           >
             <div>
               <h1 className="font-display text-2xl font-bold text-white">Create a Space</h1>
@@ -919,9 +1116,15 @@ export function SpacesPage({
               </div>
 
               <div className="relative aspect-[16/6] rounded-2xl overflow-hidden border border-[#8B5CF6]/25 bg-black">
-                <ResilientImage src={coverUrl} alt="Selected Space cover" className="w-full h-full object-cover" />
+                <ResilientImage
+                  src={coverUrl}
+                  alt="Selected Space cover"
+                  className="w-full h-full object-cover"
+                />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent p-4 flex flex-col justify-end">
-                  <p className="font-display text-lg font-bold text-white">{name || 'Community Preview'}</p>
+                  <p className="font-display text-lg font-bold text-white">
+                    {name || 'Community Preview'}
+                  </p>
                   <p className="text-xs text-[#CBD5E1]">{category}</p>
                 </div>
               </div>
@@ -933,7 +1136,9 @@ export function SpacesPage({
                     type="button"
                     onClick={() => setCoverUrl(c)}
                     className={`rounded-xl overflow-hidden aspect-video border-2 transition-all ${
-                      coverUrl === c ? 'border-[#8B5CF6]' : 'border-transparent opacity-65 hover:opacity-100'
+                      coverUrl === c
+                        ? 'border-[#8B5CF6]'
+                        : 'border-transparent opacity-65 hover:opacity-100'
                     }`}
                   >
                     <img src={c} alt="Cover option" className="w-full h-full object-cover" />
@@ -1054,22 +1259,22 @@ export function SpacesPage({
                   <button
                     type="button"
                     onClick={() => setSidebarTab('create')}
-                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-xs font-semibold text-white whitespace-nowrap min-h-[42px]"
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-xs font-semibold text-white whitespace-nowrap min-h-[42px] shadow-[0_4px_16px_rgba(124,58,237,0.3)]"
                   >
                     <Plus size={14} /> Create Space
                   </button>
                 </div>
               </div>
 
-              {/* Category Filters: All | Faith | Business | Finance | Lifestyle | Education | More */}
+              {/* Category Filters */}
               <div className="space-y-2.5">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 sm:flex-wrap">
                   {PRIMARY_CATEGORIES.map((cat) => (
                     <button
                       key={cat}
                       type="button"
                       onClick={() => setSelectedCategory(cat)}
-                      className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
+                      className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
                         selectedCategory === cat
                           ? 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white shadow-[0_4px_14px_rgba(124,58,237,0.35)]'
                           : 'bg-[#0D0B16] border border-white/[0.08] text-[#CBD5E1] hover:border-[#8B5CF6]/40 hover:text-white'
@@ -1081,7 +1286,7 @@ export function SpacesPage({
                   <button
                     type="button"
                     onClick={() => setShowMoreCategories((v) => !v)}
-                    className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
+                    className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
                       EXTRA_CATEGORIES.includes(selectedCategory)
                         ? 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white'
                         : 'bg-[#0D0B16] border border-white/[0.08] text-[#94A3B8] hover:text-white'
@@ -1127,7 +1332,7 @@ export function SpacesPage({
                   const joined = Boolean(membershipsMap[space.id]);
                   const isOwner = space.ownerId === profile.uid;
                   return (
-                    <div
+                    <article
                       key={space.id}
                       onClick={() => setActiveSpaceId(space.id)}
                       className="group relative rounded-3xl overflow-hidden border border-[#8B5CF6]/20 hover:border-[#8B5CF6]/60 min-h-[240px] sm:aspect-[16/10] bg-[#0D0B16] cursor-pointer shadow-[0_12px_40px_rgba(0,0,0,0.55)] transition-all"
@@ -1139,8 +1344,7 @@ export function SpacesPage({
                         className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-500"
                       />
 
-                      {/* Measured contrast scrim: ALL community information integrated directly ON THE COVER IMAGE */}
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/25 p-4 sm:p-6 flex flex-col justify-between">
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/25 p-5 sm:p-6 flex flex-col justify-between">
                         {/* Top metadata strip */}
                         <div className="flex items-center justify-between text-xs text-white/85">
                           <span className="font-medium inline-flex items-center gap-1.5">
@@ -1211,7 +1415,7 @@ export function SpacesPage({
                           </div>
                         </div>
                       </div>
-                    </div>
+                    </article>
                   );
                 })}
               </div>

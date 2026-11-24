@@ -361,11 +361,29 @@ export interface UserPrivate {
   updatedAt: Timestamp;
 }
 
+export type HomepageLayoutMode = 'command' | 'editorial' | 'stream';
+export type HomepageFeedDensity = 'comfortable' | 'compact';
+export type HomepageFeedSort = 'all' | 'trending' | 'media' | 'discussions' | 'polls';
+export type HomepageSectionId = 'stories' | 'creators' | 'spaces' | 'trending';
+
+export interface HomepageCustomization {
+  layout: HomepageLayoutMode;
+  showStories: boolean;
+  showRecommendedCreators: boolean;
+  showSuggestedSpaces: boolean;
+  showTrendingTopics: boolean;
+  showVibesShelf: boolean;
+  feedDensity: HomepageFeedDensity;
+  defaultFeedFilter: HomepageFeedSort;
+  sectionOrder: HomepageSectionId[];
+}
+
 export interface UserPreferences {
   uid: string;
   pinnedConvIds: string[];
   mutedConvIds: string[];
   recentSearches: string[];
+  homepagePrefs?: HomepageCustomization;
   updatedAt?: Timestamp;
 }
 

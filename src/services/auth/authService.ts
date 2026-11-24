@@ -187,6 +187,7 @@ export const PHONE_OTP_RESEND_COOLDOWN_SEC = 60;
 
 const PENDING_USERNAME_PREFIX = 'nexora_pending_username:';
 const PENDING_DISPLAYNAME_PREFIX = 'nexora_pending_name:';
+const REMEMBERED_EMAIL_HINT_PREFIX = 'nexora_remembered_email:';
 const PRESENCE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const AVATAR_URL_MAX_LEN = 200_000;
 const COVER_URL_MAX_LEN = 400_000;
@@ -785,14 +786,71 @@ export async function registerWithEmail(params: {
   return credential.user;
 }
 
+export function saveRememberedLoginHint(username: string, email: string): void {
+  const cleanUser = normalizeUsername(username);
+  const cleanEmail = email.trim().toLowerCase();
+  if (!isValidUsername(cleanUser) || !cleanEmail.includes('@')) return;
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(`${REMEMBERED_EMAIL_HINT_PREFIX}${cleanUser}`, cleanEmail);
+    }
+  } catch {
+    // Ignore storage restriction errors in private browsing
+  }
+}
+
+export function lookupRememberedLoginEmail(identifier: string): string | null {
+  const trimmed = identifier.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('@') && !trimmed.startsWith('@')) {
+    return trimmed;
+  }
+  const cleanUser = normalizeUsername(trimmed);
+  if (!isValidUsername(cleanUser)) return null;
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return window.localStorage.getItem(`${REMEMBERED_EMAIL_HINT_PREFIX}${cleanUser}`) || null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export async function resolveLoginIdentifierToEmail(identifier: string): Promise<string> {
+  const trimmed = identifier.trim();
+  if (!trimmed) {
+    throw new Error('Please enter your email address or username.');
+  }
+  if (trimmed.includes('@') && !trimmed.startsWith('@')) {
+    return trimmed;
+  }
+  const cleanUsername = normalizeUsername(trimmed);
+  if (!isValidUsername(cleanUsername)) {
+    throw new Error('Please enter a valid email address or username.');
+  }
+  const remembered = lookupRememberedLoginEmail(cleanUsername);
+  if (remembered) {
+    return remembered;
+  }
+  const uid = await resolveUidByUsername(cleanUsername);
+  if (uid) {
+    throw new Error(
+      `Enter the email address linked to @${cleanUsername} (or use your connected social sign-in) on this device.`
+    );
+  }
+  throw new Error(`No Nexora account was found matching @${cleanUsername}. Check your username or enter your email address.`);
+}
+
 export async function loginWithEmail(
-  email: string,
+  identifier: string,
   password: string,
   rememberSession: boolean,
   pendingCredentialToLink?: AuthCredential | null
 ): Promise<User> {
   await applyAuthPersistence(rememberSession);
-  const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
+  const resolvedEmail = await resolveLoginIdentifierToEmail(identifier);
+  const credential = await signInWithEmailAndPassword(auth, resolvedEmail, password);
   if (pendingCredentialToLink) {
     try {
       await linkWithCredential(credential.user, pendingCredentialToLink);
@@ -801,7 +859,10 @@ export async function loginWithEmail(
     }
   }
   if (isUserAccountVerified(credential.user)) {
-    await ensureUserDocuments(credential.user);
+    const profileDoc = await ensureUserDocuments(credential.user);
+    if (rememberSession && profileDoc?.username && credential.user.email) {
+      saveRememberedLoginHint(profileDoc.username, credential.user.email);
+    }
   }
   return credential.user;
 }

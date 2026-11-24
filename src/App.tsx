@@ -6,6 +6,7 @@ import { BadgeInfoModal } from './components/badges/BadgeInfoModal';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { LoadingScreen } from './components/common/LoadingScreen';
 import { NexoraLogo } from './components/branding/NexoraLogo';
+import { NexoraSplashScreen } from './components/branding/NexoraSplashScreen';
 import { DashboardShell } from './components/navigation/DashboardShell';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { PostCard } from './features/posts/PostCard';
@@ -69,9 +70,31 @@ function NexoraAppContent() {
     profileError,
     retryProfileLoad,
   } = useAuth();
-  const [authScreenMode, setAuthScreenMode] = useState<'landing' | 'login' | 'register'>('landing');
+  const [splashVisible, setSplashVisible] = useState<boolean>(() => {
+    try {
+      return typeof window !== 'undefined' && window.sessionStorage?.getItem('nexora_splash_done') !== '1';
+    } catch {
+      return false;
+    }
+  });
+  const [authScreenMode, setAuthScreenMode] = useState<'landing' | 'login' | 'register'>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const view = new URLSearchParams(window.location.search).get('view');
+        if (view === 'landing' || view === 'register' || view === 'login') {
+          return view;
+        }
+      }
+    } catch {
+      // Ignore query access restrictions
+    }
+    return 'login';
+  });
+  const [authTransitionState, setAuthTransitionState] = useState<'idle' | 'authenticating' | 'success'>('idle');
+  const [justSignedIn, setJustSignedIn] = useState(false);
   const [activeSection, setActiveSection] = useState<NavSection>('home');
   const [openAdminSettings, setOpenAdminSettings] = useState(false);
+  const [openCustomizeHomepage, setOpenCustomizeHomepage] = useState(false);
   const [targetProfileUid, setTargetProfileUid] = useState<string | null>(null);
   const [targetProfileTab, setTargetProfileTab] = useState<ProfileContentTab | undefined>(undefined);
   const [targetSpaceId, setTargetSpaceId] = useState<string | null>(null);
@@ -157,6 +180,14 @@ function NexoraAppContent() {
   }, [incomingGiftToast]);
 
   useEffect(() => {
+    if (!justSignedIn) return;
+    const timer = window.setTimeout(() => {
+      setJustSignedIn(false);
+    }, 6500);
+    return () => window.clearTimeout(timer);
+  }, [justSignedIn]);
+
+  useEffect(() => {
     if (deepLinkHandled || !profile?.onboardingCompleted) return;
     const params = new URLSearchParams(window.location.search);
     const billingSessionId =
@@ -216,19 +247,49 @@ function NexoraAppContent() {
     }
   }, [activeSection, isActiveStaff, platformConfig.features]);
 
+  const handleSplashComplete = () => {
+    try {
+      window.sessionStorage?.setItem('nexora_splash_done', '1');
+    } catch {
+      // Ignore sessionStorage restrictions
+    }
+    setSplashVisible(false);
+  };
+
+  if (splashVisible) {
+    return (
+      <NexoraSplashScreen
+        authReady={authReady && !loading}
+        hasActiveSession={Boolean(user && accountVerified)}
+        onComplete={handleSplashComplete}
+      />
+    );
+  }
+
   if (loading) {
     return <LoadingScreen />;
   }
 
-  // Unauthenticated visitor: Approved Landing Page or Auth Screen
-  if (!user) {
-    if (authScreenMode === 'landing') {
+  const handleAuthTransitionChange = (nextState: 'idle' | 'authenticating' | 'success') => {
+    setAuthTransitionState(nextState);
+    if (nextState === 'success') {
+      setJustSignedIn(true);
+    }
+  };
+
+  // Unauthenticated visitor OR completing live Auth glow-burst transition
+  if (!user || authTransitionState !== 'idle') {
+    if (!user && authScreenMode === 'landing') {
       return <LandingPage onOpenAuth={(mode) => setAuthScreenMode(mode)} />;
     }
     return (
       <AuthView
-        initialMode={authScreenMode}
-        onBackToLanding={() => setAuthScreenMode('landing')}
+        initialMode={authScreenMode === 'register' ? 'register' : 'login'}
+        onBackToLanding={() => {
+          setAuthTransitionState('idle');
+          setAuthScreenMode('landing');
+        }}
+        onAuthTransitionState={handleAuthTransitionChange}
       />
     );
   }
@@ -238,7 +299,11 @@ function NexoraAppContent() {
     return (
       <AuthView
         initialMode="verify-email"
-        onBackToLanding={() => setAuthScreenMode('landing')}
+        onBackToLanding={() => {
+          setAuthTransitionState('idle');
+          setAuthScreenMode('landing');
+        }}
+        onAuthTransitionState={handleAuthTransitionChange}
       />
     );
   }
@@ -363,6 +428,7 @@ function NexoraAppContent() {
 
   const handleNavigate = (section: NavSection, targetId?: string, profileTab?: ProfileContentTab) => {
     setOpenAdminSettings(false);
+    setOpenCustomizeHomepage(false);
     setSelectedPostId(null);
     setActiveSection(section);
     if (section === 'profile') {
@@ -401,6 +467,14 @@ function NexoraAppContent() {
     setActiveSection('chat');
   };
 
+  const handleOpenCustomizeHomepage = () => {
+    setOpenAdminSettings(false);
+    setOpenCustomizeHomepage(true);
+    setSelectedPostId(null);
+    setActiveSection('settings');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const selectedPost = selectedPostId ? posts.find((p) => p.id === selectedPostId) || null : null;
 
   return (
@@ -411,9 +485,11 @@ function NexoraAppContent() {
         onOpenSearch={handleOpenSearch}
         onOpenUserProfile={handleOpenUserProfile}
         onOpenAdminSettings={() => {
+          setOpenCustomizeHomepage(false);
           setOpenAdminSettings(true);
           setActiveSection('settings');
         }}
+        onOpenCustomizeHomepage={handleOpenCustomizeHomepage}
         notifications={notifications}
         spaces={spaces}
         posts={posts}
@@ -432,6 +508,8 @@ function NexoraAppContent() {
             onOpenChatThread={handleOpenChatThread}
             onNavigate={handleNavigate}
             onOpenVibes={() => handleNavigate('vibes')}
+            onOpenCustomizeHomepage={handleOpenCustomizeHomepage}
+            justSignedIn={justSignedIn}
           />
         )}
 
@@ -550,6 +628,7 @@ function NexoraAppContent() {
             vibes={vibes}
             spaces={spaces}
             initialAdminOpen={openAdminSettings}
+            initialPersonalSection={openCustomizeHomepage ? 'customize-homepage' : 'all'}
             onNavigate={handleNavigate}
           />
         )}
