@@ -16,13 +16,13 @@ export function NexoraAIPage({ initialTab = 'chatbot' }: NexoraAIPageProps) {
         <div className="space-y-1">
           <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#C084FC]">
             <Sparkles size={13} />
-            <span>Nexora AI Workspace</span>
+            <span>Official Intelligent Assistant · Google Gemini</span>
           </div>
           <h1 className="font-display text-xl sm:text-2xl font-bold text-white">
-            Nexora AI Studio
+            Nexora AI
           </h1>
           <p className="text-xs sm:text-sm text-[#94A3B8]">
-            Chat across specialized Gemini 4 &amp; 3.1 models with custom system roles, or animate still photos into 16:9 and 9:16 videos.
+            Private persistent AI conversations with Nexora guidance, creative writing, and photo-to-video animation.
           </p>
         </div>
 
@@ -37,7 +37,7 @@ export function NexoraAIPage({ initialTab = 'chatbot' }: NexoraAIPageProps) {
             }`}
           >
             <Bot size={14} />
-            <span>Multi-Turn Chatbot</span>
+            <span>Nexora AI Chat</span>
           </button>
           <button
             type="button"

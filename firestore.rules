@@ -215,12 +215,14 @@ service cloud.firestore {
 
     function isValidUserPreferences(data) {
       return data.keys().hasAll(['uid', 'pinnedConvIds', 'mutedConvIds', 'recentSearches', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'pinnedConvIds', 'mutedConvIds', 'recentSearches', 'homepagePrefs', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'pinnedConvIds', 'mutedConvIds', 'recentSearches', 'homepagePrefs', 'saveAiHistory', 'themeMode', 'updatedAt'])
         && isValidId(data.uid)
         && isBoundedStringList(data.pinnedConvIds, 30, 128)
         && isBoundedStringList(data.mutedConvIds, 100, 128)
         && isBoundedStringList(data.recentSearches, 20, 80)
         && (!('homepagePrefs' in data) || isValidHomepagePrefs(data.homepagePrefs))
+        && (!('saveAiHistory' in data) || data.saveAiHistory is bool)
+        && (!('themeMode' in data) || data.themeMode in ['dark', 'light', 'system'])
         && data.updatedAt is timestamp;
     }
 
@@ -399,7 +401,7 @@ service cloud.firestore {
         && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 80
         && data.actorRole is string && data.actorRole.size() >= 1 && data.actorRole.size() <= 40
         && data.action is string && data.action.size() >= 1 && data.action.size() <= 100
-        && data.category in ['admin', 'community', 'verification', 'identity', 'platform', 'moderation', 'notification', 'billing', 'customisation']
+        && data.category in ['admin', 'community', 'verification', 'identity', 'platform', 'moderation', 'notification', 'billing', 'customisation', 'ai', 'rewards', 'wallet']
         && data.targetType is string && data.targetType.size() >= 1 && data.targetType.size() <= 40
         && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
         && isOptionalString(data, 'targetLabel', 120)
@@ -606,12 +608,14 @@ service cloud.firestore {
 
     function isValidSpaceDiscussion(data) {
       return data.keys().hasAll(['authorId', 'authorName', 'text', 'channel', 'createdAt'])
-        && data.keys().hasOnly(['authorId', 'authorName', 'authorAvatar', 'text', 'channel', 'createdAt'])
+        && data.keys().hasOnly(['authorId', 'authorName', 'authorAvatar', 'text', 'channel', 'isAi', 'aiTriggeredBy', 'createdAt'])
         && isValidId(data.authorId)
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
         && isOptionalString(data, 'authorAvatar', 200000)
         && data.text is string && data.text.size() >= 1 && data.text.size() <= 1000
         && data.channel is string && data.channel.size() >= 1 && data.channel.size() <= 40
+        && (!('isAi' in data) || data.isAi is bool)
+        && isOptionalString(data, 'aiTriggeredBy', 128)
         && data.createdAt is timestamp;
     }
 
@@ -647,7 +651,7 @@ service cloud.firestore {
 
     function isValidChatMessage(data) {
       return data.keys().hasAll(['senderId', 'senderName', 'type', 'text', 'edited', 'deleted', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['senderId', 'senderName', 'type', 'text', 'mediaUrl', 'fileName', 'replyToId', 'replyToText', 'reactions', 'edited', 'deleted', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['senderId', 'senderName', 'type', 'text', 'mediaUrl', 'fileName', 'replyToId', 'replyToText', 'reactions', 'edited', 'deleted', 'isAi', 'aiTriggeredBy', 'createdAt', 'updatedAt'])
         && isValidId(data.senderId)
         && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80
         && data.type in ['text', 'image', 'video', 'voice', 'document']
@@ -659,6 +663,8 @@ service cloud.firestore {
         && (!('reactions' in data) || data.reactions is map)
         && data.edited is bool
         && data.deleted is bool
+        && (!('isAi' in data) || data.isAi is bool)
+        && isOptionalString(data, 'aiTriggeredBy', 128)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -680,11 +686,12 @@ service cloud.firestore {
           'identity_decision', 'staff_role_change', 'community_status',
           'verification_decision', 'collab_invite', 'collab_response',
           'post_tag', 'gift_received', 'support_ticket',
-          'subscription_notice', 'subscription_renewal', 'system_update'
+          'subscription_notice', 'subscription_renewal', 'system_update', 'ai_welcome',
+          'referral_reward', 'task_reward', 'withdrawal_update', 'wallet_adjustment'
         ]
-        && (!('category' in data) || data.category in ['account', 'social', 'badges', 'gifts', 'admin', 'security', 'messages', 'spaces', 'subscriptions'])
+        && (!('category' in data) || data.category in ['account', 'social', 'badges', 'gifts', 'admin', 'security', 'messages', 'spaces', 'subscriptions', 'rewards'])
         && isOptionalString(data, 'title', 120)
-        && (!('targetType' in data) || data.targetType in ['post', 'vibe', 'profile', 'chat', 'space', 'subscription', 'settings', 'system'])
+        && (!('targetType' in data) || data.targetType in ['post', 'vibe', 'profile', 'chat', 'space', 'subscription', 'settings', 'system', 'rewards', 'wallet', 'invite', 'tasks'])
         && isOptionalString(data, 'targetId', 128)
         && isOptionalString(data, 'dedupeKey', 128)
         && isOptionalString(data, 'preview', 200)
@@ -955,6 +962,441 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidAIConversation(data) {
+      return data.keys().hasAll(['uid', 'title', 'model', 'saveHistory', 'messageCount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'title', 'model', 'saveHistory', 'lastMessagePreview', 'messageCount', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.model in ['gemini-4-hydrogen', 'gemini-3.1-flash-lite', 'gemini-4-neon', 'gemini-4-carbon']
+        && data.saveHistory is bool
+        && isOptionalString(data, 'lastMessagePreview', 240)
+        && data.messageCount is int && data.messageCount >= 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAIMessage(data) {
+      return data.keys().hasAll(['convId', 'uid', 'role', 'text', 'createdAt'])
+        && data.keys().hasOnly(['convId', 'uid', 'role', 'text', 'model', 'promptTokens', 'outputTokens', 'totalTokens', 'estimatedCostUsd', 'createdAt'])
+        && isValidId(data.convId)
+        && isValidId(data.uid)
+        && data.role in ['user', 'model']
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 16000
+        && isOptionalString(data, 'model', 64)
+        && (!('promptTokens' in data) || (data.promptTokens is int && data.promptTokens >= 0))
+        && (!('outputTokens' in data) || (data.outputTokens is int && data.outputTokens >= 0))
+        && (!('totalTokens' in data) || (data.totalTokens is int && data.totalTokens >= 0))
+        && (!('estimatedCostUsd' in data) || (data.estimatedCostUsd is number && data.estimatedCostUsd >= 0))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAISettings(data) {
+      return data.keys().hasAll([
+          'enabled', 'defaultModel', 'personalityPrompt', 'welcomeEnabled',
+          'freeDailyLimit', 'plusDailyLimit', 'proDailyLimit', 'ownerUnlimited',
+          'rateLimitPerMinute', 'updatedBy', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'enabled', 'defaultModel', 'personalityPrompt', 'welcomeEnabled', 'welcomePromptTemplate',
+          'freeDailyLimit', 'plusDailyLimit', 'proDailyLimit', 'ownerUnlimited',
+          'rateLimitPerMinute', 'prohibitedTopics', 'officialLinks', 'updatedBy', 'updatedAt'
+        ])
+        && data.enabled is bool
+        && data.defaultModel in ['gemini-4-hydrogen', 'gemini-3.1-flash-lite', 'gemini-4-neon', 'gemini-4-carbon']
+        && data.personalityPrompt is string && data.personalityPrompt.size() <= 2000
+        && data.welcomeEnabled is bool
+        && isOptionalString(data, 'welcomePromptTemplate', 1000)
+        && data.freeDailyLimit is int && data.freeDailyLimit >= 0 && data.freeDailyLimit <= 5000
+        && data.plusDailyLimit is int && data.plusDailyLimit >= 0 && data.plusDailyLimit <= 10000
+        && data.proDailyLimit is int && data.proDailyLimit >= 0 && data.proDailyLimit <= 100000
+        && data.ownerUnlimited is bool
+        && data.rateLimitPerMinute is int && data.rateLimitPerMinute >= 1 && data.rateLimitPerMinute <= 300
+        && (!('prohibitedTopics' in data) || isBoundedStringList(data.prohibitedTopics, 40, 80))
+        && (!('officialLinks' in data) || data.officialLinks is map)
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAIUsage(data) {
+      return data.keys().hasAll(['uid', 'dateKey', 'tier', 'requestsCount', 'promptTokens', 'outputTokens', 'totalTokens', 'estimatedCostUsd', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'dateKey', 'tier', 'requestsCount', 'promptTokens', 'outputTokens', 'totalTokens', 'estimatedCostUsd', 'lastRequestMs', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.dateKey is string && data.dateKey.size() == 10
+        && data.tier in ['free', 'plus', 'pro']
+        && data.requestsCount is int && data.requestsCount >= 0
+        && data.promptTokens is int && data.promptTokens >= 0
+        && data.outputTokens is int && data.outputTokens >= 0
+        && data.totalTokens is int && data.totalTokens >= 0
+        && data.estimatedCostUsd is number && data.estimatedCostUsd >= 0
+        && (!('lastRequestMs' in data) || (data.lastRequestMs is number && data.lastRequestMs >= 0))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAIChannelConfig(data) {
+      return data.keys().hasAll([
+          'channelId', 'targetType', 'targetId', 'channelName', 'enabled', 'mode',
+          'responseFrequency', 'cooldownSeconds', 'moderationEnabled',
+          'welcomeNewParticipants', 'updatedBy', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'channelId', 'targetType', 'targetId', 'channelName', 'enabled', 'mode',
+          'responseFrequency', 'cooldownSeconds', 'prohibitedTopics', 'moderationEnabled',
+          'welcomeNewParticipants', 'lastBotReplyMs', 'updatedBy', 'updatedAt'
+        ])
+        && isValidId(data.channelId)
+        && data.targetType in ['space', 'group_chat']
+        && isValidId(data.targetId)
+        && data.channelName is string && data.channelName.size() >= 1 && data.channelName.size() <= 80
+        && data.enabled is bool
+        && data.mode in ['direct_only', 'auto_and_direct']
+        && data.responseFrequency in ['low', 'balanced', 'high']
+        && data.cooldownSeconds is int && data.cooldownSeconds >= 0 && data.cooldownSeconds <= 3600
+        && (!('prohibitedTopics' in data) || isBoundedStringList(data.prohibitedTopics, 40, 80))
+        && data.moderationEnabled is bool
+        && data.welcomeNewParticipants is bool
+        && (!('lastBotReplyMs' in data) || (data.lastBotReplyMs is number && data.lastBotReplyMs >= 0))
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnnouncementRecord(data) {
+      return data.keys().hasAll(['title', 'body', 'category', 'audience', 'status', 'aiGenerated', 'ownerApproved', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'title', 'body', 'category', 'audience', 'status', 'scheduledFor',
+          'aiGenerated', 'ownerApproved', 'approvedBy', 'deliveryStats',
+          'createdBy', 'createdAt', 'updatedAt', 'publishedAt'
+        ])
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 120
+        && data.body is string && data.body.size() >= 4 && data.body.size() <= 2000
+        && data.category in ['product_release', 'new_feature', 'maintenance', 'security', 'community_event', 'subscription_update']
+        && data.audience in ['all', 'free', 'plus', 'pro', 'staff']
+        && data.status in ['draft', 'approved', 'scheduled', 'published', 'failed']
+        && isOptionalString(data, 'scheduledFor', 40)
+        && data.aiGenerated is bool
+        && data.ownerApproved is bool
+        && isOptionalString(data, 'approvedBy', 128)
+        && (!('deliveryStats' in data) || data.deliveryStats is map)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && (!('publishedAt' in data) || data.publishedAt is timestamp);
+    }
+
+    function isValidDeviceToken(data) {
+      return data.keys().hasAll(['uid', 'token', 'platform', 'pushConsent', 'enabled', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'token', 'platform', 'pushConsent', 'enabled', 'userAgent', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.token is string && data.token.size() >= 16 && data.token.size() <= 512
+        && data.platform in ['web', 'android_twa', 'ios_pwa']
+        && data.pushConsent is bool
+        && data.enabled is bool
+        && isOptionalString(data, 'userAgent', 240)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReleaseHistoryItem(data) {
+      return data.keys().hasAll(['version', 'notes', 'status', 'ownerApproved', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'version', 'notes', 'status', 'downloadLinks', 'aiSummaryTitle',
+          'aiSummaryBody', 'ownerApproved', 'approvedBy', 'announcementId',
+          'notifiedAt', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.version is string && data.version.size() >= 1 && data.version.size() <= 40
+        && data.notes is string && data.notes.size() >= 4 && data.notes.size() <= 3000
+        && data.status in ['draft', 'published']
+        && (!('downloadLinks' in data) || data.downloadLinks is map)
+        && isOptionalString(data, 'aiSummaryTitle', 120)
+        && isOptionalString(data, 'aiSummaryBody', 2000)
+        && data.ownerApproved is bool
+        && isOptionalString(data, 'approvedBy', 128)
+        && isOptionalString(data, 'announcementId', 128)
+        && (!('notifiedAt' in data) || data.notifiedAt is timestamp)
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDeliveryReport(data) {
+      return data.keys().hasAll(['sourceType', 'sourceId', 'channel', 'recipientCount', 'deliveredCount', 'failedCount', 'status', 'createdBy', 'createdAt'])
+        && data.keys().hasOnly(['sourceType', 'sourceId', 'channel', 'recipientCount', 'deliveredCount', 'failedCount', 'failureDetails', 'status', 'createdBy', 'createdAt'])
+        && data.sourceType in ['welcome', 'announcement', 'release', 'test']
+        && data.sourceId is string && data.sourceId.size() >= 1 && data.sourceId.size() <= 128
+        && data.channel in ['in_app', 'push', 'email', 'multi']
+        && data.recipientCount is int && data.recipientCount >= 0
+        && data.deliveredCount is int && data.deliveredCount >= 0
+        && data.failedCount is int && data.failedCount >= 0
+        && (!('failureDetails' in data) || isBoundedStringList(data.failureDetails, 25, 240))
+        && data.status in ['completed', 'partial', 'failed']
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidRewardsConfig(data) {
+      return data.keys().hasAll([
+          'id', 'withdrawalsOpen', 'minWithdrawalNaira', 'referralsPerPoint',
+          'pointsPerMilestone', 'invitationsEnabled', 'tasksEnabled', 'updatedBy', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'withdrawalsOpen', 'pointRateNaira', 'minWithdrawalNaira',
+          'referralsPerPoint', 'pointsPerMilestone', 'invitationsEnabled',
+          'tasksEnabled', 'lockReason', 'updatedBy', 'updatedAt'
+        ])
+        && data.id == 'global'
+        && data.withdrawalsOpen is bool
+        && (!('pointRateNaira' in data) || data.pointRateNaira == null || (data.pointRateNaira is number && data.pointRateNaira > 0 && data.pointRateNaira <= 10000000))
+        && data.minWithdrawalNaira is number && data.minWithdrawalNaira >= 100 && data.minWithdrawalNaira <= 10000000
+        && data.referralsPerPoint is int && data.referralsPerPoint >= 1 && data.referralsPerPoint <= 1000
+        && data.pointsPerMilestone is number && data.pointsPerMilestone > 0 && data.pointsPerMilestone <= 1000
+        && data.invitationsEnabled is bool
+        && data.tasksEnabled is bool
+        && isOptionalString(data, 'lockReason', 240)
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidInvitationRecord(data) {
+      return data.keys().hasAll([
+          'code', 'ownerUid', 'ownerName', 'ownerUsername', 'kind', 'active',
+          'totalRegistrations', 'qualifiedReferralsCount', 'milestonesAwarded',
+          'pointsEarned', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'code', 'ownerUid', 'ownerName', 'ownerUsername', 'kind', 'label', 'active',
+          'totalRegistrations', 'qualifiedReferralsCount', 'milestonesAwarded',
+          'pointsEarned', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.code is string && data.code.size() >= 3 && data.code.size() <= 24 && data.code.matches('^[A-Z0-9_-]+$')
+        && isValidId(data.ownerUid)
+        && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80
+        && data.ownerUsername is string && data.ownerUsername.size() >= 1 && data.ownerUsername.size() <= 30
+        && data.kind in ['personal', 'admin']
+        && isOptionalString(data, 'label', 80)
+        && data.active is bool
+        && data.totalRegistrations is int && data.totalRegistrations >= 0
+        && data.qualifiedReferralsCount is int && data.qualifiedReferralsCount >= 0
+        && data.milestonesAwarded is int && data.milestonesAwarded >= 0
+        && data.pointsEarned is number && data.pointsEarned >= 0
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReferralClaim(data) {
+      return data.keys().hasAll([
+          'inviteeUid', 'inviteeName', 'inviteeUsername', 'inviterUid',
+          'inviterName', 'inviterUsername', 'invitationCode', 'status',
+          'rewardStatus', 'fraudScore', 'fraudSignals', 'registeredAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'inviteeUid', 'inviteeName', 'inviteeUsername', 'inviterUid',
+          'inviterName', 'inviterUsername', 'invitationCode', 'status',
+          'rewardStatus', 'fraudScore', 'fraudSignals', 'deviceHash',
+          'registeredAt', 'qualifiedAt', 'updatedAt'
+        ])
+        && isValidId(data.inviteeUid)
+        && data.inviteeName is string && data.inviteeName.size() >= 1 && data.inviteeName.size() <= 80
+        && data.inviteeUsername is string && data.inviteeUsername.size() >= 1 && data.inviteeUsername.size() <= 30
+        && isValidId(data.inviterUid)
+        && data.inviterName is string && data.inviterName.size() >= 1 && data.inviterName.size() <= 80
+        && data.inviterUsername is string && data.inviterUsername.size() >= 1 && data.inviterUsername.size() <= 30
+        && data.invitationCode is string && data.invitationCode.size() >= 3 && data.invitationCode.size() <= 24
+        && data.status in ['pending', 'qualified', 'flagged', 'rejected']
+        && data.rewardStatus in ['uncounted', 'counted', 'milestone_paid', 'blocked']
+        && data.fraudScore is number && data.fraudScore >= 0 && data.fraudScore <= 100
+        && isBoundedStringList(data.fraudSignals, 12, 80)
+        && isOptionalString(data, 'deviceHash', 128)
+        && data.registeredAt is timestamp
+        && (!('qualifiedAt' in data) || data.qualifiedAt is timestamp)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReferralFraudAlert(data) {
+      return data.keys().hasAll([
+          'claimId', 'inviteeUid', 'inviterUid', 'invitationCode',
+          'fraudScore', 'signals', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'claimId', 'inviteeUid', 'inviterUid', 'invitationCode',
+          'fraudScore', 'signals', 'status', 'reviewedBy', 'reviewNote',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.claimId)
+        && isValidId(data.inviteeUid)
+        && isValidId(data.inviterUid)
+        && data.invitationCode is string && data.invitationCode.size() >= 3 && data.invitationCode.size() <= 24
+        && data.fraudScore is number && data.fraudScore >= 0 && data.fraudScore <= 100
+        && isBoundedStringList(data.signals, 12, 80)
+        && data.status in ['open', 'dismissed', 'confirmed_fraud']
+        && isOptionalString(data, 'reviewedBy', 128)
+        && isOptionalString(data, 'reviewNote', 300)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTaskItem(data) {
+      return data.keys().hasAll([
+          'title', 'description', 'category', 'rewardPoints', 'freeToParticipate',
+          'active', 'maxCompletionsPerUser', 'proofInstructions',
+          'submissionsCount', 'approvedCount', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'title', 'description', 'category', 'rewardPoints', 'freeToParticipate',
+          'active', 'maxCompletionsPerUser', 'proofInstructions', 'actionUrl',
+          'submissionsCount', 'approvedCount', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 120
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 800
+        && data.category in ['community', 'social', 'engagement', 'content', 'onboarding']
+        && data.rewardPoints is number && data.rewardPoints > 0 && data.rewardPoints <= 10000
+        && data.freeToParticipate == true
+        && data.active is bool
+        && data.maxCompletionsPerUser is int && data.maxCompletionsPerUser >= 1 && data.maxCompletionsPerUser <= 10
+        && data.proofInstructions is string && data.proofInstructions.size() >= 3 && data.proofInstructions.size() <= 400
+        && isOptionalString(data, 'actionUrl', 300)
+        && data.submissionsCount is int && data.submissionsCount >= 0
+        && data.approvedCount is int && data.approvedCount >= 0
+        && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTaskSubmission(data) {
+      return data.keys().hasAll([
+          'taskId', 'taskTitle', 'uid', 'userDisplayName', 'userUsername',
+          'proofText', 'rewardPoints', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'taskId', 'taskTitle', 'uid', 'userDisplayName', 'userUsername',
+          'proofText', 'proofUrl', 'rewardPoints', 'status',
+          'reviewerUid', 'reviewerNote', 'reviewedAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.taskId)
+        && data.taskTitle is string && data.taskTitle.size() >= 1 && data.taskTitle.size() <= 120
+        && isValidId(data.uid)
+        && data.userDisplayName is string && data.userDisplayName.size() >= 1 && data.userDisplayName.size() <= 80
+        && data.userUsername is string && data.userUsername.size() >= 1 && data.userUsername.size() <= 30
+        && data.proofText is string && data.proofText.size() >= 3 && data.proofText.size() <= 1000
+        && isOptionalString(data, 'proofUrl', 400)
+        && data.rewardPoints is number && data.rewardPoints > 0 && data.rewardPoints <= 10000
+        && data.status in ['pending', 'approved', 'rejected']
+        && isOptionalString(data, 'reviewerUid', 128)
+        && isOptionalString(data, 'reviewerNote', 300)
+        && (!('reviewedAt' in data) || data.reviewedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWalletAccount(data) {
+      return data.keys().hasAll([
+          'uid', 'availablePoints', 'pendingPoints', 'lockedPoints',
+          'lifetimeEarnedPoints', 'lifetimeWithdrawnPoints', 'lifetimeWithdrawnNaira', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'availablePoints', 'pendingPoints', 'lockedPoints',
+          'lifetimeEarnedPoints', 'lifetimeWithdrawnPoints', 'lifetimeWithdrawnNaira',
+          'frozen', 'freezeReason', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.availablePoints is number && data.availablePoints >= 0
+        && data.pendingPoints is number && data.pendingPoints >= 0
+        && data.lockedPoints is number && data.lockedPoints >= 0
+        && data.lifetimeEarnedPoints is number && data.lifetimeEarnedPoints >= 0
+        && data.lifetimeWithdrawnPoints is number && data.lifetimeWithdrawnPoints >= 0
+        && data.lifetimeWithdrawnNaira is number && data.lifetimeWithdrawnNaira >= 0
+        && (!('frozen' in data) || data.frozen is bool)
+        && isOptionalString(data, 'freezeReason', 240)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWalletTransaction(data) {
+      return data.keys().hasAll([
+          'uid', 'type', 'direction', 'points', 'referenceId',
+          'description', 'actorUid', 'balanceAfterAvailable', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'type', 'direction', 'points', 'nairaEquivalent', 'pointRateNaira',
+          'referenceId', 'description', 'actorUid', 'balanceAfterAvailable', 'createdAt'
+        ])
+        && isValidId(data.uid)
+        && data.type in ['referral_milestone', 'task_reward', 'admin_credit', 'admin_debit', 'withdrawal_lock', 'withdrawal_refund', 'withdrawal_paid']
+        && data.direction in ['credit', 'debit']
+        && data.points is number && data.points > 0
+        && (!('nairaEquivalent' in data) || data.nairaEquivalent == null || (data.nairaEquivalent is number && data.nairaEquivalent >= 0))
+        && (!('pointRateNaira' in data) || data.pointRateNaira == null || (data.pointRateNaira is number && data.pointRateNaira > 0))
+        && data.referenceId is string && data.referenceId.size() >= 1 && data.referenceId.size() <= 128
+        && data.description is string && data.description.size() >= 1 && data.description.size() <= 300
+        && isValidId(data.actorUid)
+        && data.balanceAfterAvailable is number && data.balanceAfterAvailable >= 0
+        && data.createdAt is timestamp;
+    }
+
+    function isValidWithdrawalRequest(data) {
+      return data.keys().hasAll([
+          'uid', 'userDisplayName', 'userUsername', 'pointsRequested', 'pointRateNaira',
+          'nairaAmount', 'bankName', 'bankCode', 'accountNumberMasked', 'accountHolderName',
+          'accountVerificationStatus', 'verificationProvider', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'userDisplayName', 'userUsername', 'pointsRequested', 'pointRateNaira',
+          'nairaAmount', 'bankName', 'bankCode', 'accountNumberMasked', 'accountHolderName',
+          'accountVerificationStatus', 'verificationProvider', 'status',
+          'paymentReference', 'adminNote', 'reviewedBy', 'paidBy', 'paidAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.userDisplayName is string && data.userDisplayName.size() >= 1 && data.userDisplayName.size() <= 80
+        && data.userUsername is string && data.userUsername.size() >= 1 && data.userUsername.size() <= 30
+        && data.pointsRequested is number && data.pointsRequested > 0
+        && data.pointRateNaira is number && data.pointRateNaira > 0
+        && data.nairaAmount is number && data.nairaAmount >= 100
+        && data.bankName is string && data.bankName.size() >= 2 && data.bankName.size() <= 100
+        && data.bankCode is string && data.bankCode.size() >= 2 && data.bankCode.size() <= 20
+        && data.accountNumberMasked is string && data.accountNumberMasked.size() >= 4 && data.accountNumberMasked.size() <= 24
+        && data.accountHolderName is string && data.accountHolderName.size() >= 2 && data.accountHolderName.size() <= 120
+        && data.accountVerificationStatus in ['verified', 'unverified_manual', 'not_configured']
+        && data.verificationProvider in ['paystack', 'flutterwave', 'none']
+        && data.status in ['pending', 'under_review', 'approved', 'rejected', 'processing', 'paid']
+        && isOptionalString(data, 'paymentReference', 120)
+        && isOptionalString(data, 'adminNote', 300)
+        && isOptionalString(data, 'reviewedBy', 128)
+        && isOptionalString(data, 'paidBy', 128)
+        && (!('paidAt' in data) || data.paidAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWithdrawalPrivate(data) {
+      return data.keys().hasAll([
+          'withdrawalId', 'uid', 'bankName', 'bankCode', 'accountNumber',
+          'accountHolderName', 'verificationProvider', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'withdrawalId', 'uid', 'bankName', 'bankCode', 'accountNumber',
+          'accountHolderName', 'verificationProvider', 'providerResponseSummary', 'createdAt'
+        ])
+        && isValidId(data.withdrawalId)
+        && isValidId(data.uid)
+        && data.bankName is string && data.bankName.size() >= 2 && data.bankName.size() <= 100
+        && data.bankCode is string && data.bankCode.size() >= 2 && data.bankCode.size() <= 20
+        && data.accountNumber is string && data.accountNumber.size() >= 10 && data.accountNumber.size() <= 20 && data.accountNumber.matches('^[0-9]+$')
+        && data.accountHolderName is string && data.accountHolderName.size() >= 2 && data.accountHolderName.size() <= 120
+        && data.verificationProvider in ['paystack', 'flutterwave', 'none']
+        && isOptionalString(data, 'providerResponseSummary', 240)
+        && data.createdAt is timestamp;
+    }
+
+    function rewardsConfigData() {
+      return get(/databases/$(database)/documents/rewards_config/global).data;
+    }
+
+    function taskData(taskId) {
+      return get(/databases/$(database)/documents/tasks/$(taskId)).data;
+    }
+
+    function walletData(uid) {
+      return get(/databases/$(database)/documents/wallets/$(uid)).data;
+    }
+
     // --- Collection Rules ---
 
     match /admins/{adminId} {
@@ -1172,7 +1614,7 @@ service cloud.firestore {
     match /audit_logs/{logId} {
       allow get: if isValidId(logId) && isVerified() && (isPlatformOwner() || hasPerm('view_audit_logs') || hasPerm('manage_admins'));
       allow list: if isVerified() && (isPlatformOwner() || hasPerm('view_audit_logs') || hasPerm('manage_admins'))
-        && existing().category in ['admin', 'community', 'verification', 'identity', 'platform', 'moderation', 'notification', 'billing', 'customisation'];
+        && existing().category in ['admin', 'community', 'verification', 'identity', 'platform', 'moderation', 'notification', 'billing', 'customisation', 'ai', 'rewards', 'wallet'];
 
       allow create: if isValidId(logId)
         && isVerified()
@@ -1774,14 +2216,16 @@ service cloud.firestore {
             'space_invite', 'space_announcement', 'event_reminder', 'message',
             'collab_invite', 'collab_response', 'post_tag', 'gift_received', 'support_ticket'
           ] ||
-          (incoming().type in ['security_alert', 'subscription_notice', 'subscription_renewal'] && incoming().recipientId == request.auth.uid) ||
+          (incoming().type in ['security_alert', 'subscription_notice', 'subscription_renewal', 'ai_welcome'] && incoming().recipientId == request.auth.uid) ||
           isPlatformOwner() ||
           hasPerm('manage_notifications') ||
           hasPerm('manage_verification') ||
           hasPerm('review_identity_docs') ||
           hasPerm('manage_communities') ||
           hasPerm('manage_admins') ||
-          hasPerm('manage_platform')
+          hasPerm('manage_platform') ||
+          hasPerm('manage_rewards') ||
+          hasPerm('manage_withdrawals')
         );
 
       allow update: if isValidId(notifId)
@@ -2117,6 +2561,532 @@ service cloud.firestore {
       allow delete: if isValidId(itemId)
         && isVerified()
         && (isPlatformOwner() || hasPerm('manage_platform'));
+    }
+
+    // Private Personal Nexora AI Conversations (Strictly Owner-Only)
+    match /ai_conversations/{convId} {
+      allow get: if isValidId(convId) && isVerified() && isOwner(existing().uid);
+      allow list: if isVerified() && existing().uid == request.auth.uid;
+
+      allow create: if isValidId(convId)
+        && isVerified()
+        && isValidAIConversation(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(convId)
+        && isVerified()
+        && isOwner(existing().uid)
+        && isValidAIConversation(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(convId) && isVerified() && isOwner(existing().uid);
+    }
+
+    // Private Personal Nexora AI Messages (Strictly Owner-Only)
+    match /ai_messages/{msgId} {
+      allow get: if isValidId(msgId) && isVerified() && isOwner(existing().uid);
+      allow list: if isVerified() && existing().uid == request.auth.uid;
+
+      allow create: if isValidId(msgId)
+        && isVerified()
+        && isValidAIMessage(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time;
+
+      allow delete: if isValidId(msgId) && isVerified() && isOwner(existing().uid);
+    }
+
+    // Global Nexora AI Settings (Owner / Platform Governance)
+    match /ai_settings/{settingId} {
+      allow get: if isValidId(settingId) && isSignedIn();
+      allow list: if isSignedIn() && existing().enabled in [true, false];
+
+      allow create, update: if settingId == 'global'
+        && isVerified()
+        && isValidAISettings(incoming())
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_platform'));
+    }
+
+    // Daily AI Usage & Token Telemetry
+    match /ai_usage/{usageId} {
+      allow get: if isValidId(usageId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner() || hasPerm('manage_platform') || hasPerm('view_analytics')
+      );
+      allow list: if isVerified() && (
+        existing().uid == request.auth.uid ||
+        ((isPlatformOwner() || hasPerm('manage_platform') || hasPerm('view_analytics')) && existing().tier in ['free', 'plus', 'pro'])
+      );
+
+      allow create: if isValidId(usageId)
+        && isVerified()
+        && isValidAIUsage(incoming())
+        && isOwner(incoming().uid)
+        && incoming().requestsCount >= 0
+        && incoming().requestsCount <= 10
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(usageId)
+        && isVerified()
+        && isValidAIUsage(incoming())
+        && isOwner(existing().uid)
+        && incoming().uid == existing().uid
+        && incoming().dateKey == existing().dateKey
+        && incoming().requestsCount >= existing().requestsCount
+        && incoming().requestsCount <= existing().requestsCount + 10
+        && incoming().updatedAt == request.time;
+    }
+
+    // Community AI Channel Configuration
+    match /ai_channel_config/{channelId} {
+      allow get: if isValidId(channelId) && isSignedIn();
+      allow list: if isSignedIn() && existing().targetType in ['space', 'group_chat'];
+
+      allow create, update: if isValidId(channelId)
+        && isVerified()
+        && isValidAIChannelConfig(incoming())
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_platform') || hasPerm('manage_communities'));
+
+      allow delete: if isValidId(channelId)
+        && isVerified()
+        && (isPlatformOwner() || hasPerm('manage_platform') || hasPerm('manage_communities'));
+    }
+
+    // Owner-Approved Global Announcements Workflow
+    match /announcements/{announcementId} {
+      allow get: if isValidId(announcementId) && isVerified() && (
+        existing().status == 'published' ||
+        isPlatformOwner() ||
+        hasPerm('manage_notifications') ||
+        hasPerm('manage_platform')
+      );
+      allow list: if isVerified() && (
+        existing().status == 'published' ||
+        ((isPlatformOwner() || hasPerm('manage_notifications') || hasPerm('manage_platform'))
+          && existing().status in ['draft', 'approved', 'scheduled', 'published', 'failed'])
+      );
+
+      allow create: if isValidId(announcementId)
+        && isVerified()
+        && isValidAnnouncementRecord(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isPlatformOwner() ||
+          (hasPerm('manage_notifications') && incoming().ownerApproved == false && incoming().status == 'draft')
+        );
+
+      allow update: if isValidId(announcementId)
+        && isVerified()
+        && isValidAnnouncementRecord(incoming())
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isPlatformOwner() ||
+          (hasPerm('manage_notifications') && existing().status == 'draft' && incoming().ownerApproved == false && incoming().status == 'draft')
+        );
+
+      allow delete: if isValidId(announcementId)
+        && isVerified()
+        && (isPlatformOwner() || (hasPerm('manage_notifications') && existing().status == 'draft'));
+    }
+
+    // Consented FCM Push Device Tokens
+    match /device_tokens/{tokenId} {
+      allow get: if isValidId(tokenId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner() || hasPerm('manage_notifications')
+      );
+      allow list: if isVerified() && (
+        existing().uid == request.auth.uid ||
+        ((isPlatformOwner() || hasPerm('manage_notifications')) && existing().enabled in [true, false])
+      );
+
+      allow create: if isValidId(tokenId)
+        && isVerified()
+        && isValidDeviceToken(incoming())
+        && isOwner(incoming().uid)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(tokenId)
+        && isVerified()
+        && isValidDeviceToken(incoming())
+        && isOwner(existing().uid)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(tokenId) && isVerified() && isOwner(existing().uid);
+    }
+
+    // Software Release History & Owner Approval Gate
+    match /release_history/{releaseId} {
+      allow get: if isValidId(releaseId) && isVerified() && (
+        existing().status == 'published' || isPlatformOwner() || hasPerm('manage_platform')
+      );
+      allow list: if isVerified() && (
+        existing().status == 'published' ||
+        ((isPlatformOwner() || hasPerm('manage_platform')) && existing().status in ['draft', 'published'])
+      );
+
+      allow create: if isValidId(releaseId)
+        && isVerified()
+        && isValidReleaseHistoryItem(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isPlatformOwner() ||
+          (hasPerm('manage_platform') && incoming().ownerApproved == false && incoming().status == 'draft')
+        );
+
+      allow update: if isValidId(releaseId)
+        && isVerified()
+        && isValidReleaseHistoryItem(incoming())
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isPlatformOwner() ||
+          (hasPerm('manage_platform') && existing().status == 'draft' && incoming().ownerApproved == false && incoming().status == 'draft')
+        );
+
+      allow delete: if isValidId(releaseId) && isVerified() && isPlatformOwner();
+    }
+
+    // Immutable Delivery Telemetry Reports
+    match /delivery_reports/{reportId} {
+      allow get: if isValidId(reportId) && isVerified() && (
+        isOwner(existing().createdBy) || isPlatformOwner() || hasPerm('manage_notifications') || hasPerm('manage_platform')
+      );
+      allow list: if isVerified() && (
+        existing().createdBy == request.auth.uid ||
+        ((isPlatformOwner() || hasPerm('manage_notifications') || hasPerm('manage_platform'))
+          && existing().sourceType in ['welcome', 'announcement', 'release', 'test'])
+      );
+
+      allow create: if isValidId(reportId)
+        && isVerified()
+        && isValidDeliveryReport(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && (
+          (incoming().sourceType == 'welcome' && incoming().sourceId == request.auth.uid) ||
+          isPlatformOwner() ||
+          hasPerm('manage_notifications') ||
+          hasPerm('manage_platform')
+        );
+
+      allow update, delete: if false;
+    }
+
+    // --- Rewards, Invitations, Free Tasks, Wallets & Bank Withdrawals ---
+
+    match /rewards_config/{configId} {
+      allow get: if isValidId(configId) && configId == 'global' && isSignedIn();
+      allow list: if false;
+
+      allow create: if configId == 'global'
+        && isVerified()
+        && isValidRewardsConfig(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time
+        && isPlatformOwner();
+
+      allow update: if configId == 'global'
+        && isVerified()
+        && isValidRewardsConfig(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time
+        && (
+          isPlatformOwner() ||
+          (
+            (hasPerm('manage_rewards') || hasPerm('manage_withdrawals') || hasPerm('manage_platform')) &&
+            (
+              (!('pointRateNaira' in existing()) && (!('pointRateNaira' in incoming()) || incoming().pointRateNaira == null)) ||
+              ('pointRateNaira' in existing() && 'pointRateNaira' in incoming() && incoming().pointRateNaira == existing().pointRateNaira)
+            )
+          )
+        );
+    }
+
+    match /invitations/{code} {
+      allow get: if isValidId(code) && isSignedIn();
+      allow list: if isVerified() && (
+        existing().ownerUid == request.auth.uid ||
+        ((isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform')) && existing().kind in ['personal', 'admin'])
+      );
+
+      allow create: if isValidId(code)
+        && isVerified()
+        && isNotSuspended()
+        && isValidInvitationRecord(incoming())
+        && incoming().code == code
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().totalRegistrations == 0
+        && incoming().qualifiedReferralsCount == 0
+        && incoming().milestonesAwarded == 0
+        && incoming().pointsEarned == 0
+        && (
+          (incoming().kind == 'personal' && incoming().ownerUid == request.auth.uid) ||
+          (incoming().kind == 'admin' && (isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform')))
+        );
+
+      allow update: if isValidId(code)
+        && isVerified()
+        && isValidInvitationRecord(incoming())
+        && incoming().code == existing().code
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isPlatformOwner() ||
+          hasPerm('manage_rewards') ||
+          hasPerm('manage_platform') ||
+          (
+            isOwner(existing().ownerUid) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(code) && isVerified() && isPlatformOwner();
+    }
+
+    match /referral_claims/{inviteeUid} {
+      allow get: if isValidId(inviteeUid) && isVerified() && (
+        isOwner(inviteeUid) ||
+        isOwner(existing().inviterUid) ||
+        isPlatformOwner() ||
+        hasPerm('manage_rewards') ||
+        hasPerm('manage_platform')
+      );
+      allow list: if isVerified() && (
+        existing().inviteeUid == request.auth.uid ||
+        existing().inviterUid == request.auth.uid ||
+        ((isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform')) && existing().status in ['pending', 'qualified', 'flagged', 'rejected'])
+      );
+
+      allow create: if isValidId(inviteeUid)
+        && isVerified()
+        && isNotSuspended()
+        && isOwner(inviteeUid)
+        && isValidReferralClaim(incoming())
+        && incoming().inviteeUid == inviteeUid
+        && incoming().inviterUid != inviteeUid
+        && incoming().status == 'pending'
+        && incoming().rewardStatus == 'uncounted'
+        && !('qualifiedAt' in incoming())
+        && incoming().registeredAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/invitations/$(incoming().invitationCode));
+
+      allow update: if isValidId(inviteeUid)
+        && isVerified()
+        && isValidReferralClaim(incoming())
+        && incoming().inviteeUid == existing().inviteeUid
+        && incoming().inviterUid == existing().inviterUid
+        && incoming().invitationCode == existing().invitationCode
+        && incoming().registeredAt == existing().registeredAt
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform'));
+
+      allow delete: if false;
+    }
+
+    match /referral_fraud_alerts/{alertId} {
+      allow get: if isValidId(alertId) && isVerified() && (
+        isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform')
+      );
+      allow list: if isVerified()
+        && (isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform'))
+        && existing().status in ['open', 'dismissed', 'confirmed_fraud'];
+
+      allow create, update: if isValidId(alertId)
+        && isVerified()
+        && isValidReferralFraudAlert(incoming())
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform'));
+
+      allow delete: if false;
+    }
+
+    match /tasks/{taskId} {
+      allow get: if isValidId(taskId) && isSignedIn() && existing().freeToParticipate == true;
+      allow list: if isSignedIn() && existing().freeToParticipate == true;
+
+      allow create: if isValidId(taskId)
+        && isVerified()
+        && isValidTaskItem(incoming())
+        && incoming().freeToParticipate == true
+        && incoming().submissionsCount == 0
+        && incoming().approvedCount == 0
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform'));
+
+      allow update: if isValidId(taskId)
+        && isVerified()
+        && isValidTaskItem(incoming())
+        && incoming().freeToParticipate == true
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform'));
+
+      allow delete: if isValidId(taskId) && isVerified() && (
+        isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform')
+      );
+    }
+
+    match /task_submissions/{submissionId} {
+      allow get: if isValidId(submissionId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform')
+      );
+      allow list: if isVerified() && (
+        existing().uid == request.auth.uid ||
+        ((isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_platform')) && existing().status in ['pending', 'approved', 'rejected'])
+      );
+
+      allow create: if isValidId(submissionId)
+        && isVerified()
+        && isNotSuspended()
+        && isValidTaskSubmission(incoming())
+        && incoming().uid == request.auth.uid
+        && submissionId == (incoming().taskId + '_' + incoming().uid)
+        && incoming().status == 'pending'
+        && !('reviewerUid' in incoming())
+        && !('reviewerNote' in incoming())
+        && !('reviewedAt' in incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/tasks/$(incoming().taskId))
+        && taskData(incoming().taskId).freeToParticipate == true
+        && taskData(incoming().taskId).active == true
+        && incoming().rewardPoints == taskData(incoming().taskId).rewardPoints;
+
+      allow update: if isValidId(submissionId)
+        && isVerified()
+        && isValidTaskSubmission(incoming())
+        && incoming().taskId == existing().taskId
+        && incoming().uid == existing().uid
+        && incoming().rewardPoints == existing().rewardPoints
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().reviewerUid == request.auth.uid
+        && (isPlatformOwner() || ((hasPerm('manage_rewards') || hasPerm('manage_platform')) && existing().uid != request.auth.uid));
+
+      allow delete: if false;
+    }
+
+    match /wallets/{userId} {
+      allow get: if isValidId(userId) && isVerified() && (
+        isOwner(userId) || isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_withdrawals') || hasPerm('manage_platform')
+      );
+      allow list: if isVerified()
+        && (isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_withdrawals') || hasPerm('manage_platform'))
+        && existing().availablePoints >= 0;
+
+      allow create, update: if isValidId(userId)
+        && isVerified()
+        && isValidWalletAccount(incoming())
+        && incoming().uid == userId
+        && incoming().updatedAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_withdrawals') || hasPerm('manage_platform'));
+
+      allow delete: if false;
+    }
+
+    match /wallet_transactions/{txId} {
+      allow get: if isValidId(txId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_withdrawals') || hasPerm('manage_platform')
+      );
+      allow list: if isVerified() && (
+        existing().uid == request.auth.uid ||
+        ((isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_withdrawals') || hasPerm('manage_platform')) && existing().direction in ['credit', 'debit'])
+      );
+
+      allow create: if isValidId(txId)
+        && isVerified()
+        && isValidWalletTransaction(incoming())
+        && incoming().createdAt == request.time
+        && (isPlatformOwner() || hasPerm('manage_rewards') || hasPerm('manage_withdrawals') || hasPerm('manage_platform'));
+
+      allow update, delete: if false;
+    }
+
+    match /withdrawal_requests/{withdrawalId} {
+      allow get: if isValidId(withdrawalId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner() || hasPerm('manage_withdrawals') || hasPerm('manage_platform')
+      );
+      allow list: if isVerified() && (
+        existing().uid == request.auth.uid ||
+        ((isPlatformOwner() || hasPerm('manage_withdrawals') || hasPerm('manage_platform')) && existing().status in ['pending', 'under_review', 'approved', 'rejected', 'processing', 'paid'])
+      );
+
+      allow create: if isValidId(withdrawalId)
+        && isVerified()
+        && isNotSuspended()
+        && isValidWithdrawalRequest(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().status == 'pending'
+        && !('paymentReference' in incoming())
+        && !('paidBy' in incoming())
+        && !('paidAt' in incoming())
+        && !('reviewedBy' in incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/rewards_config/global)
+        && rewardsConfigData().withdrawalsOpen == true
+        && 'pointRateNaira' in rewardsConfigData()
+        && rewardsConfigData().pointRateNaira is number
+        && rewardsConfigData().pointRateNaira > 0
+        && incoming().pointRateNaira == rewardsConfigData().pointRateNaira
+        && incoming().nairaAmount >= rewardsConfigData().minWithdrawalNaira
+        && exists(/databases/$(database)/documents/wallets/$(request.auth.uid))
+        && walletData(request.auth.uid).frozen != true
+        && walletData(request.auth.uid).availablePoints >= incoming().pointsRequested;
+
+      allow update: if isValidId(withdrawalId)
+        && isVerified()
+        && isValidWithdrawalRequest(incoming())
+        && incoming().uid == existing().uid
+        && incoming().pointsRequested == existing().pointsRequested
+        && incoming().pointRateNaira == existing().pointRateNaira
+        && incoming().nairaAmount == existing().nairaAmount
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (incoming().status != 'paid' || ('paymentReference' in incoming() && incoming().paymentReference is string && incoming().paymentReference.size() >= 3))
+        && (isPlatformOwner() || hasPerm('manage_withdrawals') || hasPerm('manage_platform'));
+
+      allow delete: if false;
+    }
+
+    match /withdrawal_private/{withdrawalId} {
+      allow get: if isValidId(withdrawalId) && isVerified() && (
+        isOwner(existing().uid) || isPlatformOwner() || hasPerm('manage_withdrawals') || hasPerm('manage_platform')
+      );
+      allow list: if false;
+
+      allow create: if isValidId(withdrawalId)
+        && isVerified()
+        && isNotSuspended()
+        && isValidWithdrawalPrivate(incoming())
+        && incoming().withdrawalId == withdrawalId
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time;
+
+      allow update, delete: if false;
     }
   }
 }

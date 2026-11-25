@@ -13,7 +13,13 @@ export type NavSection =
   | 'analytics'
   | 'subscriptions'
   | 'studio'
-  | 'ai';
+  | 'ai'
+  | 'invite'
+  | 'tasks'
+  | 'wallet'
+  | 'rewards-history';
+
+export type ThemeMode = 'dark' | 'light' | 'system';
 
 export type AudienceType = 'public' | 'followers' | 'space';
 export type PostType = 'text' | 'photo' | 'video' | 'poll' | 'repost';
@@ -52,7 +58,8 @@ export type NotificationCategory =
   | 'security'
   | 'messages'
   | 'spaces'
-  | 'subscriptions';
+  | 'subscriptions'
+  | 'rewards';
 
 export type NotificationType =
   | 'like'
@@ -81,6 +88,11 @@ export type NotificationType =
   | 'support_ticket'
   | 'subscription_notice'
   | 'subscription_renewal'
+  | 'ai_welcome'
+  | 'referral_reward'
+  | 'task_reward'
+  | 'withdrawal_update'
+  | 'wallet_adjustment'
   | 'system_update';
 
 // --- Governance & 5-Tier RBAC ---
@@ -100,7 +112,9 @@ export type AdminPermission =
   | 'view_analytics'
   | 'moderate_content'
   | 'manage_notifications'
-  | 'view_audit_logs';
+  | 'view_audit_logs'
+  | 'manage_rewards'
+  | 'manage_withdrawals';
 
 // Complete 20 Canonical Nexora Badges
 export type VerifiedBadgeType =
@@ -276,7 +290,10 @@ export type AuditLogCategory =
   | 'moderation'
   | 'notification'
   | 'billing'
-  | 'customisation';
+  | 'customisation'
+  | 'ai'
+  | 'rewards'
+  | 'wallet';
 
 export interface AuditLogEntry {
   id: string;
@@ -384,6 +401,8 @@ export interface UserPreferences {
   mutedConvIds: string[];
   recentSearches: string[];
   homepagePrefs?: HomepageCustomization;
+  themeMode?: ThemeMode;
+  saveAiHistory?: boolean;
   updatedAt?: Timestamp;
 }
 
@@ -530,6 +549,8 @@ export interface SpaceDiscussion {
   authorAvatar: string;
   text: string;
   channel: string;
+  isAi?: boolean;
+  aiTriggeredBy?: string;
   createdAt: Timestamp;
 }
 
@@ -575,6 +596,8 @@ export interface ChatMessage {
   deleted: boolean;
   deliveryStatus?: MessageDeliveryStatus;
   localId?: string;
+  isAi?: boolean;
+  aiTriggeredBy?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -587,6 +610,10 @@ export type NotificationTargetType =
   | 'space'
   | 'subscription'
   | 'settings'
+  | 'rewards'
+  | 'wallet'
+  | 'invite'
+  | 'tasks'
   | 'system';
 
 export interface NotificationItem {
@@ -821,3 +848,381 @@ export interface ErrorDiagnosticEntry {
   createdAt?: Timestamp;
 }
 
+// --- Nexora AI Platform Assistant, Automation & Announcements ---
+export type AiChatModelId =
+  | 'gemini-4-hydrogen'
+  | 'gemini-3.1-flash-lite'
+  | 'gemini-4-neon'
+  | 'gemini-4-carbon';
+
+export interface AIConversation {
+  id: string;
+  uid: string;
+  title: string;
+  model: AiChatModelId;
+  saveHistory: boolean;
+  messageCount: number;
+  lastMessagePreview: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface AIMessage {
+  id: string;
+  convId: string;
+  uid: string;
+  role: 'user' | 'model';
+  text: string;
+  model?: AiChatModelId;
+  promptTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  estimatedCostUsd?: number;
+  createdAt?: Timestamp;
+}
+
+export interface AIOfficialLinks {
+  webAppUrl: string;
+  androidApkUrl: string;
+  docsUrl: string;
+  supportUrl: string;
+}
+
+export interface AISettings {
+  id?: string;
+  enabled: boolean;
+  defaultModel: AiChatModelId;
+  personalityPrompt: string;
+  welcomeEnabled: boolean;
+  welcomePromptTemplate: string;
+  freeDailyLimit: number;
+  plusDailyLimit: number;
+  proDailyLimit: number;
+  ownerUnlimited: boolean;
+  rateLimitPerMinute: number;
+  prohibitedTopics: string[];
+  officialLinks: AIOfficialLinks;
+  updatedBy: string;
+  updatedAt?: Timestamp;
+}
+
+export interface AIUsageRecord {
+  id: string;
+  uid: string;
+  dateKey: string;
+  tier: SubscriptionTier;
+  requestsCount: number;
+  promptTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  lastRequestMs?: number;
+  updatedAt?: Timestamp;
+}
+
+export interface AIChannelConfig {
+  channelId: string;
+  targetType: 'space' | 'group_chat';
+  targetId: string;
+  channelName: string;
+  enabled: boolean;
+  mode: 'direct_only' | 'auto_and_direct';
+  responseFrequency: 'low' | 'balanced' | 'high';
+  cooldownSeconds: number;
+  prohibitedTopics: string[];
+  moderationEnabled: boolean;
+  welcomeNewParticipants: boolean;
+  lastBotReplyMs?: number;
+  updatedBy: string;
+  updatedAt?: Timestamp;
+}
+
+export type AnnouncementCategory =
+  | 'product_release'
+  | 'new_feature'
+  | 'maintenance'
+  | 'security'
+  | 'community_event'
+  | 'subscription_update';
+
+export type AnnouncementAudience = 'all' | 'free' | 'plus' | 'pro' | 'staff';
+
+export interface AnnouncementRecord {
+  id: string;
+  title: string;
+  body: string;
+  category: AnnouncementCategory;
+  audience: AnnouncementAudience;
+  status: 'draft' | 'approved' | 'scheduled' | 'published' | 'failed';
+  scheduledFor?: string;
+  aiGenerated: boolean;
+  ownerApproved: boolean;
+  approvedBy?: string;
+  deliveryStats?: {
+    inAppCount?: number;
+    pushCount?: number;
+    failedCount?: number;
+  };
+  createdBy: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+  publishedAt?: Timestamp;
+}
+
+export interface DeviceTokenRecord {
+  id: string;
+  uid: string;
+  token: string;
+  platform: 'web' | 'android_twa' | 'ios_pwa';
+  pushConsent: boolean;
+  enabled: boolean;
+  userAgent?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface ReleaseHistoryItem {
+  id: string;
+  version: string;
+  notes: string;
+  status: 'draft' | 'published';
+  downloadLinks?: {
+    web?: string;
+    android?: string;
+  };
+  aiSummaryTitle?: string;
+  aiSummaryBody?: string;
+  ownerApproved: boolean;
+  approvedBy?: string;
+  announcementId?: string;
+  notifiedAt?: Timestamp;
+  createdBy: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface DeliveryReport {
+  id: string;
+  sourceType: 'welcome' | 'announcement' | 'release' | 'test';
+  sourceId: string;
+  channel: 'in_app' | 'push' | 'email' | 'multi';
+  recipientCount: number;
+  deliveredCount: number;
+  failedCount: number;
+  failureDetails?: string[];
+  status: 'completed' | 'partial' | 'failed';
+  createdBy: string;
+  createdAt?: Timestamp;
+}
+
+// --- Invitations, Tasks & Rewards, Wallet & Nigerian Bank Withdrawals ---
+export type WithdrawalStatus =
+  | 'pending'
+  | 'under_review'
+  | 'approved'
+  | 'rejected'
+  | 'processing'
+  | 'paid';
+
+export interface RewardsConfig {
+  id: 'global';
+  withdrawalsOpen: boolean;
+  /** Strictly null until configured by the Founder/Owner. Never hardcoded. */
+  pointRateNaira: number | null;
+  minWithdrawalNaira: number;
+  referralsPerPoint: number;
+  pointsPerMilestone: number;
+  invitationsEnabled: boolean;
+  tasksEnabled: boolean;
+  lockReason?: string;
+  updatedBy: string;
+  updatedAt?: Timestamp;
+}
+
+export interface InvitationRecord {
+  code: string;
+  ownerUid: string;
+  ownerName: string;
+  ownerUsername: string;
+  kind: 'personal' | 'admin';
+  label?: string;
+  active: boolean;
+  totalRegistrations: number;
+  qualifiedReferralsCount: number;
+  milestonesAwarded: number;
+  pointsEarned: number;
+  createdBy: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type ReferralClaimStatus = 'pending' | 'qualified' | 'flagged' | 'rejected';
+
+export interface ReferralClaim {
+  id: string; // inviteeUid
+  inviteeUid: string;
+  inviteeName: string;
+  inviteeUsername: string;
+  inviterUid: string;
+  inviterName: string;
+  inviterUsername: string;
+  invitationCode: string;
+  status: ReferralClaimStatus;
+  rewardStatus: 'uncounted' | 'counted' | 'milestone_paid' | 'blocked';
+  fraudScore: number;
+  fraudSignals: string[];
+  deviceHash?: string;
+  registeredAt?: Timestamp;
+  qualifiedAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface ReferralFraudAlert {
+  id: string;
+  claimId: string;
+  inviteeUid: string;
+  inviterUid: string;
+  invitationCode: string;
+  fraudScore: number;
+  signals: string[];
+  status: 'open' | 'dismissed' | 'confirmed_fraud';
+  reviewedBy?: string;
+  reviewNote?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface TaskItem {
+  id: string;
+  title: string;
+  description: string;
+  category: 'community' | 'social' | 'engagement' | 'content' | 'onboarding';
+  rewardPoints: number;
+  /** Enforced true: tasks on Nexora must never require a deposit or paid subscription */
+  freeToParticipate: true;
+  active: boolean;
+  maxCompletionsPerUser: number;
+  proofInstructions: string;
+  actionUrl?: string;
+  submissionsCount: number;
+  approvedCount: number;
+  createdBy: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type TaskSubmissionStatus = 'pending' | 'approved' | 'rejected';
+
+export interface TaskSubmission {
+  id: string; // `${taskId}_${uid}`
+  taskId: string;
+  taskTitle: string;
+  uid: string;
+  userDisplayName: string;
+  userUsername: string;
+  proofText: string;
+  proofUrl?: string;
+  rewardPoints: number;
+  status: TaskSubmissionStatus;
+  reviewerUid?: string;
+  reviewerNote?: string;
+  reviewedAt?: Timestamp;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface WalletAccount {
+  uid: string;
+  availablePoints: number;
+  pendingPoints: number;
+  lockedPoints: number;
+  lifetimeEarnedPoints: number;
+  lifetimeWithdrawnPoints: number;
+  lifetimeWithdrawnNaira: number;
+  frozen?: boolean;
+  freezeReason?: string;
+  updatedAt?: Timestamp;
+}
+
+export type WalletTransactionType =
+  | 'referral_milestone'
+  | 'task_reward'
+  | 'admin_credit'
+  | 'admin_debit'
+  | 'withdrawal_lock'
+  | 'withdrawal_refund'
+  | 'withdrawal_paid';
+
+export interface WalletTransaction {
+  id: string;
+  uid: string;
+  type: WalletTransactionType;
+  direction: 'credit' | 'debit';
+  points: number;
+  nairaEquivalent?: number | null;
+  pointRateNaira?: number | null;
+  referenceId: string;
+  description: string;
+  actorUid: string;
+  balanceAfterAvailable: number;
+  createdAt?: Timestamp;
+}
+
+export interface WithdrawalRequest {
+  id: string;
+  uid: string;
+  userDisplayName: string;
+  userUsername: string;
+  pointsRequested: number;
+  pointRateNaira: number;
+  nairaAmount: number;
+  bankName: string;
+  bankCode: string;
+  accountNumberMasked: string;
+  accountHolderName: string;
+  accountVerificationStatus: 'verified' | 'unverified_manual' | 'not_configured';
+  verificationProvider: 'paystack' | 'flutterwave' | 'none';
+  status: WithdrawalStatus;
+  paymentReference?: string;
+  adminNote?: string;
+  reviewedBy?: string;
+  paidBy?: string;
+  paidAt?: Timestamp;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface WithdrawalPrivatePII {
+  withdrawalId: string;
+  uid: string;
+  bankName: string;
+  bankCode: string;
+  accountNumber: string;
+  accountHolderName: string;
+  verificationProvider: 'paystack' | 'flutterwave' | 'none';
+  providerResponseSummary?: string;
+  createdAt?: Timestamp;
+}
+
+export interface NigerianBankInfo {
+  name: string;
+  code: string;
+  slug?: string;
+}
+
+export interface BankProviderStatus {
+  configured: boolean;
+  provider: 'paystack' | 'flutterwave' | 'none';
+  message: string;
+}
+
+export interface BankAccountResolution {
+  verified: boolean;
+  verificationStatus: 'verified' | 'not_configured' | 'failed';
+  provider: 'paystack' | 'flutterwave' | 'none';
+  bankCode: string;
+  bankName?: string;
+  accountNumber: string;
+  accountName?: string;
+  message: string;
+}

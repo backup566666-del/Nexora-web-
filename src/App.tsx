@@ -6,9 +6,11 @@ import { BadgeInfoModal } from './components/badges/BadgeInfoModal';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { LoadingScreen } from './components/common/LoadingScreen';
 import { NexoraLogo } from './components/branding/NexoraLogo';
+import { NexoraParticleBackdrop } from './components/branding/NexoraParticleBackdrop';
 import { NexoraSplashScreen } from './components/branding/NexoraSplashScreen';
 import { DashboardShell } from './components/navigation/DashboardShell';
 import { AuthProvider, useAuth } from './hooks/useAuth';
+import { ThemeProvider } from './hooks/useTheme';
 import { PostCard } from './features/posts/PostCard';
 import { AuthView } from './pages/auth/AuthView';
 import { OnboardingFlow } from './pages/auth/OnboardingFlow';
@@ -26,6 +28,11 @@ import { ProfileCustomisationStudio } from './pages/studio/ProfileCustomisationS
 import { SubscriptionsPage } from './pages/subscriptions/SubscriptionsPage';
 import { VibesPage } from './pages/vibes/VibesPage';
 import { NexoraAIPage } from './pages/ai/NexoraAIPage';
+import { InvitePage } from './pages/rewards/InvitePage';
+import { RewardsHistoryPage } from './pages/rewards/RewardsHistoryPage';
+import { TasksPage } from './pages/tasks/TasksPage';
+import { WalletPage } from './pages/wallet/WalletPage';
+import { savePendingReferralCode } from './services/firebase/rewardsService';
 import { logoutUser } from './services/auth/authService';
 import {
   getUserByUsername,
@@ -80,7 +87,13 @@ function NexoraAppContent() {
   const [authScreenMode, setAuthScreenMode] = useState<'landing' | 'login' | 'register'>(() => {
     try {
       if (typeof window !== 'undefined') {
-        const view = new URLSearchParams(window.location.search).get('view');
+        const params = new URLSearchParams(window.location.search);
+        const refCode = params.get('ref')?.trim();
+        if (refCode) {
+          savePendingReferralCode(refCode);
+          return 'register';
+        }
+        const view = params.get('view');
         if (view === 'landing' || view === 'register' || view === 'login') {
           return view;
         }
@@ -312,10 +325,11 @@ function NexoraAppContent() {
   if (!profile) {
     if (profileError) {
       return (
-        <div className="min-h-screen bg-[#06060A] text-white flex items-center justify-center p-6">
-          <div className="max-w-md w-full rounded-2xl bg-[#0D0B16] border border-amber-500/30 p-7 space-y-5 text-center">
+        <div className="relative min-h-screen bg-[#06060A] text-white flex items-center justify-center p-6 overflow-hidden">
+          <NexoraParticleBackdrop variant="subtle" />
+          <div className="relative z-10 max-w-md w-full rounded-2xl bg-[#0D0B16]/92 backdrop-blur-xl border border-amber-500/30 p-7 space-y-5 text-center">
             <div className="flex justify-center">
-              <NexoraLogo />
+              <NexoraLogo animation="assemble" />
             </div>
             <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-300">
               <AlertTriangle size={22} />
@@ -350,10 +364,11 @@ function NexoraAppContent() {
   // Suspended account gate (permanent Owner cannot be suspended)
   if (profile.suspended && myRole?.role !== 'owner') {
     return (
-      <div className="min-h-screen bg-[#06060A] text-white flex items-center justify-center p-6">
-        <div className="max-w-md w-full rounded-2xl bg-[#0D0B16] border border-rose-500/30 p-7 space-y-5 text-center">
+      <div className="relative min-h-screen bg-[#06060A] text-white flex items-center justify-center p-6 overflow-hidden">
+        <NexoraParticleBackdrop variant="subtle" />
+        <div className="relative z-10 max-w-md w-full rounded-2xl bg-[#0D0B16]/92 backdrop-blur-xl border border-rose-500/30 p-7 space-y-5 text-center">
           <div className="flex justify-center">
-            <NexoraLogo />
+            <NexoraLogo animation="assemble" />
           </div>
           <div className="w-12 h-12 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto text-rose-400">
             <Ban size={22} />
@@ -389,10 +404,11 @@ function NexoraAppContent() {
   // Global Maintenance Mode gate (exempts authorized active staff)
   if (platformConfig.maintenanceMode && !isActiveStaff) {
     return (
-      <div className="min-h-screen bg-[#06060A] text-white flex items-center justify-center p-6">
-        <div className="max-w-lg w-full rounded-2xl bg-[#0D0B16] border border-amber-500/30 p-8 space-y-5 text-center">
+      <div className="relative min-h-screen bg-[#06060A] text-white flex items-center justify-center p-6 overflow-hidden">
+        <NexoraParticleBackdrop variant="subtle" />
+        <div className="relative z-10 max-w-lg w-full rounded-2xl bg-[#0D0B16]/92 backdrop-blur-xl border border-amber-500/30 p-8 space-y-5 text-center">
           <div className="flex justify-center">
-            <NexoraLogo />
+            <NexoraLogo animation="assemble" />
           </div>
           <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-300">
             <Wrench size={22} />
@@ -621,6 +637,14 @@ function NexoraAppContent() {
 
         {activeSection === 'ai' && <NexoraAIPage />}
 
+        {activeSection === 'invite' && <InvitePage />}
+
+        {activeSection === 'tasks' && <TasksPage />}
+
+        {activeSection === 'wallet' && <WalletPage />}
+
+        {activeSection === 'rewards-history' && <RewardsHistoryPage />}
+
         {activeSection === 'settings' && (
           <SettingsPage
             users={users}
@@ -728,7 +752,9 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <NexoraAppContent />
+        <ThemeProvider>
+          <NexoraAppContent />
+        </ThemeProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

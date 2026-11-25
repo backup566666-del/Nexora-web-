@@ -251,6 +251,10 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({
       onNavigate('settings');
       return;
     }
+    if (item.type === 'ai_welcome' || (t === 'system' && item.targetId === 'ai')) {
+      onNavigate('ai');
+      return;
+    }
     if (t === 'profile' || item.type === 'follow') {
       onOpenUserProfile(item.targetId || item.actorId);
       return;

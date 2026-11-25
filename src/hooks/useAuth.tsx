@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { onIdTokenChanged, User } from 'firebase/auth';
 import { auth } from '../services/firebase/config';
 import {
+  completePendingRedirectSignIn,
   ensureUserDocuments,
   ensureVerifiedTokenClaims,
   getUserPrivate,
@@ -94,6 +95,8 @@ interface AuthContextValue {
   emailVerified: boolean;
   accountVerified: boolean;
   profileError: string | null;
+  redirectAuthError: string | null;
+  clearRedirectAuthError: () => void;
   getBadgeVariant: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType | null;
   getUserBadges: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType[];
   getUserTier: (uid?: string | null, fallbackTier?: SubscriptionTier) => SubscriptionTier;
@@ -126,6 +129,8 @@ const AuthContext = createContext<AuthContextValue>({
   emailVerified: false,
   accountVerified: false,
   profileError: null,
+  redirectAuthError: null,
+  clearRedirectAuthError: () => {},
   getBadgeVariant: () => null,
   getUserBadges: () => [],
   getUserTier: (_uid, fallbackTier) => fallbackTier || 'free',
@@ -155,11 +160,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [authReady, setAuthReady] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [redirectAuthError, setRedirectAuthError] = useState<string | null>(null);
 
-  const inFlightSyncRef = useRef<Promise<void> | null>(null);
+  const inFlightSyncRef = useRef<{ uid: string; promise: Promise<void> } | null>(null);
   const sessionIdRef = useRef<string>(getOrCreateDeviceSessionId());
   const localIdleRef = useRef<boolean>(false);
   const lastActivitySyncMsRef = useRef<number>(0);
+
+  const clearRedirectAuthError = useCallback(() => {
+    setRedirectAuthError(null);
+  }, []);
 
   const loadProfileForUser = useCallback(async (firebaseUser: User | null, forceTokenRefresh = false) => {
     setProfileError(null);
@@ -185,11 +195,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (inFlightSyncRef.current && !forceTokenRefresh) {
-      return inFlightSyncRef.current;
+    if (inFlightSyncRef.current && inFlightSyncRef.current.uid === firebaseUser.uid) {
+      await inFlightSyncRef.current.promise;
+      if (!forceTokenRefresh) {
+        return;
+      }
     }
 
-    const syncTask = (async () => {
+    let syncTask: Promise<void> | null = null;
+    syncTask = (async () => {
       try {
         await ensureVerifiedTokenClaims(firebaseUser, forceTokenRefresh);
         let finalProfile = await ensureUserDocuments(firebaseUser);
@@ -229,11 +243,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setProfileError(readable);
         throw err;
       } finally {
-        inFlightSyncRef.current = null;
+        if (inFlightSyncRef.current?.promise === syncTask) {
+          inFlightSyncRef.current = null;
+        }
       }
     })();
 
-    inFlightSyncRef.current = syncTask;
+    inFlightSyncRef.current = { uid: firebaseUser.uid, promise: syncTask };
     return syncTask;
   }, []);
 
@@ -256,7 +272,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
     const updatedUser = auth.currentUser;
+    if (!updatedUser) {
+      setUser(null);
+      setEmailVerified(false);
+      setAccountVerified(false);
+      return;
+    }
     setUser(updatedUser);
+    setEmailVerified(Boolean(updatedUser.emailVerified));
+    setAccountVerified(isUserAccountVerified(updatedUser));
     await loadProfileForUser(updatedUser, Boolean(reloadAuthUser && isUserAccountVerified(updatedUser)));
   }, [loadProfileForUser]);
 
@@ -272,9 +296,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [refreshUserAndProfile]);
 
+  const previousUidRef = useRef<string | null>(null);
+  const profileUidRef = useRef<string | null>(null);
+  const accountVerifiedRef = useRef<boolean>(false);
+
   useEffect(() => {
-    let previousUid: string | null = null;
+    profileUidRef.current = profile?.uid ?? null;
+  }, [profile?.uid]);
+
+  useEffect(() => {
+    accountVerifiedRef.current = accountVerified;
+  }, [accountVerified]);
+
+  useEffect(() => {
+    let active = true;
+    const redirectCheckPromise = completePendingRedirectSignIn()
+      .then((outcome) => {
+        if (active && outcome.errorMessage) {
+          setRedirectAuthError(outcome.errorMessage);
+        }
+      })
+      .catch(() => {});
+
     const unsubscribe = onIdTokenChanged(auth, async (firebaseUser) => {
+      await redirectCheckPromise;
+      if (!active) return;
+
       setUser(firebaseUser);
       const nextEmailVerified = Boolean(firebaseUser?.emailVerified);
       const nextAccountVerified = isUserAccountVerified(firebaseUser);
@@ -284,26 +331,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Only reload full profile documents when user identity or verification state initializes/changes
       const nextUid = firebaseUser?.uid ?? null;
       if (
-        nextUid === previousUid &&
+        nextUid === previousUidRef.current &&
         firebaseUser &&
-        profile?.uid === nextUid &&
-        accountVerified === nextAccountVerified
+        profileUidRef.current === nextUid &&
+        accountVerifiedRef.current === nextAccountVerified
       ) {
         return;
       }
-      previousUid = nextUid;
+      previousUidRef.current = nextUid;
 
       try {
         await loadProfileForUser(firebaseUser);
       } catch (err) {
         console.error('Failed loading user profile:', err instanceof Error ? err.name : 'AuthSyncError');
       } finally {
-        setLoading(false);
-        setAuthReady(true);
+        if (active) {
+          setLoading(false);
+          setAuthReady(true);
+        }
       }
     });
-    return () => unsubscribe();
-  }, [loadProfileForUser, profile?.uid, accountVerified]);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [loadProfileForUser]);
 
   // Subscribe to global platform config (readable even before sign-in so registration gates work)
   useEffect(() => {
@@ -641,6 +693,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         emailVerified,
         accountVerified,
         profileError,
+        redirectAuthError,
+        clearRedirectAuthError,
         getBadgeVariant,
         getUserBadges,
         getUserTier,

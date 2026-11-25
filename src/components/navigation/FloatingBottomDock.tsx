@@ -60,7 +60,13 @@ export function FloatingBottomDock({
                         : 'border-[#C084FC]/60 shadow-[0_0_12px_rgba(124,58,237,0.45)] group-hover:scale-105'
                     }`}
                   >
-                    <NexoraLogo variant="icon" size="xs" framed={false} />
+                    <NexoraLogo
+                      variant="icon"
+                      size="xs"
+                      framed={false}
+                      animation={active ? 'transition' : 'ambient'}
+                      replayKey={activeSection}
+                    />
                   </span>
                 </button>
               );

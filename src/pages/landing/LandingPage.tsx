@@ -24,6 +24,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { NexoraLogo } from '../../components/branding/NexoraLogo';
+import { NexoraParticleBackdrop } from '../../components/branding/NexoraParticleBackdrop';
 import { PWAInstallButton } from '../../components/common/PWAInstallButton';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { VerifiedBadge } from '../../components/common/VerifiedBadge';
@@ -161,11 +162,8 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
 
   return (
     <div className="min-h-screen bg-[#05040A] text-[#F8FAFC] flex flex-col relative overflow-x-hidden">
-      {/* Atmospheric Deep Black & Dark Purple Radial Lighting */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_75%_60%_at_50%_38%,rgba(109,40,217,0.22),rgba(59,7,100,0.12)_45%,rgba(5,4,10,1)_82%)]"
-      />
+      {/* Atmospheric Deep Black, Dark Purple Radial Lighting & Subtle Light Trails */}
+      <NexoraParticleBackdrop variant="subtle" />
 
       {/* 1. TOP HEADER */}
       <header className="relative z-30 border-b border-white/[0.08] bg-[#06050B]/80 backdrop-blur-xl">
@@ -176,7 +174,7 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
             onClick={() => handleNavClick('home')}
             className="whitespace-nowrap shrink-0 focus-visible:outline-none"
           >
-            <NexoraLogo size="md" theme="dark" />
+            <NexoraLogo size="md" theme="dark" animation="ambient" />
           </button>
 
           {/* Centre: Navigation Links */}
@@ -383,7 +381,13 @@ export function LandingPage({ onOpenAuth }: LandingPageProps) {
                 }}
               >
                 <div className="drop-shadow-[0_18px_36px_rgba(139,92,246,0.45)]">
-                  <NexoraLogo variant="icon" size="hero" framed={false} className="w-44 h-44 lg:w-52 lg:h-52 [&>svg]:w-full [&>svg]:h-full" />
+                  <NexoraLogo
+                    variant="icon"
+                    size="hero"
+                    framed={false}
+                    animation="assemble"
+                    className="w-44 h-44 lg:w-52 lg:h-52 [&>div]:w-full [&>div]:h-full [&_svg]:w-full [&_svg]:h-full"
+                  />
                 </div>
               </div>
             </div>

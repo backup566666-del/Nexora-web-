@@ -1,5 +1,6 @@
 import React from 'react';
 import { NexoraLogo } from '../branding/NexoraLogo';
+import { NexoraParticleBackdrop } from '../branding/NexoraParticleBackdrop';
 import { recordErrorDiagnostic } from '../../services/firebase/errorHandler';
 
 interface ErrorBoundaryState {
@@ -36,9 +37,10 @@ export class ErrorBoundary extends React.Component<
   override render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-[#06060A] text-[#F8FAFC] flex items-center justify-center p-6">
-          <div className="max-w-lg w-full bg-[#0D0D14] border border-white/10 rounded-2xl p-8 space-y-5">
-            <NexoraLogo size="md" />
+        <div className="relative min-h-screen bg-[#06060A] text-[#F8FAFC] flex items-center justify-center p-6 overflow-hidden">
+          <NexoraParticleBackdrop variant="subtle" />
+          <div className="relative z-10 max-w-lg w-full bg-[#0D0D14]/92 backdrop-blur-xl border border-white/10 rounded-2xl p-8 space-y-5">
+            <NexoraLogo size="md" animation="assemble" />
             <div className="space-y-2">
               <h1 className="font-display text-xl font-semibold text-white">
                 Something interrupted this view

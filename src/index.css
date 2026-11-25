@@ -3,9 +3,23 @@
 
 @layer base {
   :root {
+    --nexora-bg: #F6F5FB;
+    --nexora-surface: #FFFFFF;
+    --nexora-surface-elevated: #EFEBF9;
+    --nexora-surface-inset: #F1EFF8;
+    --nexora-border: rgba(15, 23, 42, 0.10);
+    --nexora-purple-deep: #4C1D95;
+    --nexora-violet: #7C3AED;
+    --nexora-violet-bright: #8B5CF6;
+    --nexora-text: #0F172A;
+    --nexora-text-muted: #475569;
+  }
+
+  .dark {
     --nexora-bg: #06060A;
-    --nexora-surface: #0D0D14;
+    --nexora-surface: #0D0B16;
     --nexora-surface-elevated: #141420;
+    --nexora-surface-inset: #08070F;
     --nexora-border: rgba(255, 255, 255, 0.08);
     --nexora-purple-deep: #4C1D95;
     --nexora-violet: #7C3AED;
@@ -29,6 +43,56 @@
     font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
     font-variant-numeric: tabular-nums;
   }
+}
+
+/* Global Light Mode Surface & Typography Adaptation (preserves .nexora-keep-dark stages & solid-accent buttons) */
+html:not(.dark) body {
+  background-color: #F6F5FB;
+  color: #0F172A;
+}
+
+html:not(.dark) :where(.bg-\[\#06060A\], .bg-\[\#06060A\]\/95, .bg-\[\#06060A\]\/90, .bg-\[\#06060A\]\/85):not(.nexora-keep-dark):not(.nexora-keep-dark *) {
+  background-color: #F6F5FB;
+}
+
+html:not(.dark) :where(.bg-\[\#0D0B16\], .bg-\[\#0D0B16\]\/95, .bg-\[\#0D0B16\]\/92, .bg-\[\#0D0B16\]\/90, .bg-\[\#0D0B16\]\/85, .bg-\[\#0D0D14\], .bg-\[\#120E24\], .bg-\[\#120E22\], .bg-\[\#120E22\]\/95, .bg-\[\#0F0C1D\], .bg-\[\#0E0B18\], .bg-\[\#090712\], .bg-\[\#090713\], .bg-\[\#090713\]\/92, .bg-\[\#0A0812\]):not(.nexora-keep-dark):not(.nexora-keep-dark *) {
+  background-color: #FFFFFF;
+}
+
+html:not(.dark) :where(.bg-\[\#08070F\], .bg-\[\#08070F\]\/95, .bg-\[\#08070F\]\/90, .bg-\[\#08070F\]\/80, .bg-\[\#0A0814\], .bg-\[\#141420\], .bg-\[\#151126\], .bg-\[\#16122A\], .bg-\[\#1A1530\]):not(.nexora-keep-dark):not(.nexora-keep-dark *) {
+  background-color: #F1EFF8;
+}
+
+html:not(.dark) :where(.bg-white\/\[0\.02\], .bg-white\/\[0\.03\], .bg-white\/\[0\.04\], .bg-white\/\[0\.05\], .bg-white\/\[0\.06\], .bg-white\/5, .bg-white\/10):not(.nexora-keep-dark):not(.nexora-keep-dark *):not([class*="bg-gradient-to"]) {
+  background-color: rgba(15, 23, 42, 0.045);
+}
+
+html:not(.dark) :where(.text-white):not(.nexora-keep-dark):not(.nexora-keep-dark *):not([class*="bg-[#7C3AED]"]):not([class*="bg-[#6D28D9]"]):not([class*="bg-gradient-to"]):not([class*="bg-emerald-5"]):not([class*="bg-emerald-6"]):not([class*="bg-rose-5"]):not([class*="bg-rose-6"]):not([class*="bg-sky-5"]):not([class*="bg-sky-6"]):not([class*="bg-amber-5"]):not([class*="bg-amber-6"]):not([class*="bg-purple-5"]):not([class*="bg-purple-6"]):not([class*="bg-indigo-6"]):not([class*="bg-red-6"]):not([class*="bg-black"]):not([class*="bg-gradient-to"] *):not([class*="bg-[#7C3AED]"] *):not([class*="bg-[#6D28D9]"] *):not([class*="bg-emerald-6"] *):not([class*="bg-sky-6"] *):not([class*="bg-rose-6"] *) {
+  color: #0F172A;
+}
+
+html:not(.dark) :where(.text-\[\#F8FAFC\], .text-\[\#E2E8F0\], .text-\[\#CBD5E1\], .text-slate-200, .text-slate-300):not(.nexora-keep-dark):not(.nexora-keep-dark *):not([class*="bg-gradient-to"] *):not([class*="bg-[#7C3AED]"] *) {
+  color: #1E293B;
+}
+
+html:not(.dark) :where(.text-\[\#94A3B8\], .text-slate-400):not(.nexora-keep-dark):not(.nexora-keep-dark *) {
+  color: #475569;
+}
+
+html:not(.dark) :where(.text-\[\#64748B\]):not(.nexora-keep-dark):not(.nexora-keep-dark *) {
+  color: #64748B;
+}
+
+html:not(.dark) :where(.text-\[\#E9D5FF\], .text-\[\#D8B4FE\], .text-\[\#C084FC\]):not(.nexora-keep-dark):not(.nexora-keep-dark *):not([class*="bg-gradient-to"] *):not([class*="bg-[#7C3AED]"] *) {
+  color: #6D28D9;
+}
+
+html:not(.dark) :where(.border-white\/\[0\.05\], .border-white\/\[0\.06\], .border-white\/\[0\.07\], .border-white\/\[0\.08\], .border-white\/10, .border-white\/15, .border-white\/20):not(.nexora-keep-dark):not(.nexora-keep-dark *) {
+  border-color: rgba(15, 23, 42, 0.11);
+}
+
+html:not(.dark) :where(.divide-white\/\[0\.05\], .divide-white\/\[0\.06\], .divide-white\/10) > :not(:last-child) {
+  border-color: rgba(15, 23, 42, 0.08);
 }
 
 /* Custom sleek scrollbar */
@@ -322,6 +386,87 @@
 }
 .nexora-shard-orbit-5 {
   animation: nexoraShardOrbitE 2.7s ease-in-out infinite;
+}
+
+@keyframes nexoraLightTravel {
+  0% {
+    opacity: 0;
+    transform: translate3d(-68px, -18px, 0) rotate(24deg);
+  }
+  20% {
+    opacity: 0.95;
+  }
+  80% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(72px, 18px, 0) rotate(24deg);
+  }
+}
+
+@keyframes nexoraAmbientSheen {
+  0%, 72% {
+    opacity: 0;
+    transform: translate3d(-68px, -16px, 0) rotate(24deg);
+  }
+  80% {
+    opacity: 0.72;
+  }
+  92% {
+    opacity: 0.65;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(72px, 16px, 0) rotate(24deg);
+  }
+}
+
+@keyframes nexoraLightTrailSweep {
+  0% {
+    opacity: 0;
+    transform: translate3d(-24%, 8%, 0) rotate(var(--trail-rot, -18deg)) scaleX(0.85);
+  }
+  22% {
+    opacity: var(--trail-opacity, 0.34);
+  }
+  78% {
+    opacity: var(--trail-opacity, 0.34);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(28%, -10%, 0) rotate(var(--trail-rot, -18deg)) scaleX(1.08);
+  }
+}
+
+@keyframes nexoraPageEnter {
+  0% {
+    opacity: 0.01;
+    transform: translate3d(0, 8px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.nexora-light-travel {
+  animation: nexoraLightTravel 880ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.nexora-ambient-sheen {
+  animation: nexoraAmbientSheen 5.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  will-change: transform, opacity;
+}
+
+.nexora-light-trail {
+  animation: nexoraLightTrailSweep var(--trail-dur, 14s) ease-in-out var(--trail-delay, 0s) infinite;
+  will-change: transform, opacity;
+}
+
+.nexora-page-enter {
+  animation: nexoraPageEnter 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -3,8 +3,10 @@ import {
   Activity,
   Award,
   BadgeCheck,
+  Banknote,
   BarChart3,
   BellRing,
+  Bot,
   Compass,
   CreditCard,
   FileCheck2,
@@ -19,12 +21,15 @@ import {
   Lock,
   LogOut,
   Megaphone,
+  Monitor,
+  Moon,
   Palette,
   Send,
   Shield,
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Sun,
   Unlink,
   Upload,
 } from 'lucide-react';
@@ -42,13 +47,21 @@ import { CommunityControlPanel } from '../../components/settings/admin/Community
 import { GiftModerationPanel } from '../../components/settings/admin/GiftModerationPanel';
 import { IdentityVerificationPanel } from '../../components/settings/admin/IdentityVerificationPanel';
 import { ModerationReportsPanel } from '../../components/settings/admin/ModerationReportsPanel';
+import { NexoraAiControlPanel } from '../../components/settings/admin/NexoraAiControlPanel';
 import { NotificationManagementPanel } from '../../components/settings/admin/NotificationManagementPanel';
 import { PlatformAnalyticsPanel } from '../../components/settings/admin/PlatformAnalyticsPanel';
 import { PlatformManagementPanel } from '../../components/settings/admin/PlatformManagementPanel';
+import { RewardsAndPaymentsAdminPanel } from '../../components/settings/admin/RewardsAndPaymentsAdminPanel';
 import { SystemDiagnosticsPanel } from '../../components/settings/admin/SystemDiagnosticsPanel';
 import { VerificationCentrePanel } from '../../components/settings/admin/VerificationCentrePanel';
 import { HomepageCustomizationPanel } from '../../components/settings/HomepageCustomizationPanel';
+import {
+  getBrowserPushAvailability,
+  registerPushNotifications,
+  unregisterPushNotifications,
+} from '../../services/firebase/messagingAndAppCheck';
 import { useAuth } from '../../hooks/useAuth';
+import { useTheme } from '../../hooks/useTheme';
 import {
   AUTH_PROVIDER_LIST,
   AuthProviderMethod,
@@ -112,12 +125,14 @@ interface SettingsPageProps {
 
 type AdminSectionKey =
   | 'analytics'
+  | 'ai_control'
   | 'admins'
   | 'communities'
   | 'verification'
   | 'identity'
   | 'gifts'
   | 'subscriptions_admin'
+  | 'rewards_admin'
   | 'studio_admin'
   | 'platform'
   | 'moderation'
@@ -138,6 +153,7 @@ const NOTIFICATION_CATEGORY_META: {
   { key: 'subscriptions', label: 'Subscriptions & Billing', description: 'Plan status, renewals & payment receipts' },
   { key: 'badges', label: 'Badges & Verification', description: 'Badge awards & ID decisions' },
   { key: 'gifts', label: 'Virtual Gifts', description: 'Free appreciation gifts received' },
+  { key: 'rewards', label: 'Invitations, Tasks & Wallet', description: 'Referral milestones, task approvals & Naira withdrawals' },
   { key: 'admin', label: 'Platform & Support', description: 'Ticket replies & official notices' },
   { key: 'security', label: 'Security Alerts (Locked ON)', description: 'Critical sign-in & account safety advisories', locked: true },
 ];
@@ -163,6 +179,7 @@ export function SettingsPage({
     getUserBadges,
     refreshUserAndProfile,
   } = useAuth();
+  const { themeMode, resolvedTheme, savingTheme, setThemeMode } = useTheme();
   const { openBadgeModal } = useBadgeModal();
   const [presenceBusy, setPresenceBusy] = useState(false);
   const [presenceError, setPresenceError] = useState('');
@@ -195,6 +212,17 @@ export function SettingsPage({
   const [privacy, setPrivacy] = useState<PrivacySettings>(() => withPrivacyDefaults());
   const [savingPrivacy, setSavingPrivacy] = useState(false);
   const [privacyNotice, setPrivacyNotice] = useState('');
+  const [pushStatus, setPushStatus] = useState<{
+    supported: boolean;
+    vapidConfigured: boolean;
+    permission: NotificationPermission | 'unsupported';
+  }>({ supported: false, vapidConfigured: false, permission: 'default' });
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushMessage, setPushMessage] = useState('');
+
+  useEffect(() => {
+    void getBrowserPushAvailability().then(setPushStatus);
+  }, []);
 
   // Personal Verification & Identity Applications
   const [myBadgeRequests, setMyBadgeRequests] = useState<VerificationRequest[]>([]);
@@ -264,6 +292,13 @@ export function SettingsPage({
     if (hasAdminPermission(myRole, 'view_analytics')) {
       list.push({ key: 'analytics', label: 'Platform Analytics', icon: BarChart3 });
     }
+    if (
+      hasAdminPermission(myRole, 'manage_platform') ||
+      hasAdminPermission(myRole, 'manage_notifications') ||
+      hasAdminPermission(myRole, 'manage_communities')
+    ) {
+      list.push({ key: 'ai_control', label: 'Nexora AI Control', icon: Bot });
+    }
     if (hasAdminPermission(myRole, 'manage_admins')) {
       list.push({ key: 'admins', label: 'Admin Management', icon: Shield });
     }
@@ -286,6 +321,14 @@ export function SettingsPage({
       list.push({ key: 'subscriptions_admin', label: 'Subscriptions & Billing', icon: CreditCard });
       list.push({ key: 'studio_admin', label: 'Studio Customisation', icon: Sparkles });
       list.push({ key: 'platform', label: 'Platform Management', icon: Globe });
+    }
+    if (
+      myRole.role === 'owner' ||
+      hasAdminPermission(myRole, 'manage_rewards') ||
+      hasAdminPermission(myRole, 'manage_withdrawals') ||
+      hasAdminPermission(myRole, 'manage_platform')
+    ) {
+      list.push({ key: 'rewards_admin', label: 'Rewards & Payments', icon: Banknote });
     }
     if (hasAdminPermission(myRole, 'moderate_content')) {
       list.push({ key: 'moderation', label: 'Reports & Support', icon: Flag });
@@ -583,6 +626,12 @@ export function SettingsPage({
               {activeAdminTab === 'analytics' && hasAdminPermission(myRole, 'view_analytics') && (
                 <PlatformAnalyticsPanel />
               )}
+              {activeAdminTab === 'ai_control' &&
+                (hasAdminPermission(myRole, 'manage_platform') ||
+                  hasAdminPermission(myRole, 'manage_notifications') ||
+                  hasAdminPermission(myRole, 'manage_communities')) && (
+                  <NexoraAiControlPanel actor={profile} myRole={myRole} spaces={spaces} />
+                )}
               {activeAdminTab === 'admins' && hasAdminPermission(myRole, 'manage_admins') && (
                 <AdminManagementPanel actor={profile} myRole={myRole} users={users} />
               )}
@@ -615,6 +664,13 @@ export function SettingsPage({
                     actorRole={myRole.role}
                     users={users}
                   />
+                )}
+              {activeAdminTab === 'rewards_admin' &&
+                (myRole.role === 'owner' ||
+                  hasAdminPermission(myRole, 'manage_rewards') ||
+                  hasAdminPermission(myRole, 'manage_withdrawals') ||
+                  hasAdminPermission(myRole, 'manage_platform')) && (
+                  <RewardsAndPaymentsAdminPanel />
                 )}
               {activeAdminTab === 'studio_admin' &&
                 hasAdminPermission(myRole, 'manage_platform') && (
@@ -692,6 +748,84 @@ export function SettingsPage({
               );
             })}
           </nav>
+
+          {/* Global Appearance & Theme Mode (Synced across devices via Firestore) */}
+          {(personalTab === 'all' || personalTab === 'account' || personalTab === 'customize-homepage') && (
+            <section className="p-6 rounded-2xl bg-white dark:bg-[#0D0B16] border border-slate-200 dark:border-[#8B5CF6]/20 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h2 className="font-display text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Palette size={17} className="text-[#7C3AED] dark:text-[#C084FC]" /> Appearance &amp; Theme
+                  </h2>
+                  <p className="text-xs text-slate-600 dark:text-[#94A3B8] mt-0.5">
+                    Choose Dark Mode, Light Mode, or follow your device&apos;s System Default. Your choice syncs across all signed-in devices.
+                  </p>
+                </div>
+                <span className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-[#7C3AED]/10 border border-[#8B5CF6]/30 text-[#6D28D9] dark:text-[#E9D5FF] self-start sm:self-auto">
+                  {savingTheme
+                    ? 'Syncing theme...'
+                    : `Active: ${resolvedTheme === 'dark' ? 'Dark' : 'Light'} (${themeMode})`}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {[
+                  {
+                    id: 'dark' as const,
+                    label: 'Dark Mode',
+                    desc: 'Deep obsidian canvas with violet luminescence',
+                    icon: Moon,
+                  },
+                  {
+                    id: 'light' as const,
+                    label: 'Light Mode',
+                    desc: 'Crisp pearl-slate daylight surface for bright spaces',
+                    icon: Sun,
+                  },
+                  {
+                    id: 'system' as const,
+                    label: 'System Default',
+                    desc: 'Automatically match your OS appearance setting',
+                    icon: Monitor,
+                  },
+                ].map((opt) => {
+                  const Icon = opt.icon;
+                  const active = themeMode === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => void setThemeMode(opt.id)}
+                      aria-pressed={active}
+                      className={`p-4 rounded-xl border text-left transition-all flex items-start gap-3 ${
+                        active
+                          ? 'bg-[#7C3AED]/15 border-[#7C3AED] ring-1 ring-[#8B5CF6]/40 shadow-sm'
+                          : 'bg-slate-50 dark:bg-[#08070F] border-slate-200 dark:border-white/10 hover:border-[#8B5CF6]/45'
+                      }`}
+                    >
+                      <div
+                        className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                          active
+                            ? 'bg-[#7C3AED] text-white'
+                            : 'bg-white dark:bg-[#141420] text-slate-700 dark:text-[#CBD5E1] border border-slate-200 dark:border-white/10'
+                        }`}
+                      >
+                        <Icon size={16} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-slate-900 dark:text-white">
+                          {opt.label}
+                        </p>
+                        <p className="text-[11px] text-slate-600 dark:text-[#94A3B8] mt-0.5 leading-snug">
+                          {opt.desc}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           {/* Customize Homepage Workspace */}
           {(personalTab === 'all' || personalTab === 'customize-homepage') && (
@@ -1541,6 +1675,56 @@ export function SettingsPage({
                     </div>
                   );
                 })}
+              </div>
+            </div>
+
+            {/* Browser Web Push (FCM) Consented Opt-in */}
+            <div className="p-4 rounded-xl bg-[#08070F] border border-[#8B5CF6]/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-white flex items-center gap-1.5">
+                  <Smartphone size={14} className="text-[#C084FC]" /> Browser Push Notifications (FCM)
+                </p>
+                <p className="text-[11px] text-[#94A3B8]">
+                  Permission: <span className="text-[#E2E8F0] font-medium">{pushStatus.permission}</span>
+                  {' · '}
+                  {pushStatus.vapidConfigured
+                    ? 'Web Push certificate configured'
+                    : 'Requires VITE_FIREBASE_VAPID_KEY'}
+                </p>
+                {pushMessage && <p className="text-[11px] text-[#C084FC]">{pushMessage}</p>}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={pushBusy}
+                  onClick={async () => {
+                    setPushBusy(true);
+                    setPushMessage('');
+                    const res = await registerPushNotifications(profile.uid);
+                    setPushMessage(res.message);
+                    const next = await getBrowserPushAvailability();
+                    setPushStatus(next);
+                    setPushBusy(false);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-[#7C3AED] hover:bg-[#6D28D9] disabled:opacity-50 text-xs font-semibold text-white"
+                >
+                  {pushBusy ? 'Working...' : 'Enable Push'}
+                </button>
+                <button
+                  type="button"
+                  disabled={pushBusy}
+                  onClick={async () => {
+                    setPushBusy(true);
+                    await unregisterPushNotifications(profile.uid);
+                    setPushMessage('Push alerts disabled for this device.');
+                    const next = await getBrowserPushAvailability();
+                    setPushStatus(next);
+                    setPushBusy(false);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-xs font-medium text-[#CBD5E1]"
+                >
+                  Disable
+                </button>
               </div>
             </div>
 

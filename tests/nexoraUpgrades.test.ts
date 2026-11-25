@@ -97,6 +97,7 @@ test('privacy defaults include tagging, collaboration & dual notification channe
       subscriptions: true,
       badges: true,
       gifts: false,
+      rewards: true,
       admin: true,
       security: true,
     },
@@ -1085,7 +1086,7 @@ test('Gemini features respect server-only SDK boundary, avoid deprecated models/
   // UI & Navigation wiring checks
   const chatPageSrc = fs.readFileSync('src/pages/chat/ChatPage.tsx', 'utf8');
   assert.ok(chatPageSrc.includes('GeminiChatbotPanel'));
-  assert.ok(chatPageSrc.includes('Gemini AI'));
+  assert.ok(chatPageSrc.includes('Nexora AI') || chatPageSrc.includes('Gemini AI'));
   const chatBadgeMatches = [...chatPageSrc.matchAll(/<BadgeStrip\b[^>]*>/g)].map((m) => m[0]);
   assert.ok(chatBadgeMatches.length >= 2);
   for (const tag of chatBadgeMatches) {
@@ -1260,4 +1261,49 @@ test('Signature N logo animation, SplashScreen, and real Firebase auth loading e
   }
 });
 
+test('Global animated Nexora logo system unifies master N geometry, light travel sweep, backdrop trails, and navigation transitions', async () => {
+  const fs = await import('node:fs');
+
+  // 1. Single master N SVG lives in AnimatedNexoraLogo and is delegated to by NexoraLogo (no duplicate static SVG)
+  const masterSrc = fs.readFileSync('src/components/branding/AnimatedNexoraLogo.tsx', 'utf8');
+  assert.ok(masterSrc.includes('export function MasterNexoraNMark'));
+  assert.ok(masterSrc.includes('clipPath'));
+  assert.ok(masterSrc.includes('nexora-light-travel'));
+  assert.ok(masterSrc.includes('nexora-ambient-sheen'));
+  for (const mode of ["'assembling'", "'assembled'", "'ambient'", "'transition'", "'loading'", "'success'"]) {
+    assert.ok(masterSrc.includes(mode), `MasterNexoraNMark must support stage ${mode}`);
+  }
+
+  const nexoraLogoSrc = fs.readFileSync('src/components/branding/NexoraLogo.tsx', 'utf8');
+  assert.ok(nexoraLogoSrc.includes('MasterNexoraNMark'));
+  assert.ok(!nexoraLogoSrc.includes('<svg'), 'NexoraLogo must delegate to MasterNexoraNMark instead of duplicating SVG paths');
+  assert.ok(nexoraLogoSrc.includes("animation = 'ambient'"));
+
+  // 2. Backdrop includes smooth violet light trails & subtle/full mode
+  const backdropSrc = fs.readFileSync('src/components/branding/NexoraParticleBackdrop.tsx', 'utf8');
+  assert.ok(backdropSrc.includes('nexora-light-trail'));
+  assert.ok(backdropSrc.includes('nexora-particle-drift'));
+  assert.ok(backdropSrc.includes("variant = 'full'"));
+
+  // 3. Global wiring across DashboardShell, FloatingBottomDock, LandingPage, OnboardingFlow, and ErrorBoundary
+  const shellSrc = fs.readFileSync('src/components/navigation/DashboardShell.tsx', 'utf8');
+  assert.ok(shellSrc.includes('navTransitionTick'));
+  assert.ok(shellSrc.includes('nexora-page-enter'));
+  assert.ok(shellSrc.includes("animation={navTransitionTick > 0 ? 'transition' : 'ambient'}"));
+
+  const dockSrc = fs.readFileSync('src/components/navigation/FloatingBottomDock.tsx', 'utf8');
+  assert.ok(dockSrc.includes("animation={active ? 'transition' : 'ambient'}"));
+
+  const landingSrc = fs.readFileSync('src/pages/landing/LandingPage.tsx', 'utf8');
+  assert.ok(landingSrc.includes('NexoraParticleBackdrop'));
+  assert.ok(landingSrc.includes('animation="assemble"'));
+
+  const onboardingSrc = fs.readFileSync('src/pages/auth/OnboardingFlow.tsx', 'utf8');
+  assert.ok(onboardingSrc.includes('NexoraParticleBackdrop'));
+  assert.ok(onboardingSrc.includes('animation="assemble"'));
+
+  const errorBoundarySrc = fs.readFileSync('src/components/common/ErrorBoundary.tsx', 'utf8');
+  assert.ok(errorBoundarySrc.includes('NexoraParticleBackdrop'));
+  assert.ok(errorBoundarySrc.includes('animation="assemble"'));
+});
 

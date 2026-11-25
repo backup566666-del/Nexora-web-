@@ -26,3 +26,8 @@
 10. **Conversation Eavesdropping**: List or get `/conversations/{convId}` where `"attacker_uid"` is not in `participantIds` -> DENIED.
 11. **Non-Founder Email Spoof**: Request where `email == 'backup566666@gmail.com'` with `email_verified: false` -> DENIED.
 12. **Shadow Field / Unbounded Payload Exhaustion**: Create `/posts/{postId}` with undeclared field or > 2000 chars -> DENIED.
+13. **Personal AI Thread Privacy Isolation**: Read/list `/ai_conversations/{convId}` or `/ai_messages/{msgId}` by any user other than `uid` -> DENIED (even admins cannot browse private personal AI histories).
+14. **Global AI Settings & Kill Switch Lockdown**: Non-owner / regular user writing `/ai_settings/global` -> DENIED.
+15. **Owner-Approval Gate for Global Announcements & Releases**: Non-owner writing `/announcements/{id}` with `ownerApproved: true` or `status: 'published'`, or `/release_history/{id}` with `ownerApproved: true` or `status: 'published'` -> DENIED.
+16. **FCM Device Token Isolation**: Non-owner reading/listing another user's `/device_tokens/{tokenId}` without `manage_notifications` -> DENIED.
+

@@ -37,7 +37,7 @@ export function NexoraSplashScreen({
 
   return (
     <div
-      className={`fixed inset-0 z-[90] min-h-[100dvh] bg-[#06060A] text-[#F8FAFC] flex flex-col items-center justify-center px-6 transition-opacity duration-300 ${
+      className={`nexora-keep-dark fixed inset-0 z-[90] min-h-[100dvh] bg-[#06060A] text-[#F8FAFC] flex flex-col items-center justify-center px-6 transition-opacity duration-300 ${
         exiting ? 'opacity-0 pointer-events-none' : 'opacity-100'
       }`}
       role="status"

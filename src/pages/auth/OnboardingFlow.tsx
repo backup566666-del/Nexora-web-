@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Camera, Check, Image as ImageIcon, SkipForward, Upload } from 'lucide-react';
 import { NexoraLogo } from '../../components/branding/NexoraLogo';
+import { NexoraParticleBackdrop } from '../../components/branding/NexoraParticleBackdrop';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { CoverEditorModal } from '../../components/media/CoverEditorModal';
 import { useAuth } from '../../hooks/useAuth';
@@ -9,6 +10,10 @@ import {
   updateUserProfileFields,
 } from '../../services/auth/authService';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
+import {
+  claimPendingReferralForCurrentUser,
+  ensurePersonalInvitationCode,
+} from '../../services/firebase/rewardsService';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
 import { isValidUsername, normalizeUsername } from '../../utils/validation';
 
@@ -198,6 +203,9 @@ export function OnboardingFlow() {
       }
 
       await updateUserProfileFields(profile.uid, updates, profile.username);
+      const updatedSnapshot = { ...profile, ...updates };
+      void claimPendingReferralForCurrentUser(updatedSnapshot).catch(() => {});
+      void ensurePersonalInvitationCode(updatedSnapshot).catch(() => {});
       await refreshUserAndProfile(false);
     } catch (err) {
       setError(extractReadableErrorMessage(err, 'Could not complete onboarding.'));
@@ -207,10 +215,11 @@ export function OnboardingFlow() {
   };
 
   return (
-    <div className="min-h-screen bg-[#06060A] text-[#F8FAFC] flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-xl bg-[#0D0D14] border border-white/10 rounded-2xl p-8 space-y-7 shadow-2xl">
+    <div className="relative min-h-screen bg-[#06060A] text-[#F8FAFC] flex flex-col items-center justify-center p-6 overflow-hidden">
+      <NexoraParticleBackdrop variant="subtle" />
+      <div className="relative z-10 w-full max-w-xl bg-[#0D0D14]/92 backdrop-blur-xl border border-white/10 rounded-2xl p-8 space-y-7 shadow-2xl">
         <div className="flex items-center justify-between">
-          <NexoraLogo size="sm" />
+          <NexoraLogo size="sm" animation="assemble" />
           <span className="font-mono-tabular text-xs text-[#94A3B8]">Step {step} of 5</span>
         </div>
 

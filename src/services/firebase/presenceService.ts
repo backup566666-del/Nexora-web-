@@ -2,9 +2,11 @@ import {
   collection,
   doc,
   onSnapshot,
+  query,
   runTransaction,
   serverTimestamp,
   Unsubscribe,
+  where,
 } from 'firebase/firestore';
 import {
   AdminManualMode,
@@ -15,6 +17,7 @@ import {
   InternalRole,
   PublicAdminPresenceStatus,
 } from '../../types/nexora';
+import { isUserAccountVerified } from '../auth/authService';
 import { auth, db } from './config';
 import { logFirestoreListenerError, OperationType } from './errorHandler';
 
@@ -126,7 +129,12 @@ export async function syncAdminSessionHeartbeat(params: {
   manualModeOverride?: AdminManualMode;
   showOnlineStatus?: boolean;
 }): Promise<PublicAdminPresenceStatus> {
-  if (!params.uid || !auth.currentUser || auth.currentUser.uid !== params.uid || !auth.currentUser.emailVerified) {
+  if (
+    !params.uid ||
+    !auth.currentUser ||
+    auth.currentUser.uid !== params.uid ||
+    !isUserAccountVerified(auth.currentUser)
+  ) {
     return 'offline';
   }
 
@@ -215,7 +223,12 @@ export async function clearDeviceSession(
   role?: InternalRole,
   sessionId = getOrCreateDeviceSessionId()
 ): Promise<void> {
-  if (!uid || !auth.currentUser || auth.currentUser.uid !== uid || !auth.currentUser.emailVerified) {
+  if (
+    !uid ||
+    !auth.currentUser ||
+    auth.currentUser.uid !== uid ||
+    !isUserAccountVerified(auth.currentUser)
+  ) {
     return;
   }
 
@@ -281,8 +294,12 @@ export async function clearDeviceSession(
 export function subscribeAllAdminPresence(
   callback: (presenceMap: Record<string, AdminPresencePublic>) => void
 ): Unsubscribe {
-  return onSnapshot(
+  const q = query(
     collection(db, 'admin_presence'),
+    where('status', 'in', ['online', 'idle', 'dnd', 'offline'])
+  );
+  return onSnapshot(
+    q,
     (snap) => {
       const map: Record<string, AdminPresencePublic> = {};
       snap.docs.forEach((d) => {

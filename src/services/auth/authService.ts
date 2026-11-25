@@ -7,6 +7,7 @@ import {
   EmailAuthProvider,
   FacebookAuthProvider,
   fetchSignInMethodsForEmail,
+  getRedirectResult,
   GithubAuthProvider,
   GoogleAuthProvider,
   linkWithCredential,
@@ -20,6 +21,7 @@ import {
   signInWithEmailAndPassword,
   signInWithPhoneNumber,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   unlink,
   updateProfile,
@@ -28,13 +30,18 @@ import {
 } from 'firebase/auth';
 import { FirebaseError } from 'firebase/app';
 import {
+  collection,
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
+  limit,
+  query,
   serverTimestamp,
   setDoc,
   Timestamp,
   updateDoc,
+  where,
   writeBatch,
 } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
@@ -46,6 +53,8 @@ import {
 } from '../firebase/errorHandler';
 import { clearDeviceSession } from '../firebase/presenceService';
 import { dispatchDualNotification } from '../notifications/notificationDispatcher';
+import { requestWelcomeFromAi } from '../ai/geminiClientService';
+import { recordWelcomeDeliveryReport } from '../ai/nexoraAiFirestoreService';
 import { PrivacySettings, UserPrivate, UserProfile } from '../../types/nexora';
 import {
   BLUEPRINT_LIMITS,
@@ -145,6 +154,7 @@ export interface ServerAuthProvidersResponse {
   projectId: string;
   authDomain: string;
   callbackUrl: string;
+  authorizedDomains?: string[];
   providers: ServerProviderStatusItem[];
 }
 
@@ -259,12 +269,28 @@ function extractCredentialFromConflictError(
 
 async function applyAuthPersistence(rememberSession: boolean): Promise<void> {
   const targetPersistence = rememberSession ? 'local' : 'session';
-  if (activePersistenceMode !== targetPersistence) {
+  if (activePersistenceMode === targetPersistence) return;
+  try {
     await setPersistence(
       auth,
       rememberSession ? browserLocalPersistence : browserSessionPersistence
     );
     activePersistenceMode = targetPersistence;
+  } catch (err) {
+    // Fallback gracefully in restricted iframes / Safari private mode where local/session persistence can fail
+    if (rememberSession) {
+      try {
+        await setPersistence(auth, browserSessionPersistence);
+        activePersistenceMode = 'session';
+        return;
+      } catch {
+        // Proceed with Firebase SDK's active in-memory persistence
+      }
+    }
+    const code = (err as { code?: string })?.code ?? '';
+    if (code === 'auth/web-storage-unsupported') {
+      return;
+    }
   }
 }
 
@@ -326,11 +352,17 @@ export function isUserAccountVerified(user: User | null | undefined): boolean {
   if (user.emailVerified) return true;
   const hasPhone =
     Boolean(user.phoneNumber && user.phoneNumber.trim().length >= 7) &&
+    Array.isArray(user.providerData) &&
     user.providerData.some((p) => p?.providerId === 'phone');
-  if (hasPhone && !user.email) {
+  if (hasPhone) {
     return true;
   }
   return false;
+}
+
+export function isPopupBlockedError(err: unknown): boolean {
+  const code = (err as { code?: string })?.code ?? '';
+  return code === 'auth/popup-blocked';
 }
 
 export async function ensureVerifiedTokenClaims(user: User, forceRefresh = false): Promise<void> {
@@ -389,11 +421,16 @@ export function mapAuthErrorMessage(err: unknown): string {
 
   switch (code) {
     case 'auth/operation-not-allowed':
-      return 'This sign-in method is not enabled yet. Please try another option or contact support.';
-    case 'auth/unauthorized-domain':
-      return 'Sign-in is temporarily unavailable from this address. Please contact support if this continues.';
+      return 'This sign-in method is not enabled yet in Firebase Authentication. Please use Google or Email & Password, or enable this provider in Firebase Console.';
+    case 'auth/unauthorized-domain': {
+      const host =
+        typeof window !== 'undefined' && window.location?.hostname
+          ? ` (${window.location.hostname})`
+          : '';
+      return `Sign-in is temporarily unavailable from this address${host}. Add this domain under Firebase Console -> Authentication -> Settings -> Authorized domains.`;
+    }
     case 'auth/popup-blocked':
-      return 'Your browser blocked the sign-in popup window. Please allow popups and try again.';
+      return 'Your browser blocked the sign-in popup window. Allow popups for this site or use Redirect Sign-In below.';
     case 'auth/cancelled-popup-request':
       return 'Sign-in was cancelled before finishing. Please try again.';
     case 'auth/popup-closed-by-user':
@@ -415,7 +452,8 @@ export function mapAuthErrorMessage(err: unknown): string {
     case 'auth/user-not-found':
     case 'auth/wrong-password':
     case 'auth/invalid-credential':
-      return 'Incorrect email or password. If you joined with a connected provider or phone number, use that option or Forgot password.';
+    case 'auth/invalid-login-credentials':
+      return 'Incorrect email or password. If you joined with Google or phone number, use that option or Forgot password.';
     case 'auth/invalid-phone-number':
     case 'auth/missing-phone-number':
       return 'Please enter a valid phone number including your country code.';
@@ -431,6 +469,16 @@ export function mapAuthErrorMessage(err: unknown): string {
       return 'Security verification could not be completed. Refresh and try again.';
     case 'auth/quota-exceeded':
       return 'SMS verification limit reached temporarily. Please try again shortly or use another sign-in option.';
+    case 'auth/invalid-action-code':
+    case 'auth/expired-action-code':
+      return 'This verification or password reset link has expired or already been used. Request a fresh link and try again.';
+    case 'auth/web-storage-unsupported':
+      return 'Your browser blocked site storage needed for sign-in (common in strict private mode or embedded frames). Enable cookies/storage or open Nexora in a full browser tab.';
+    case 'auth/app-not-authorized':
+    case 'auth/invalid-api-key':
+      return 'Firebase authentication configuration mismatch detected for this app. Please verify your Firebase project settings.';
+    case 'auth/internal-error':
+      return 'Authentication could not complete with the provider. If your browser blocks third-party cookies or popups in this frame, try Email & Password or Redirect Sign-In.';
     case 'auth/id-token-expired':
     case 'auth/user-token-expired':
     case 'auth/requires-recent-login':
@@ -555,6 +603,89 @@ export async function signInWithOAuthProvider(
   }
 }
 
+export async function signInWithOAuthRedirect(
+  providerId: OAuthProviderId,
+  rememberSession = true,
+  options?: {
+    preferredUsername?: string;
+    preferredFullName?: string;
+  }
+): Promise<void> {
+  await applyAuthPersistence(rememberSession);
+  const provider = buildOAuthProvider(providerId);
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      window.sessionStorage.setItem(
+        'nexora_pending_redirect_auth',
+        JSON.stringify({
+          providerId,
+          preferredUsername: options?.preferredUsername || '',
+          preferredFullName: options?.preferredFullName || '',
+        })
+      );
+    }
+  } catch {
+    // Ignore storage restrictions
+  }
+  await signInWithRedirect(auth, provider);
+}
+
+export async function completePendingRedirectSignIn(): Promise<{
+  user: User | null;
+  errorMessage: string | null;
+}> {
+  interface PendingRedirectMeta {
+    providerId?: OAuthProviderId;
+    preferredUsername?: string;
+    preferredFullName?: string;
+  }
+  let pendingMeta: PendingRedirectMeta | null = null;
+  try {
+    const raw =
+      typeof window !== 'undefined' && window.sessionStorage
+        ? window.sessionStorage.getItem('nexora_pending_redirect_auth')
+        : null;
+    if (raw) {
+      pendingMeta = JSON.parse(raw) as PendingRedirectMeta;
+      window.sessionStorage.removeItem('nexora_pending_redirect_auth');
+    }
+  } catch {
+    pendingMeta = null;
+  }
+
+  try {
+    const result = await getRedirectResult(auth);
+    if (!result?.user) {
+      return { user: null, errorMessage: null };
+    }
+
+    const cleanName = pendingMeta?.preferredFullName
+      ? sanitizeString(pendingMeta.preferredFullName, BLUEPRINT_LIMITS.DISPLAY_NAME_MAX)
+      : '';
+    if (cleanName && !result.user.displayName) {
+      await updateProfile(result.user, { displayName: cleanName }).catch(() => {});
+    }
+    if (pendingMeta?.preferredUsername) {
+      const normalized = normalizeUsername(pendingMeta.preferredUsername);
+      if (isValidUsername(normalized)) {
+        savePendingUsername(result.user.uid, normalized);
+      }
+    }
+    if (cleanName) {
+      savePendingDisplayName(result.user.uid, cleanName);
+    }
+
+    if (isUserAccountVerified(result.user)) {
+      await ensureUserDocuments(result.user, pendingMeta?.preferredUsername);
+    } else if (result.user.email && !result.user.emailVerified) {
+      await sendEmailVerification(result.user).catch(() => {});
+    }
+    return { user: result.user, errorMessage: null };
+  } catch (err) {
+    return { user: null, errorMessage: mapAuthErrorMessage(err) };
+  }
+}
+
 export async function signInWithGoogle(rememberSession = true): Promise<User> {
   return signInWithOAuthProvider('google.com', rememberSession);
 }
@@ -573,13 +704,22 @@ export function clearPhoneRecaptcha(): void {
 async function getOrCreateRecaptchaVerifier(containerId: string): Promise<RecaptchaVerifier> {
   clearPhoneRecaptcha();
   const containerEl = typeof document !== 'undefined' ? document.getElementById(containerId) : null;
-  if (containerEl) {
-    containerEl.innerHTML = '';
+  if (!containerEl) {
+    throw new Error('Security verification container is not ready yet. Please refresh and try again.');
   }
-  const verifier = new RecaptchaVerifier(auth, containerId, {
+  containerEl.innerHTML = '';
+  const verifier = new RecaptchaVerifier(auth, containerEl, {
     size: 'invisible',
+    callback: () => {},
+    'expired-callback': () => {
+      clearPhoneRecaptcha();
+    },
+    'error-callback': () => {
+      clearPhoneRecaptcha();
+    },
   });
   activeRecaptchaVerifier = verifier;
+  await verifier.render();
   return verifier;
 }
 
@@ -760,14 +900,21 @@ export async function attachAndVerifyAccountEmail(newEmail: string): Promise<voi
   await verifyBeforeUpdateEmail(currentUser, cleanEmail);
 }
 
+export interface RegisterWithEmailResult {
+  user: User;
+  verificationEmailSent: boolean;
+  verificationWarning?: string;
+}
+
 export async function registerWithEmail(params: {
   fullName: string;
   username: string;
   email: string;
   password: string;
-}): Promise<User> {
+}): Promise<RegisterWithEmailResult> {
   const cleanName = sanitizeString(params.fullName, BLUEPRINT_LIMITS.DISPLAY_NAME_MAX);
   const cleanUsername = normalizeUsername(params.username);
+  const cleanEmail = params.email.trim();
   if (!cleanName) throw new Error('Full name is required.');
   if (!isValidUsername(cleanUsername)) {
     throw new Error('Username must be 3-30 characters using lowercase letters, numbers, or underscores.');
@@ -778,12 +925,23 @@ export async function registerWithEmail(params: {
     throw new Error(`@${cleanUsername} is already taken. Please choose another username.`);
   }
 
-  const credential = await createUserWithEmailAndPassword(auth, params.email.trim(), params.password);
+  const credential = await createUserWithEmailAndPassword(auth, cleanEmail, params.password);
   savePendingUsername(credential.user.uid, cleanUsername);
   savePendingDisplayName(credential.user.uid, cleanName);
-  await updateProfile(credential.user, { displayName: cleanName });
-  await sendEmailVerification(credential.user);
-  return credential.user;
+  saveRememberedLoginHint(cleanUsername, cleanEmail);
+
+  await updateProfile(credential.user, { displayName: cleanName }).catch(() => {});
+
+  try {
+    await sendEmailVerification(credential.user);
+    return { user: credential.user, verificationEmailSent: true };
+  } catch (err) {
+    return {
+      user: credential.user,
+      verificationEmailSent: false,
+      verificationWarning: mapAuthErrorMessage(err),
+    };
+  }
 }
 
 export function saveRememberedLoginHint(username: string, email: string): void {
@@ -926,13 +1084,17 @@ async function reserveUniqueUsername(uid: string, preferred: string): Promise<st
         ? base
         : `${base.slice(0, 22)}_${Math.random().toString(36).slice(2, 6)}`;
     const ref = doc(db, 'usernames', candidate);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) {
-      await setDoc(ref, { uid, createdAt: serverTimestamp() });
-      return candidate;
-    }
-    if ((snap.data() as { uid?: string }).uid === uid) {
-      return candidate;
+    try {
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        await setDoc(ref, { uid, createdAt: serverTimestamp() });
+        return candidate;
+      }
+      if ((snap.data() as { uid?: string }).uid === uid) {
+        return candidate;
+      }
+    } catch {
+      // Retry with a randomized candidate if another registration claimed this username concurrently
     }
   }
   const fallback = `user_${uid.slice(0, 10).toLowerCase()}`;
@@ -995,6 +1157,10 @@ async function ensureUserDocumentsInternal(
       }
     } catch {
       // Non-fatal if private doc check encounters transient error
+    }
+
+    if (existing.username && user.email) {
+      saveRememberedLoginHint(existing.username, user.email);
     }
 
     const lastActiveMs = existing.lastActiveAt?.toMillis?.() ?? 0;
@@ -1080,12 +1246,120 @@ async function ensureUserDocumentsInternal(
     batch.set(doc(db, 'users', user.uid, 'private', 'account'), privatePayload);
     await batch.commit();
     clearPendingRegistrationHints(user.uid);
+    if (user.email) {
+      saveRememberedLoginHint(username, user.email);
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
   }
 
   const freshSnap = await getDoc(userRef);
-  return freshSnap.data() as UserProfile;
+  const createdProfile = freshSnap.data() as UserProfile;
+  void triggerAutomatedWelcomeOnboarding(createdProfile, user);
+  return createdProfile;
+}
+
+const WELCOME_SENT_LOCAL_PREFIX = 'nexora_welcome_sent:';
+
+export async function triggerAutomatedWelcomeOnboarding(
+  profile: UserProfile,
+  firebaseUser?: User | null
+): Promise<boolean> {
+  if (!profile?.uid) return false;
+  const dedupeKey = `ai_welcome_${profile.uid}`;
+  try {
+    if (typeof window !== 'undefined' && window.localStorage?.getItem(`${WELCOME_SENT_LOCAL_PREFIX}${profile.uid}`)) {
+      return false;
+    }
+  } catch {
+    // Ignore storage read failures
+  }
+
+  try {
+    const existingSnap = await getDocs(
+      query(
+        collection(db, 'notifications'),
+        where('recipientId', '==', profile.uid),
+        where('dedupeKey', '==', dedupeKey),
+        limit(1)
+      )
+    );
+    if (!existingSnap.empty) {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem(`${WELCOME_SENT_LOCAL_PREFIX}${profile.uid}`, '1');
+        }
+      } catch {
+        // Ignore storage write errors
+      }
+      return false;
+    }
+  } catch {
+    // Continue if notification lookup is unavailable
+  }
+
+  try {
+    const aiWelcome = await requestWelcomeFromAi({
+      displayName: profile.displayName,
+      username: profile.username,
+    });
+
+    if (!aiWelcome.generated || !aiWelcome.messageText) {
+      await recordWelcomeDeliveryReport({
+        uid: profile.uid,
+        inAppSent: false,
+        pushSent: 0,
+        pushFailed: 0,
+        notes: [aiWelcome.reason || aiWelcome.error || 'Welcome AI skipped (Gemini or welcome toggle unavailable).'],
+      });
+      return false;
+    }
+
+    const res = await dispatchDualNotification({
+      recipientUid: profile.uid,
+      recipientName: profile.displayName,
+      recipientEmail: firebaseUser?.email || undefined,
+      actor: {
+        uid: profile.uid,
+        displayName: 'Nexora AI',
+        avatarUrl: '',
+      },
+      type: 'ai_welcome',
+      category: 'account',
+      title: `Welcome to Nexora, ${profile.displayName}!`,
+      targetType: 'system',
+      targetId: 'ai',
+      inAppPreview: sanitizeString(aiWelcome.messageText, 200),
+      emailSubject: `Welcome to Nexora, ${profile.displayName}!`,
+      emailBodyText: aiWelcome.messageText,
+      ctaLabel: 'Open Nexora AI',
+      ctaUrl: '/',
+      allowSelfInApp: true,
+      dedupeKey,
+      skipEmailLog: true,
+    });
+
+    if (res.inAppCreated) {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem(`${WELCOME_SENT_LOCAL_PREFIX}${profile.uid}`, '1');
+        }
+      } catch {
+        // Ignore storage errors
+      }
+    }
+
+    await recordWelcomeDeliveryReport({
+      uid: profile.uid,
+      inAppSent: res.inAppCreated,
+      pushSent: 0,
+      pushFailed: 0,
+      notes: [res.message],
+    });
+    return res.inAppCreated;
+  } catch {
+    return false;
+  }
 }
 
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {

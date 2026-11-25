@@ -492,7 +492,7 @@ export function VibesPage({ vibes, users, savedIds, onOpenProfile, onNavigate }:
   };
 
   return (
-    <div className="relative flex-1 bg-[#06060A] flex flex-col">
+    <div className="nexora-keep-dark relative flex-1 bg-[#06060A] flex flex-col">
       {/* Subtle Ambient Glow */}
       <div
         aria-hidden="true"

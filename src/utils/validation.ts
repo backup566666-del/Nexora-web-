@@ -1,5 +1,7 @@
 import {
   AdminPermission,
+  AISettings,
+  AnnouncementCategory,
   AnyVerifiedBadgeType,
   BadgeConfig,
   BadgeDefinition,
@@ -16,13 +18,16 @@ import {
   Post,
   PrivacySettings,
   ProfileCustomisation,
+  RewardsConfig,
   Space,
   SubscriptionPlan,
   SubscriptionTier,
+  ThemeMode,
   UserProfile,
   UserSubscription,
   VerifiedBadgeType,
   VirtualGiftCatalogItem,
+  WithdrawalStatus,
 } from '../types/nexora';
 
 // Founder email cryptographically anchored in Firestore Security Rules
@@ -73,6 +78,8 @@ export const ALL_ADMIN_PERMISSIONS: { key: AdminPermission; label: string; descr
   { key: 'moderate_content', label: 'Moderation & Safety', description: 'Resolve reports, remove posts/vibes, suspend accounts.' },
   { key: 'manage_notifications', label: 'Broadcast Notices', description: 'Publish platform announcements and targeted notices.' },
   { key: 'view_audit_logs', label: 'Audit Logs', description: 'Inspect immutable administrative audit history.' },
+  { key: 'manage_rewards', label: 'Rewards, Tasks & Referrals', description: 'Configure tasks, verify submissions, review referral fraud, and adjust Key Points.' },
+  { key: 'manage_withdrawals', label: 'Bank Withdrawals', description: 'Review, approve, lock, and confirm bank withdrawal payouts.' },
 ];
 
 export const ROLE_DEFAULT_PERMISSIONS: Record<InternalRole, AdminPermission[]> = {
@@ -86,6 +93,8 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<InternalRole, AdminPermission[]> =
     'moderate_content',
     'manage_notifications',
     'view_audit_logs',
+    'manage_rewards',
+    'manage_withdrawals',
   ],
   administrator: [
     'manage_admins',
@@ -97,6 +106,8 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<InternalRole, AdminPermission[]> =
     'moderate_content',
     'manage_notifications',
     'view_audit_logs',
+    'manage_rewards',
+    'manage_withdrawals',
   ],
   moderator: ['manage_communities', 'moderate_content', 'view_analytics', 'view_audit_logs'],
   verification_reviewer: ['manage_verification', 'review_identity_docs', 'view_audit_logs'],
@@ -591,6 +602,7 @@ export const DEFAULT_NOTIFICATION_CHANNELS: Record<NotificationCategory, boolean
   messages: true,
   spaces: true,
   subscriptions: true,
+  rewards: true,
 };
 
 export const LOCKED_NOTIFICATION_CATEGORIES: NotificationCategory[] = ['security'];
@@ -1491,3 +1503,291 @@ export function filterSearchableSpaces(
     return true;
   });
 }
+
+export const DEFAULT_AI_SETTINGS: AISettings = {
+  id: 'global',
+  enabled: true,
+  defaultModel: 'gemini-4-hydrogen',
+  personalityPrompt:
+    'You are Nexora AI, the official intelligent assistant of the Nexora social networking platform. You are friendly, intelligent, professional, welcoming, and community-focused.',
+  welcomeEnabled: true,
+  welcomePromptTemplate:
+    'Welcome a brand-new Nexora member warmly. Highlight how to explore Spaces, watch and post Vibes, connect in Chat, customize their Home feed, and ask Nexora AI anytime for help.',
+  freeDailyLimit: 25,
+  plusDailyLimit: 150,
+  proDailyLimit: 1000,
+  ownerUnlimited: true,
+  rateLimitPerMinute: 15,
+  prohibitedTopics: ['doxxing', 'self-harm instructions', 'malware exploit', 'credit card fraud'],
+  officialLinks: {
+    webAppUrl: '/',
+    androidApkUrl: '/downloads/nexora-latest.apk',
+    docsUrl: '/?view=landing',
+    supportUrl: '/#settings:support',
+  },
+  updatedBy: 'system',
+};
+
+export const ANNOUNCEMENT_CATEGORIES: {
+  id: AnnouncementCategory;
+  label: string;
+  severity: 'info' | 'warning' | 'security';
+}[] = [
+  { id: 'product_release', label: 'Product Release', severity: 'info' },
+  { id: 'new_feature', label: 'New Feature', severity: 'info' },
+  { id: 'maintenance', label: 'Scheduled Maintenance', severity: 'warning' },
+  { id: 'security', label: 'Security Advisory', severity: 'security' },
+  { id: 'community_event', label: 'Community Event', severity: 'info' },
+  { id: 'subscription_update', label: 'Subscription & Perks', severity: 'info' },
+];
+
+// --- Global Theme & Rewards / Wallet / Withdrawal Pure Constants & Helpers ---
+export const DEFAULT_MIN_WITHDRAWAL_NAIRA = 2000;
+export const REFERRALS_PER_KEY_POINT = 10;
+export const POINTS_PER_REFERRAL_MILESTONE = 1;
+
+export const DEFAULT_REWARDS_CONFIG: RewardsConfig = {
+  id: 'global',
+  withdrawalsOpen: true,
+  pointRateNaira: null, // Strictly unconfigured until set by the Founder/Owner
+  minWithdrawalNaira: DEFAULT_MIN_WITHDRAWAL_NAIRA,
+  referralsPerPoint: REFERRALS_PER_KEY_POINT,
+  pointsPerMilestone: POINTS_PER_REFERRAL_MILESTONE,
+  invitationsEnabled: true,
+  tasksEnabled: true,
+  lockReason: '',
+  updatedBy: 'system',
+};
+
+export function normalizeThemeMode(raw: unknown): ThemeMode {
+  if (raw === 'light' || raw === 'dark' || raw === 'system') {
+    return raw;
+  }
+  return 'dark';
+}
+
+export function resolveEffectiveTheme(mode: ThemeMode, systemPrefersDark: boolean): 'dark' | 'light' {
+  if (mode === 'system') {
+    return systemPrefersDark ? 'dark' : 'light';
+  }
+  return mode === 'light' ? 'light' : 'dark';
+}
+
+export function sanitizeInviteCode(raw: string): string {
+  return raw
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]/g, '')
+    .slice(0, 24);
+}
+
+export function generateInviteCode(seed: string): string {
+  const cleanSeed = seed
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 5)
+    .padEnd(3, 'X');
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let suffix = '';
+  for (let i = 0; i < 5; i += 1) {
+    suffix += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return `NX-${cleanSeed}-${suffix}`.slice(0, 20);
+}
+
+export function computeConvertedNaira(
+  points: number,
+  pointRateNaira: number | null | undefined
+): number | null {
+  if (
+    typeof pointRateNaira !== 'number' ||
+    !Number.isFinite(pointRateNaira) ||
+    pointRateNaira <= 0
+  ) {
+    return null;
+  }
+  if (!Number.isFinite(points) || points <= 0) return 0;
+  return Math.round(points * pointRateNaira * 100) / 100;
+}
+
+export function formatNaira(amount: number | null | undefined): string {
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+    return 'Rate pending';
+  }
+  return `₦${amount.toLocaleString('en-NG', {
+    minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+export function calculateReferralMilestonesToAward(
+  qualifiedReferralsCount: number,
+  alreadyAwardedMilestones: number,
+  referralsPerPoint = REFERRALS_PER_KEY_POINT
+): {
+  totalEarnedMilestones: number;
+  newMilestonesToCredit: number;
+  nextMilestoneAt: number;
+  progressInCurrentBatch: number;
+} {
+  const step = Math.max(1, Math.floor(referralsPerPoint || REFERRALS_PER_KEY_POINT));
+  const qualified = Math.max(0, Math.floor(qualifiedReferralsCount || 0));
+  const paid = Math.max(0, Math.floor(alreadyAwardedMilestones || 0));
+  const totalEarnedMilestones = Math.floor(qualified / step);
+  const newMilestonesToCredit = Math.max(0, totalEarnedMilestones - paid);
+  const progressInCurrentBatch = qualified % step;
+  const nextMilestoneAt = (totalEarnedMilestones + 1) * step;
+  return {
+    totalEarnedMilestones,
+    newMilestonesToCredit,
+    nextMilestoneAt,
+    progressInCurrentBatch,
+  };
+}
+
+export interface ReferralFraudEvaluationInput {
+  inviteeUid: string;
+  inviterUid: string;
+  inviteeEmail?: string;
+  inviterEmail?: string;
+  inviteeVerified: boolean;
+  inviteeDeviceHash?: string;
+  existingSameDeviceClaimsCount?: number;
+  recentInviterClaimsCount24h?: number;
+}
+
+export function evaluateReferralFraudSignals(input: ReferralFraudEvaluationInput): {
+  allowed: boolean;
+  fraudScore: number;
+  signals: string[];
+  reason?: string;
+} {
+  const signals: string[] = [];
+  let fraudScore = 0;
+
+  if (!input.inviteeUid || !input.inviterUid || input.inviteeUid === input.inviterUid) {
+    return {
+      allowed: false,
+      fraudScore: 100,
+      signals: ['self_referral_attempt'],
+      reason: 'Self-referrals are blocked and cannot earn Key Points.',
+    };
+  }
+
+  const normalizedInviteeEmail = (input.inviteeEmail || '').trim().toLowerCase();
+  const normalizedInviterEmail = (input.inviterEmail || '').trim().toLowerCase();
+  if (normalizedInviteeEmail && normalizedInviterEmail && normalizedInviteeEmail === normalizedInviterEmail) {
+    return {
+      allowed: false,
+      fraudScore: 100,
+      signals: ['identical_email'],
+      reason: 'Duplicate email referral blocked.',
+    };
+  }
+
+  // Strip Gmail "+alias" and dots to detect trivial email alias farming
+  const canonicalEmail = (raw: string) => {
+    const [local, domain] = raw.split('@');
+    if (!local || !domain) return raw;
+    if (domain === 'gmail.com' || domain === 'googlemail.com') {
+      return `${local.split('+')[0].replace(/\./g, '')}@gmail.com`;
+    }
+    return `${local.split('+')[0]}@${domain}`;
+  };
+  if (
+    normalizedInviteeEmail &&
+    normalizedInviterEmail &&
+    canonicalEmail(normalizedInviteeEmail) === canonicalEmail(normalizedInviterEmail)
+  ) {
+    fraudScore += 75;
+    signals.push('email_alias_similarity');
+  }
+
+  if (!input.inviteeVerified) {
+    fraudScore += 30;
+    signals.push('unverified_contact');
+  }
+
+  if ((input.existingSameDeviceClaimsCount || 0) >= 2) {
+    fraudScore += 60;
+    signals.push('repeated_device_fingerprint');
+  }
+
+  if ((input.recentInviterClaimsCount24h || 0) >= 25) {
+    fraudScore += 45;
+    signals.push('high_velocity_burst');
+  }
+
+  return {
+    allowed: fraudScore < 80,
+    fraudScore: Math.min(100, fraudScore),
+    signals,
+    reason: fraudScore >= 80 ? 'Referral flagged by automated anti-fraud screening.' : undefined,
+  };
+}
+
+export function maskBankAccountNumber(accountNumber: string): string {
+  const digits = (accountNumber || '').replace(/\D/g, '');
+  if (digits.length < 4) return '******';
+  return `${'*'.repeat(Math.max(4, digits.length - 4))}${digits.slice(-4)}`;
+}
+
+const VALID_WITHDRAWAL_TRANSITIONS: Record<WithdrawalStatus, WithdrawalStatus[]> = {
+  pending: ['under_review', 'approved', 'rejected'],
+  under_review: ['approved', 'rejected'],
+  approved: ['processing', 'paid', 'rejected'],
+  processing: ['paid', 'rejected'],
+  paid: [],
+  rejected: [],
+};
+
+export function canTransitionWithdrawalStatus(
+  fromStatus: WithdrawalStatus,
+  toStatus: WithdrawalStatus
+): boolean {
+  if (fromStatus === toStatus) return false;
+  return VALID_WITHDRAWAL_TRANSITIONS[fromStatus]?.includes(toStatus) ?? false;
+}
+
+export function validateWithdrawalEligibility(params: {
+  pointsRequested: number;
+  availablePoints: number;
+  frozen?: boolean;
+  config: Pick<RewardsConfig, 'withdrawalsOpen' | 'pointRateNaira' | 'minWithdrawalNaira' | 'lockReason'>;
+}): { ok: boolean; nairaAmount: number | null; error?: string } {
+  const { pointsRequested, availablePoints, frozen, config } = params;
+  if (frozen) {
+    return { ok: false, nairaAmount: null, error: 'Your wallet is temporarily locked by moderation.' };
+  }
+  if (!config.withdrawalsOpen) {
+    return {
+      ok: false,
+      nairaAmount: null,
+      error: config.lockReason || 'Withdrawals are currently locked by Nexora administration.',
+    };
+  }
+  if (typeof config.pointRateNaira !== 'number' || !Number.isFinite(config.pointRateNaira) || config.pointRateNaira <= 0) {
+    return {
+      ok: false,
+      nairaAmount: null,
+      error: 'Key Point conversion rate has not been set by the Nexora Owner yet.',
+    };
+  }
+  if (!Number.isFinite(pointsRequested) || pointsRequested <= 0) {
+    return { ok: false, nairaAmount: null, error: 'Enter a valid Key Points amount greater than zero.' };
+  }
+  if (pointsRequested > availablePoints) {
+    return { ok: false, nairaAmount: null, error: 'Insufficient available Key Points balance.' };
+  }
+  const nairaAmount = computeConvertedNaira(pointsRequested, config.pointRateNaira);
+  const minNaira = Math.max(100, config.minWithdrawalNaira || DEFAULT_MIN_WITHDRAWAL_NAIRA);
+  if (nairaAmount === null || nairaAmount < minNaira) {
+    return {
+      ok: false,
+      nairaAmount,
+      error: `Minimum withdrawal is ${formatNaira(minNaira)}.`,
+    };
+  }
+  return { ok: true, nairaAmount };
+}
+

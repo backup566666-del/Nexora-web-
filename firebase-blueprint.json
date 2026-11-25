@@ -213,7 +213,7 @@
         "actorName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "actorRole": { "type": "string", "minLength": 1, "maxLength": 40 },
         "action": { "type": "string", "minLength": 1, "maxLength": 100 },
-        "category": { "type": "string", "enum": ["admin", "community", "verification", "identity", "platform", "moderation", "notification", "billing", "customisation"] },
+        "category": { "type": "string", "enum": ["admin", "community", "verification", "identity", "platform", "moderation", "notification", "billing", "customisation", "ai", "rewards", "wallet"] },
         "targetType": { "type": "string", "minLength": 1, "maxLength": 40 },
         "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "targetLabel": { "type": "string", "maxLength": 120 },
@@ -432,6 +432,8 @@
         "authorAvatar": { "type": "string", "maxLength": 200000 },
         "text": { "type": "string", "minLength": 1, "maxLength": 1000 },
         "channel": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "isAi": { "type": "boolean" },
+        "aiTriggeredBy": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["authorId", "authorName", "text", "channel", "createdAt"]
@@ -485,6 +487,8 @@
         "reactions": { "type": "object" },
         "edited": { "type": "boolean" },
         "deleted": { "type": "boolean" },
+        "isAi": { "type": "boolean" },
+        "aiTriggeredBy": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -508,12 +512,13 @@
             "identity_decision", "staff_role_change", "community_status",
             "verification_decision", "collab_invite", "collab_response",
             "post_tag", "gift_received", "support_ticket",
-            "subscription_notice", "subscription_renewal", "system_update"
+            "subscription_notice", "subscription_renewal", "system_update", "ai_welcome",
+            "referral_reward", "task_reward", "withdrawal_update", "wallet_adjustment"
           ]
         },
-        "category": { "type": "string", "enum": ["account", "social", "badges", "gifts", "admin", "security", "messages", "spaces", "subscriptions"] },
+        "category": { "type": "string", "enum": ["account", "social", "badges", "gifts", "admin", "security", "messages", "spaces", "subscriptions", "rewards"] },
         "title": { "type": "string", "maxLength": 120 },
-        "targetType": { "type": "string", "enum": ["post", "vibe", "profile", "chat", "space", "subscription", "settings", "system"] },
+        "targetType": { "type": "string", "enum": ["post", "vibe", "profile", "chat", "space", "subscription", "settings", "rewards", "wallet", "invite", "tasks", "system"] },
         "targetId": { "type": "string", "maxLength": 128 },
         "dedupeKey": { "type": "string", "maxLength": 128 },
         "preview": { "type": "string", "maxLength": 200 },
@@ -686,6 +691,8 @@
             "sectionOrder": { "type": "array" }
           }
         },
+        "themeMode": { "type": "string", "enum": ["dark", "light", "system"] },
+        "saveAiHistory": { "type": "boolean" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "pinnedConvIds", "mutedConvIds", "recentSearches", "updatedAt"]
@@ -789,6 +796,388 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["category", "name", "requiredTier", "enabled", "previewValue", "sortOrder", "updatedAt"]
+    },
+    "AIConversation": {
+      "title": "AIConversation",
+      "description": "Private personal Nexora AI conversation thread owned strictly by one user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "model": { "type": "string", "enum": ["gemini-4-hydrogen", "gemini-3.1-flash-lite", "gemini-4-neon", "gemini-4-carbon"] },
+        "saveHistory": { "type": "boolean" },
+        "lastMessagePreview": { "type": "string", "maxLength": 240 },
+        "messageCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "title", "model", "saveHistory", "messageCount", "createdAt", "updatedAt"]
+    },
+    "AIMessage": {
+      "title": "AIMessage",
+      "description": "Persistent message inside a private Nexora AI conversation thread.",
+      "type": "object",
+      "properties": {
+        "convId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "role": { "type": "string", "enum": ["user", "model"] },
+        "text": { "type": "string", "minLength": 1, "maxLength": 16000 },
+        "model": { "type": "string", "maxLength": 64 },
+        "promptTokens": { "type": "number" },
+        "outputTokens": { "type": "number" },
+        "totalTokens": { "type": "number" },
+        "estimatedCostUsd": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["convId", "uid", "role", "text", "createdAt"]
+    },
+    "AISettings": {
+      "title": "AISettings",
+      "description": "Owner-controlled global Nexora AI settings, tier limits, personality, prohibited topics, and official links.",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "defaultModel": { "type": "string", "enum": ["gemini-4-hydrogen", "gemini-3.1-flash-lite", "gemini-4-neon", "gemini-4-carbon"] },
+        "personalityPrompt": { "type": "string", "maxLength": 2000 },
+        "welcomeEnabled": { "type": "boolean" },
+        "welcomePromptTemplate": { "type": "string", "maxLength": 1000 },
+        "freeDailyLimit": { "type": "number" },
+        "plusDailyLimit": { "type": "number" },
+        "proDailyLimit": { "type": "number" },
+        "ownerUnlimited": { "type": "boolean" },
+        "rateLimitPerMinute": { "type": "number" },
+        "prohibitedTopics": { "type": "array" },
+        "officialLinks": { "type": "object" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["enabled", "defaultModel", "personalityPrompt", "welcomeEnabled", "freeDailyLimit", "plusDailyLimit", "proDailyLimit", "ownerUnlimited", "rateLimitPerMinute", "updatedBy", "updatedAt"]
+    },
+    "AIUsage": {
+      "title": "AIUsage",
+      "description": "Daily user AI request, token, and estimated cost ledger.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "dateKey": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "tier": { "type": "string", "enum": ["free", "plus", "pro"] },
+        "requestsCount": { "type": "number" },
+        "promptTokens": { "type": "number" },
+        "outputTokens": { "type": "number" },
+        "totalTokens": { "type": "number" },
+        "estimatedCostUsd": { "type": "number" },
+        "lastRequestMs": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "dateKey", "tier", "requestsCount", "promptTokens", "outputTokens", "totalTokens", "estimatedCostUsd", "updatedAt"]
+    },
+    "AIChannelConfig": {
+      "title": "AIChannelConfig",
+      "description": "Per-channel AI moderation, mode, frequency, and cooldown settings for Spaces and Group Chats.",
+      "type": "object",
+      "properties": {
+        "channelId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "targetType": { "type": "string", "enum": ["space", "group_chat"] },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "channelName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "enabled": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["direct_only", "auto_and_direct"] },
+        "responseFrequency": { "type": "string", "enum": ["low", "balanced", "high"] },
+        "cooldownSeconds": { "type": "number" },
+        "prohibitedTopics": { "type": "array" },
+        "moderationEnabled": { "type": "boolean" },
+        "welcomeNewParticipants": { "type": "boolean" },
+        "lastBotReplyMs": { "type": "number" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["channelId", "targetType", "targetId", "channelName", "enabled", "mode", "responseFrequency", "cooldownSeconds", "moderationEnabled", "welcomeNewParticipants", "updatedBy", "updatedAt"]
+    },
+    "AnnouncementRecord": {
+      "title": "AnnouncementRecord",
+      "description": "Owner-approved global announcement record supporting drafting, scheduling, targeting, and delivery telemetry.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "body": { "type": "string", "minLength": 4, "maxLength": 2000 },
+        "category": { "type": "string", "enum": ["product_release", "new_feature", "maintenance", "security", "community_event", "subscription_update"] },
+        "audience": { "type": "string", "enum": ["all", "free", "plus", "pro", "staff"] },
+        "status": { "type": "string", "enum": ["draft", "approved", "scheduled", "published", "failed"] },
+        "scheduledFor": { "type": "string", "maxLength": 40 },
+        "aiGenerated": { "type": "boolean" },
+        "ownerApproved": { "type": "boolean" },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "deliveryStats": { "type": "object" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "publishedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "body", "category", "audience", "status", "aiGenerated", "ownerApproved", "createdBy", "createdAt", "updatedAt"]
+    },
+    "DeviceToken": {
+      "title": "DeviceToken",
+      "description": "User FCM push token with explicit notification permission and platform metadata.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "token": { "type": "string", "minLength": 16, "maxLength": 512 },
+        "platform": { "type": "string", "enum": ["web", "android_twa", "ios_pwa"] },
+        "pushConsent": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "userAgent": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "token", "platform", "pushConsent", "enabled", "createdAt", "updatedAt"]
+    },
+    "ReleaseHistoryItem": {
+      "title": "ReleaseHistoryItem",
+      "description": "Nexora software release record requiring owner approval before public announcement.",
+      "type": "object",
+      "properties": {
+        "version": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "notes": { "type": "string", "minLength": 4, "maxLength": 3000 },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "downloadLinks": { "type": "object" },
+        "aiSummaryTitle": { "type": "string", "maxLength": 120 },
+        "aiSummaryBody": { "type": "string", "maxLength": 2000 },
+        "ownerApproved": { "type": "boolean" },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "announcementId": { "type": "string", "maxLength": 128 },
+        "notifiedAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["version", "notes", "status", "ownerApproved", "createdBy", "createdAt", "updatedAt"]
+    },
+    "DeliveryReport": {
+      "title": "DeliveryReport",
+      "description": "Immutable telemetry report for welcome, announcement, release, and test notification dispatches.",
+      "type": "object",
+      "properties": {
+        "sourceType": { "type": "string", "enum": ["welcome", "announcement", "release", "test"] },
+        "sourceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "channel": { "type": "string", "enum": ["in_app", "push", "email", "multi"] },
+        "recipientCount": { "type": "number" },
+        "deliveredCount": { "type": "number" },
+        "failedCount": { "type": "number" },
+        "failureDetails": { "type": "array" },
+        "status": { "type": "string", "enum": ["completed", "partial", "failed"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sourceType", "sourceId", "channel", "recipientCount", "deliveredCount", "failedCount", "status", "createdBy", "createdAt"]
+    },
+    "RewardsConfig": {
+      "title": "RewardsConfig",
+      "description": "Global rewards, invitation milestone, conversion rate (Owner-only), and bank withdrawal controls.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "enum": ["global"] },
+        "withdrawalsOpen": { "type": "boolean" },
+        "pointRateNaira": { "type": ["number", "null"] },
+        "minWithdrawalNaira": { "type": "number" },
+        "referralsPerPoint": { "type": "number" },
+        "pointsPerMilestone": { "type": "number" },
+        "invitationsEnabled": { "type": "boolean" },
+        "tasksEnabled": { "type": "boolean" },
+        "lockReason": { "type": "string", "maxLength": 240 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "withdrawalsOpen", "minWithdrawalNaira", "referralsPerPoint", "pointsPerMilestone", "invitationsEnabled", "tasksEnabled", "updatedBy", "updatedAt"]
+    },
+    "InvitationRecord": {
+      "title": "InvitationRecord",
+      "description": "Unique member or admin invitation code and referral tracking stats.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 3, "maxLength": 24 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "ownerUsername": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "kind": { "type": "string", "enum": ["personal", "admin"] },
+        "label": { "type": "string", "maxLength": 80 },
+        "active": { "type": "boolean" },
+        "totalRegistrations": { "type": "number" },
+        "qualifiedReferralsCount": { "type": "number" },
+        "milestonesAwarded": { "type": "number" },
+        "pointsEarned": { "type": "number" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "ownerUid", "ownerName", "ownerUsername", "kind", "active", "totalRegistrations", "qualifiedReferralsCount", "milestonesAwarded", "pointsEarned", "createdBy", "createdAt", "updatedAt"]
+    },
+    "ReferralClaim": {
+      "title": "ReferralClaim",
+      "description": "One-per-invitee referral claim and anti-fraud qualification record.",
+      "type": "object",
+      "properties": {
+        "inviteeUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "inviteeName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "inviteeUsername": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "inviterUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "inviterName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "inviterUsername": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "invitationCode": { "type": "string", "minLength": 3, "maxLength": 24 },
+        "status": { "type": "string", "enum": ["pending", "qualified", "flagged", "rejected"] },
+        "rewardStatus": { "type": "string", "enum": ["uncounted", "counted", "milestone_paid", "blocked"] },
+        "fraudScore": { "type": "number" },
+        "fraudSignals": { "type": "array" },
+        "deviceHash": { "type": "string", "maxLength": 128 },
+        "registeredAt": { "type": "string", "format": "date-time" },
+        "qualifiedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["inviteeUid", "inviteeName", "inviteeUsername", "inviterUid", "inviterName", "inviterUsername", "invitationCode", "status", "rewardStatus", "fraudScore", "fraudSignals", "registeredAt", "updatedAt"]
+    },
+    "ReferralFraudAlert": {
+      "title": "ReferralFraudAlert",
+      "description": "Restricted referral fraud alert for administrative review.",
+      "type": "object",
+      "properties": {
+        "claimId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "inviteeUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "inviterUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "invitationCode": { "type": "string", "minLength": 3, "maxLength": 24 },
+        "fraudScore": { "type": "number" },
+        "signals": { "type": "array" },
+        "status": { "type": "string", "enum": ["open", "dismissed", "confirmed_fraud"] },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "reviewNote": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["claimId", "inviteeUid", "inviterUid", "invitationCode", "fraudScore", "signals", "status", "createdAt", "updatedAt"]
+    },
+    "TaskItem": {
+      "title": "TaskItem",
+      "description": "Strictly free community task rewarding Key Points upon verification.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "description": { "type": "string", "minLength": 5, "maxLength": 800 },
+        "category": { "type": "string", "enum": ["community", "social", "engagement", "content", "onboarding"] },
+        "rewardPoints": { "type": "number" },
+        "freeToParticipate": { "type": "boolean" },
+        "active": { "type": "boolean" },
+        "maxCompletionsPerUser": { "type": "number" },
+        "proofInstructions": { "type": "string", "minLength": 3, "maxLength": 400 },
+        "actionUrl": { "type": "string", "maxLength": 300 },
+        "submissionsCount": { "type": "number" },
+        "approvedCount": { "type": "number" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "description", "category", "rewardPoints", "freeToParticipate", "active", "maxCompletionsPerUser", "proofInstructions", "submissionsCount", "approvedCount", "createdBy", "createdAt", "updatedAt"]
+    },
+    "TaskSubmission": {
+      "title": "TaskSubmission",
+      "description": "Member task proof submission awaiting admin verification.",
+      "type": "object",
+      "properties": {
+        "taskId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "taskTitle": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "userDisplayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "userUsername": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "proofText": { "type": "string", "minLength": 3, "maxLength": 1000 },
+        "proofUrl": { "type": "string", "maxLength": 400 },
+        "rewardPoints": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewerUid": { "type": "string", "maxLength": 128 },
+        "reviewerNote": { "type": "string", "maxLength": 300 },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["taskId", "taskTitle", "uid", "userDisplayName", "userUsername", "proofText", "rewardPoints", "status", "createdAt", "updatedAt"]
+    },
+    "WalletAccount": {
+      "title": "WalletAccount",
+      "description": "Server-authoritative Nexora Key Points wallet balance record.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "availablePoints": { "type": "number" },
+        "pendingPoints": { "type": "number" },
+        "lockedPoints": { "type": "number" },
+        "lifetimeEarnedPoints": { "type": "number" },
+        "lifetimeWithdrawnPoints": { "type": "number" },
+        "lifetimeWithdrawnNaira": { "type": "number" },
+        "frozen": { "type": "boolean" },
+        "freezeReason": { "type": "string", "maxLength": 240 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "availablePoints", "pendingPoints", "lockedPoints", "lifetimeEarnedPoints", "lifetimeWithdrawnPoints", "lifetimeWithdrawnNaira", "updatedAt"]
+    },
+    "WalletTransaction": {
+      "title": "WalletTransaction",
+      "description": "Immutable Key Points & Naira wallet transaction ledger record.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "enum": ["referral_milestone", "task_reward", "admin_credit", "admin_debit", "withdrawal_lock", "withdrawal_refund", "withdrawal_paid"] },
+        "direction": { "type": "string", "enum": ["credit", "debit"] },
+        "points": { "type": "number" },
+        "nairaEquivalent": { "type": ["number", "null"] },
+        "pointRateNaira": { "type": ["number", "null"] },
+        "referenceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "balanceAfterAvailable": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "type", "direction", "points", "referenceId", "description", "actorUid", "balanceAfterAvailable", "createdAt"]
+    },
+    "WithdrawalRequest": {
+      "title": "WithdrawalRequest",
+      "description": "Member Naira bank withdrawal request with masked account summary and status workflow.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "userDisplayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "userUsername": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "pointsRequested": { "type": "number" },
+        "pointRateNaira": { "type": "number" },
+        "nairaAmount": { "type": "number" },
+        "bankName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "bankCode": { "type": "string", "minLength": 2, "maxLength": 20 },
+        "accountNumberMasked": { "type": "string", "minLength": 4, "maxLength": 24 },
+        "accountHolderName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "accountVerificationStatus": { "type": "string", "enum": ["verified", "unverified_manual", "not_configured"] },
+        "verificationProvider": { "type": "string", "enum": ["paystack", "flutterwave", "none"] },
+        "status": { "type": "string", "enum": ["pending", "under_review", "approved", "rejected", "processing", "paid"] },
+        "paymentReference": { "type": "string", "maxLength": 120 },
+        "adminNote": { "type": "string", "maxLength": 300 },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "paidBy": { "type": "string", "maxLength": 128 },
+        "paidAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "userDisplayName", "userUsername", "pointsRequested", "pointRateNaira", "nairaAmount", "bankName", "bankCode", "accountNumberMasked", "accountHolderName", "accountVerificationStatus", "verificationProvider", "status", "createdAt", "updatedAt"]
+    },
+    "WithdrawalPrivatePII": {
+      "title": "WithdrawalPrivatePII",
+      "description": "Isolated raw bank account PII restricted strictly to requester and authorized payout admins.",
+      "type": "object",
+      "properties": {
+        "withdrawalId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "bankName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "bankCode": { "type": "string", "minLength": 2, "maxLength": 20 },
+        "accountNumber": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "accountHolderName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "verificationProvider": { "type": "string", "enum": ["paystack", "flutterwave", "none"] },
+        "providerResponseSummary": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["withdrawalId", "uid", "bankName", "bankCode", "accountNumber", "accountHolderName", "verificationProvider", "createdAt"]
     }
   },
   "firestore": {
@@ -967,6 +1356,82 @@
     "/customisation_catalog/{itemId}": {
       "schema": { "$ref": "#/entities/CustomisationCatalogItem" },
       "description": "Admin-managed profile customisation Studio items and tier locks."
+    },
+    "/ai_conversations/{convId}": {
+      "schema": { "$ref": "#/entities/AIConversation" },
+      "description": "Private personal Nexora AI conversation threads."
+    },
+    "/ai_messages/{msgId}": {
+      "schema": { "$ref": "#/entities/AIMessage" },
+      "description": "Persistent turns inside private Nexora AI conversation threads."
+    },
+    "/ai_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/AISettings" },
+      "description": "Global Nexora AI settings controlled by the owner."
+    },
+    "/ai_usage/{usageId}": {
+      "schema": { "$ref": "#/entities/AIUsage" },
+      "description": "Daily AI usage and token/cost telemetry per user."
+    },
+    "/ai_channel_config/{channelId}": {
+      "schema": { "$ref": "#/entities/AIChannelConfig" },
+      "description": "Per-channel AI participation and moderation rules."
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/AnnouncementRecord" },
+      "description": "Owner-approved scheduled and published platform announcements."
+    },
+    "/device_tokens/{tokenId}": {
+      "schema": { "$ref": "#/entities/DeviceToken" },
+      "description": "FCM push notification tokens consented by device."
+    },
+    "/release_history/{releaseId}": {
+      "schema": { "$ref": "#/entities/ReleaseHistoryItem" },
+      "description": "Nexora software release notes, download links, and owner approval history."
+    },
+    "/delivery_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/DeliveryReport" },
+      "description": "Immutable notification and push delivery outcome telemetry."
+    },
+    "/rewards_config/{configId}": {
+      "schema": { "$ref": "#/entities/RewardsConfig" },
+      "description": "Global rewards rules, withdrawal lock state, minimum Naira threshold, and Owner-configured conversion rate."
+    },
+    "/invitations/{code}": {
+      "schema": { "$ref": "#/entities/InvitationRecord" },
+      "description": "Unique member and admin invitation links with qualified referral counts."
+    },
+    "/referral_claims/{inviteeUid}": {
+      "schema": { "$ref": "#/entities/ReferralClaim" },
+      "description": "Deterministic one-per-user referral attribution and anti-fraud screening records."
+    },
+    "/referral_fraud_alerts/{alertId}": {
+      "schema": { "$ref": "#/entities/ReferralFraudAlert" },
+      "description": "Flagged suspicious referral claims for admin review."
+    },
+    "/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/TaskItem" },
+      "description": "Free-to-participate community tasks created and managed by admins."
+    },
+    "/task_submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/TaskSubmission" },
+      "description": "User proof submissions and admin verification decisions."
+    },
+    "/wallets/{userId}": {
+      "schema": { "$ref": "#/entities/WalletAccount" },
+      "description": "Key Points balances (available, pending, locked) protected against self-modification."
+    },
+    "/wallet_transactions/{txId}": {
+      "schema": { "$ref": "#/entities/WalletTransaction" },
+      "description": "Immutable Key Points & Naira transaction ledger."
+    },
+    "/withdrawal_requests/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/WithdrawalRequest" },
+      "description": "Masked Naira withdrawal requests and payout workflow statuses."
+    },
+    "/withdrawal_private/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/WithdrawalPrivatePII" },
+      "description": "Restricted raw bank account number records isolated from public queries."
     }
   }
 }

@@ -50,6 +50,8 @@ import { GeminiChatbotPanel } from '../../components/ai/GeminiChatbotPanel';
 import { FriendlyErrorBanner } from '../../components/common/FriendlyErrorBanner';
 import { useAuth } from '../../hooks/useAuth';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
+import { callCommunityAiReply } from '../../services/ai/geminiClientService';
+import { touchChannelLastBotReply } from '../../services/ai/nexoraAiFirestoreService';
 import {
   blockUserAccount,
   createGroupConversation,
@@ -97,6 +99,8 @@ interface CallLogEntry {
 interface PendingOutboxMessage {
   clientId: string;
   convId: string;
+  isGroup?: boolean;
+  convTitle?: string;
   text: string;
   replyToId?: string;
   replyToText?: string;
@@ -485,6 +489,37 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
         recipientIds: draft.recipientIds,
       });
       setPendingOutbox((prev) => prev.filter((item) => item.clientId !== draft.clientId));
+
+      // Strict privacy boundary: NEVER monitor or auto-reply in private 1-on-1 DMs.
+      if (draft.isGroup === true) {
+        const recentContext = visibleMessages.slice(-6).map((item) => ({
+          author: item.isAi ? 'Nexora AI' : item.senderName,
+          text: item.text,
+        }));
+        void callCommunityAiReply({
+          targetType: 'group_chat',
+          channelId: draft.convId,
+          channelName: draft.convTitle || 'Group Chat',
+          senderId: profile.uid,
+          senderName: profile.displayName,
+          text: draft.text,
+          recentMessages: recentContext,
+        }).then(async (aiRes) => {
+          if (aiRes.responded && aiRes.reply) {
+            await sendChatMessage({
+              convId: draft.convId,
+              sender: profile,
+              type: 'text',
+              text: aiRes.reply,
+              recipientIds: draft.recipientIds,
+              isAi: true,
+              aiTriggeredBy: profile.uid,
+              senderNameOverride: 'Nexora AI',
+            });
+            await touchChannelLastBotReply(draft.convId);
+          }
+        }).catch(() => {});
+      }
     } catch (err) {
       const friendly = extractReadableErrorMessage(
         err,
@@ -534,6 +569,8 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
     const draft: PendingOutboxMessage = {
       clientId: `outbox_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       convId: activeConv.id,
+      isGroup: activeConv.isGroup,
+      convTitle: getConvTitle(activeConv),
       text: messageText.trim(),
       replyToId: replyTo?.id,
       replyToText: replyTo?.text,
@@ -798,7 +835,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                   setShowAiAssistant((prev) => !prev);
                   setMobileShowThread(false);
                 }}
-                aria-label="Toggle Gemini AI Chat"
+                aria-label="Toggle Nexora AI Assistant"
                 className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all whitespace-nowrap min-h-[40px] ${
                   showAiAssistant
                     ? 'bg-[#7C3AED] border-[#8B5CF6] text-white'
@@ -806,7 +843,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                 }`}
               >
                 <Bot size={14} className={showAiAssistant ? 'text-white' : 'text-[#C084FC]'} />
-                <span>Gemini AI</span>
+                <span>Nexora AI</span>
               </button>
               <button
                 type="button"
@@ -1158,7 +1195,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                             label={`${activeTypingUsers.join(', ')} typing`}
                           />
                         ) : activeConv.isGroup ? (
-                          `${activeConv.participantIds.length} participants · tap to inspect`
+                          `${activeConv.participantIds.length} participants · @Nexora AI enabled`
                         ) : activePartnerStatus ? (
                           <PresenceBadge status={activePartnerStatus} size="xs" showLabel />
                         ) : activePartner?.lastActiveAt &&
@@ -1392,7 +1429,8 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                 )}
 
                 {visibleMessages.map((m) => {
-                  const isMine = m.senderId === profile.uid;
+                  const isBot = Boolean(m.isAi);
+                  const isMine = !isBot && m.senderId === profile.uid;
                   const isRead = isMine && isMessageReadByOther(m, activeConv);
                   return (
                     <div
@@ -1403,10 +1441,20 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                         className={`group relative max-w-[88%] sm:max-w-[75%] rounded-2xl px-3.5 sm:px-4 py-2.5 space-y-1.5 shadow-sm ${
                           isMine
                             ? 'bg-gradient-to-br from-[#6D28D9] via-[#7C3AED] to-[#9333EA] text-white rounded-br-md'
+                            : isBot
+                            ? 'bg-[#17122B] border border-[#8B5CF6]/35 text-[#F1F5F9] rounded-bl-md'
                             : 'bg-[#141122] border border-white/[0.08] text-[#F1F5F9] rounded-bl-md'
                         }`}
                       >
-                        {!isMine && (
+                        {isBot ? (
+                          <div className="text-[11px] font-semibold text-[#E9D5FF] inline-flex items-center gap-1.5">
+                            <Bot size={12} className="text-[#C084FC]" />
+                            <span>Nexora AI</span>
+                            <span className="px-1.5 py-0.5 rounded bg-[#7C3AED]/30 border border-[#8B5CF6]/40 text-[9px] uppercase tracking-wider">
+                              Assistant
+                            </span>
+                          </div>
+                        ) : !isMine ? (
                           <button
                             type="button"
                             onClick={() => onOpenProfile(m.senderId)}
@@ -1423,7 +1471,7 @@ export function ChatPage({ users, stories, initialConvId, onOpenProfile }: ChatP
                               size="xs"
                             />
                           </button>
-                        )}
+                        ) : null}
                         {m.replyToText && (
                           <div className="px-3 py-1.5 rounded-xl bg-black/30 border border-white/10 text-[11px] text-white/80 truncate">
                             Replying to: {m.replyToText}

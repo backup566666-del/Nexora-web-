@@ -9,6 +9,7 @@ import {
   serverTimestamp,
   Unsubscribe,
   updateDoc,
+  where,
 } from 'firebase/firestore';
 import { ErrorDiagnosticCategory, ErrorDiagnosticEntry } from '../../types/nexora';
 import { auth, db } from './config';
@@ -260,7 +261,8 @@ export async function recordErrorDiagnostic(params: {
 }): Promise<string | null> {
   const actorUid = auth?.currentUser?.uid;
   const emailVerified = auth?.currentUser?.emailVerified;
-  if (!actorUid || emailVerified !== true || typeof db !== 'object' || db === null) {
+  const hasPhoneNumber = Boolean(auth?.currentUser?.phoneNumber);
+  if (!actorUid || (emailVerified !== true && !hasPhoneNumber) || typeof db !== 'object' || db === null) {
     return null;
   }
 
@@ -308,6 +310,7 @@ export function subscribeErrorDiagnostics(
 ): Unsubscribe {
   const q = query(
     collection(db, 'error_diagnostics'),
+    where('category', 'in', ['upload', 'permission', 'network', 'auth', 'validation', 'runtime', 'unknown']),
     orderBy('createdAt', 'desc'),
     limit(100)
   );

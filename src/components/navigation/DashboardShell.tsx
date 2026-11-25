@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Award,
+  Banknote,
   BarChart3,
   Bell,
   Compass,
@@ -9,11 +10,14 @@ import {
   Film,
   Gift,
   Heart,
+  History,
   Home,
   LayoutGrid,
   LogOut,
   Megaphone,
   MessageSquare,
+  Monitor,
+  Moon,
   Palette,
   PlusSquare,
   Search,
@@ -21,8 +25,11 @@ import {
   Shield,
   ShieldAlert,
   Sparkles,
+  Sun,
   Tag,
   User as UserIcon,
+  UserPlus,
+  Wallet,
   X,
 } from 'lucide-react';
 import { NexoraLogo } from '../branding/NexoraLogo';
@@ -35,6 +42,7 @@ import { TierBadge } from '../common/TierBadge';
 import { BadgeStrip } from '../common/VerifiedBadge';
 import { CustomisedAvatar } from '../profile/CustomisedAvatar';
 import { useAuth } from '../../hooks/useAuth';
+import { useTheme } from '../../hooks/useTheme';
 import { logoutUser } from '../../services/auth/authService';
 import {
   markAllNotificationsRead,
@@ -116,6 +124,17 @@ const DESKTOP_STUDIO_NAV: {
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
+const DESKTOP_REWARDS_NAV: {
+  id: NavSection;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+}[] = [
+  { id: 'invite', label: 'Invite Friends', icon: UserPlus },
+  { id: 'tasks', label: 'Tasks & Rewards', icon: Gift },
+  { id: 'wallet', label: 'Nexora Wallet', icon: Wallet },
+  { id: 'rewards-history', label: 'Rewards History', icon: History },
+];
+
 const SECTION_LABELS: Record<NavSection, string> = {
   home: 'Home Feed',
   vibes: 'Vibes',
@@ -130,12 +149,17 @@ const SECTION_LABELS: Record<NavSection, string> = {
   subscriptions: 'Nexora Membership',
   studio: 'Profile Studio',
   ai: 'Nexora AI Studio',
+  invite: 'Invite Friends',
+  tasks: 'Tasks & Rewards',
+  wallet: 'Nexora Wallet',
+  'rewards-history': 'Rewards History',
 };
 
 const NOTIF_FILTERS: { id: 'all' | 'unread' | NotificationCategory; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'unread', label: 'Unread' },
   { id: 'social', label: 'Social' },
+  { id: 'rewards', label: 'Rewards' },
   { id: 'badges', label: 'Badges' },
   { id: 'gifts', label: 'Gifts' },
   { id: 'admin', label: 'Admin' },
@@ -156,6 +180,13 @@ function NotificationGlyph({ type }: { type: NotificationItem['type'] }) {
       return <Tag size={12} className="text-[#C084FC]" />;
     case 'security_alert':
       return <ShieldAlert size={12} className="text-rose-400" />;
+    case 'referral_reward':
+      return <UserPlus size={12} className="text-emerald-400" />;
+    case 'task_reward':
+      return <Gift size={12} className="text-amber-300" />;
+    case 'withdrawal_update':
+    case 'wallet_adjustment':
+      return <Banknote size={12} className="text-emerald-400" />;
     case 'staff_role_change':
     case 'admin_notice':
     case 'announcement':
@@ -187,6 +218,7 @@ export function DashboardShell({
     effectiveTier,
     getUserBadges,
   } = useAuth();
+  const { themeMode, cycleThemeMode } = useTheme();
   const [dockVisible, setDockVisible] = useState(true);
   const lastScrollY = useRef(0);
   const scrollDeltaAccumRef = useRef(0);
@@ -200,6 +232,15 @@ export function DashboardShell({
   const [notifFilter, setNotifFilter] = useState<'all' | 'unread' | NotificationCategory>('all');
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState<string[]>([]);
+  const [navTransitionTick, setNavTransitionTick] = useState(0);
+  const prevSectionRef = useRef(activeSection);
+
+  useEffect(() => {
+    if (prevSectionRef.current !== activeSection) {
+      prevSectionRef.current = activeSection;
+      setNavTransitionTick((n) => n + 1);
+    }
+  }, [activeSection]);
 
   useEffect(() => {
     const clean = searchQuery.trim();
@@ -369,6 +410,12 @@ export function DashboardShell({
       n.type === 'identity_decision'
     ) {
       onNavigate('profile', profile.uid, 'posts');
+    } else if (n.type === 'referral_reward') {
+      onNavigate('invite');
+    } else if (n.type === 'task_reward') {
+      onNavigate('tasks');
+    } else if (n.type === 'withdrawal_update' || n.type === 'wallet_adjustment') {
+      onNavigate('wallet');
     } else if (
       n.type === 'staff_role_change' ||
       n.type === 'security_alert' ||
@@ -397,7 +444,12 @@ export function DashboardShell({
             onClick={() => onNavigate('home')}
             className="focus-visible:outline-none"
           >
-            <NexoraLogo variant="horizontal" size="sm" />
+            <NexoraLogo
+              variant="horizontal"
+              size="sm"
+              animation={navTransitionTick > 0 ? 'transition' : 'ambient'}
+              replayKey={navTransitionTick}
+            />
           </button>
         </div>
 
@@ -445,6 +497,35 @@ export function DashboardShell({
                       {count > 99 ? '99+' : count}
                     </span>
                   )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="pt-4 border-t border-white/[0.06] space-y-1">
+            <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">
+              Rewards &amp; Wallet
+            </p>
+            {DESKTOP_REWARDS_NAV.map((item) => {
+              const Icon = item.icon;
+              const active = activeSection === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onNavigate(item.id)}
+                  aria-current={active ? 'page' : undefined}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] transition-all whitespace-nowrap ${
+                    active
+                      ? 'bg-[#7C3AED]/20 border border-[#8B5CF6]/40 text-white font-semibold'
+                      : 'border border-transparent text-[#94A3B8] hover:text-white hover:bg-white/[0.04] font-medium'
+                  }`}
+                >
+                  <Icon
+                    size={16}
+                    className={active ? 'text-[#C084FC] shrink-0' : 'text-[#64748B] shrink-0'}
+                  />
+                  <span className="truncate">{item.label}</span>
                 </button>
               );
             })}
@@ -549,7 +630,12 @@ export function DashboardShell({
                 className="lg:hidden shrink-0 focus-visible:outline-none"
                 aria-label="Nexora Home"
               >
-                <NexoraLogo variant="icon" size="xs" />
+                <NexoraLogo
+                  variant="icon"
+                  size="xs"
+                  animation={navTransitionTick > 0 ? 'transition' : 'ambient'}
+                  replayKey={navTransitionTick}
+                />
               </button>
               <h1 className="font-display text-sm sm:text-base font-semibold text-white tracking-tight truncate">
                 {SECTION_LABELS[activeSection]}
@@ -715,6 +801,24 @@ export function DashboardShell({
                   </div>
                 )}
               </div>
+
+              {/* Quick Global Theme Mode Toggle (Dark / Light / System) */}
+              <button
+                type="button"
+                onClick={() => void cycleThemeMode()}
+                title={`Theme: ${themeMode === 'dark' ? 'Dark' : themeMode === 'light' ? 'Light' : 'System'} (click to switch)`}
+                aria-label={`Switch theme (current: ${themeMode})`}
+                className="min-w-[40px] min-h-[40px] px-2.5 rounded-xl bg-[#0E0C18] border border-white/[0.08] hover:border-[#8B5CF6]/45 text-[#CBD5E1] hover:text-white flex items-center justify-center gap-1.5 transition-colors text-xs font-medium"
+              >
+                {themeMode === 'light' ? (
+                  <Sun size={15} className="text-amber-300" />
+                ) : themeMode === 'system' ? (
+                  <Monitor size={15} className="text-sky-300" />
+                ) : (
+                  <Moon size={15} className="text-[#C084FC]" />
+                )}
+                <span className="hidden xl:inline capitalize">{themeMode}</span>
+              </button>
 
               {/* Notifications Center */}
               <div className="relative">
@@ -976,6 +1080,46 @@ export function DashboardShell({
                       type="button"
                       onClick={() => {
                         setShowAccountMenu(false);
+                        onNavigate('invite');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-emerald-300 hover:bg-[#7C3AED]/15 text-left font-medium"
+                    >
+                      <UserPlus size={14} /> Invite Friends
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        onNavigate('tasks');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                    >
+                      <Gift size={14} className="text-amber-300" /> Tasks &amp; Rewards
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        onNavigate('wallet');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                    >
+                      <Wallet size={14} className="text-emerald-400" /> Nexora Wallet
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
+                        onNavigate('rewards-history');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E2E8F0] hover:bg-[#7C3AED]/15 text-left"
+                    >
+                      <History size={14} /> Rewards History
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAccountMenu(false);
                         onNavigate('subscriptions');
                       }}
                       className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#E9D5FF] hover:bg-[#7C3AED]/15 text-left font-medium"
@@ -1222,23 +1366,34 @@ export function DashboardShell({
 
         {/* Section Viewports (HomePage controls its own customized layout directly!) */}
         {activeSection === 'vibes' && (
-          <main className="relative z-10 flex-1 flex flex-col pb-16 lg:pb-0">{children}</main>
+          <main key={activeSection} className="relative z-10 flex-1 flex flex-col pb-16 lg:pb-0 nexora-page-enter">
+            {children}
+          </main>
         )}
 
         {activeSection === 'chat' && (
-          <main className="relative z-10 flex-1 max-w-[1680px] w-full mx-auto px-2 sm:px-4 lg:px-7 pt-2 sm:pt-4 pb-20 lg:pb-5 flex flex-col">
+          <main
+            key={activeSection}
+            className="relative z-10 flex-1 max-w-[1680px] w-full mx-auto px-2 sm:px-4 lg:px-7 pt-2 sm:pt-4 pb-20 lg:pb-5 flex flex-col nexora-page-enter"
+          >
             {children}
           </main>
         )}
 
         {activeSection === 'home' && (
-          <main className="relative z-10 flex-1 max-w-[1680px] w-full mx-auto px-3 sm:px-5 lg:px-7 pt-4 sm:pt-5 pb-24 lg:pb-10">
+          <main
+            key={activeSection}
+            className="relative z-10 flex-1 max-w-[1680px] w-full mx-auto px-3 sm:px-5 lg:px-7 pt-4 sm:pt-5 pb-24 lg:pb-10 nexora-page-enter"
+          >
             {children}
           </main>
         )}
 
         {activeSection !== 'vibes' && activeSection !== 'chat' && activeSection !== 'home' && (
-          <main className="relative z-10 flex-1 max-w-[1520px] w-full mx-auto px-3 sm:px-5 lg:px-7 pt-4 sm:pt-6 pb-24 lg:pb-10">
+          <main
+            key={activeSection}
+            className="relative z-10 flex-1 max-w-[1520px] w-full mx-auto px-3 sm:px-5 lg:px-7 pt-4 sm:pt-6 pb-24 lg:pb-10 nexora-page-enter"
+          >
             {children}
           </main>
         )}

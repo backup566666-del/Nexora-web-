@@ -90,6 +90,13 @@ export function inferCategoryFromNotificationType(type: NotificationType): Notif
     case 'subscription_notice':
     case 'subscription_renewal':
       return 'subscriptions';
+    case 'ai_welcome':
+      return 'account';
+    case 'referral_reward':
+    case 'task_reward':
+    case 'withdrawal_update':
+    case 'wallet_adjustment':
+      return 'rewards';
     case 'staff_role_change':
     case 'community_status':
     case 'admin_notice':
@@ -143,8 +150,16 @@ export function inferTargetTypeFromNotificationType(type: NotificationType): Not
     case 'staff_role_change':
     case 'support_ticket':
       return 'settings';
+    case 'referral_reward':
+      return 'invite';
+    case 'task_reward':
+      return 'tasks';
+    case 'withdrawal_update':
+    case 'wallet_adjustment':
+      return 'wallet';
     case 'admin_notice':
     case 'announcement':
+    case 'ai_welcome':
     case 'system_update':
     default:
       return 'system';

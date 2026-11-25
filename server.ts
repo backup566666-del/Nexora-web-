@@ -10,6 +10,27 @@ import nodemailer from 'nodemailer';
 import path from 'path';
 import Stripe from 'stripe';
 import { fileURLToPath } from 'url';
+import {
+  buildNexoraSystemInstruction,
+  createServerGeminiClientOrNull,
+  dispatchPushTokens,
+  enforceAndTrackAiQuota,
+  evaluateCommunityAiDecision,
+  extractTokenUsage,
+  findProhibitedTopicMatch,
+  getQuotaSnapshot,
+  isPushMessagingCredentialAvailable,
+  loadChannelAiConfig,
+  loadGlobalAiSettings,
+  markChannelBotReplied,
+  recordCompletedAiUsage,
+  resolveCallerTierAndRole,
+} from './server/nexoraAiService';
+import {
+  fetchNigerianBanks,
+  getBankProviderStatus,
+  resolveNigerianBankAccount,
+} from './server/rewardsService';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -463,6 +484,7 @@ export function getAndroidReleaseStatus(rootDir: string = __dirname): AndroidRel
 function loadFirebaseAuthMeta(): {
   projectId: string;
   authDomain: string;
+  apiKey: string;
   hasGoogleOAuthClient: boolean;
 } {
   const candidates = [
@@ -475,12 +497,14 @@ function loadFirebaseAuthMeta(): {
         const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as {
           projectId?: string;
           authDomain?: string;
+          apiKey?: string;
           oAuthClientId?: string;
         };
         const projectId = parsed.projectId || process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0024648348';
         return {
           projectId,
           authDomain: parsed.authDomain || `${projectId}.firebaseapp.com`,
+          apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '',
           hasGoogleOAuthClient: Boolean(parsed.oAuthClientId && parsed.oAuthClientId.trim()),
         };
       }
@@ -492,8 +516,182 @@ function loadFirebaseAuthMeta(): {
   return {
     projectId: fallbackProject,
     authDomain: `${fallbackProject}.firebaseapp.com`,
+    apiKey: '',
     hasGoogleOAuthClient: false,
   };
+}
+
+interface LiveAuthProviderProbeResult {
+  checkedAtMs: number;
+  authorizedDomains: string[];
+  enabledMap: Record<string, boolean>;
+}
+
+const AUTH_PROVIDER_PROBE_TTL_MS = 60_000;
+let cachedAuthProviderProbe: LiveAuthProviderProbeResult | null = null;
+let inFlightAuthProviderProbe: Promise<LiveAuthProviderProbeResult> | null = null;
+
+async function probeIdentityToolkitOAuthProvider(
+  apiKey: string,
+  continueUri: string,
+  providerId: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ continueUri, providerId }),
+        signal: AbortSignal.timeout(4000),
+      }
+    );
+    if (res.ok) return true;
+    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+    const errMsg = String(body?.error?.message || '').toUpperCase();
+    if (
+      errMsg.includes('OPERATION_NOT_ALLOWED') ||
+      errMsg.includes('CONFIGURATION_NOT_FOUND') ||
+      errMsg.includes('IDP_DISABLED')
+    ) {
+      return false;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function probeIdentityToolkitPasswordProvider(apiKey: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'probe-status-check@nexora.invalid',
+          password: 'probe-status-check-password',
+          returnSecureToken: false,
+        }),
+        signal: AbortSignal.timeout(4000),
+      }
+    );
+    if (res.ok) return true;
+    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+    const errMsg = String(body?.error?.message || '').toUpperCase();
+    if (errMsg.includes('OPERATION_NOT_ALLOWED') || errMsg.includes('EMAIL_SIGNIN_DISABLED')) {
+      return false;
+    }
+    return (
+      errMsg.includes('INVALID_LOGIN_CREDENTIALS') ||
+      errMsg.includes('EMAIL_NOT_FOUND') ||
+      errMsg.includes('INVALID_PASSWORD') ||
+      errMsg.includes('INVALID_EMAIL') ||
+      errMsg.includes('TOO_MANY_ATTEMPTS_TRY_LATER')
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function probeIdentityToolkitProjectConfig(
+  apiKey: string
+): Promise<{ authorizedDomains: string[]; recaptchaConfigured: boolean }> {
+  try {
+    const [cfgRes, recaptchaRes] = await Promise.all([
+      fetch(
+        `https://identitytoolkit.googleapis.com/v1/projects?key=${encodeURIComponent(apiKey)}`,
+        { signal: AbortSignal.timeout(4000) }
+      ).catch(() => null),
+      fetch(
+        `https://identitytoolkit.googleapis.com/v1/recaptchaParams?key=${encodeURIComponent(apiKey)}`,
+        { signal: AbortSignal.timeout(4000) }
+      ).catch(() => null),
+    ]);
+    let authorizedDomains: string[] = [];
+    if (cfgRes && cfgRes.ok) {
+      const data = (await cfgRes.json().catch(() => ({}))) as { authorizedDomains?: unknown };
+      if (Array.isArray(data.authorizedDomains)) {
+        authorizedDomains = data.authorizedDomains.filter((d): d is string => typeof d === 'string');
+      }
+    }
+    return {
+      authorizedDomains,
+      recaptchaConfigured: Boolean(recaptchaRes && recaptchaRes.ok),
+    };
+  } catch {
+    return { authorizedDomains: [], recaptchaConfigured: false };
+  }
+}
+
+async function getLiveFirebaseAuthProviderStatus(meta: {
+  projectId: string;
+  authDomain: string;
+  apiKey: string;
+  hasGoogleOAuthClient: boolean;
+}): Promise<LiveAuthProviderProbeResult> {
+  if (
+    cachedAuthProviderProbe &&
+    Date.now() - cachedAuthProviderProbe.checkedAtMs < AUTH_PROVIDER_PROBE_TTL_MS
+  ) {
+    return cachedAuthProviderProbe;
+  }
+  if (inFlightAuthProviderProbe) {
+    return inFlightAuthProviderProbe;
+  }
+
+  inFlightAuthProviderProbe = (async () => {
+    const continueUri = `https://${meta.authDomain}/__/auth/handler`;
+    if (!meta.apiKey) {
+      const fallback: LiveAuthProviderProbeResult = {
+        checkedAtMs: Date.now(),
+        authorizedDomains: [meta.authDomain],
+        enabledMap: {
+          'google.com': meta.hasGoogleOAuthClient,
+          'github.com': false,
+          'apple.com': false,
+          'microsoft.com': false,
+          'facebook.com': false,
+          phone: false,
+          password: false,
+        },
+      };
+      cachedAuthProviderProbe = fallback;
+      return fallback;
+    }
+
+    const [googleOk, githubOk, appleOk, microsoftOk, facebookOk, passwordOk, projectMeta] =
+      await Promise.all([
+        probeIdentityToolkitOAuthProvider(meta.apiKey, continueUri, 'google.com'),
+        probeIdentityToolkitOAuthProvider(meta.apiKey, continueUri, 'github.com'),
+        probeIdentityToolkitOAuthProvider(meta.apiKey, continueUri, 'apple.com'),
+        probeIdentityToolkitOAuthProvider(meta.apiKey, continueUri, 'microsoft.com'),
+        probeIdentityToolkitOAuthProvider(meta.apiKey, continueUri, 'facebook.com'),
+        probeIdentityToolkitPasswordProvider(meta.apiKey),
+        probeIdentityToolkitProjectConfig(meta.apiKey),
+      ]);
+
+    const result: LiveAuthProviderProbeResult = {
+      checkedAtMs: Date.now(),
+      authorizedDomains: projectMeta.authorizedDomains,
+      enabledMap: {
+        'google.com': googleOk || meta.hasGoogleOAuthClient,
+        'github.com': githubOk,
+        'apple.com': appleOk,
+        'microsoft.com': microsoftOk,
+        'facebook.com': facebookOk,
+        phone: projectMeta.recaptchaConfigured,
+        password: passwordOk,
+      },
+    };
+    cachedAuthProviderProbe = result;
+    return result;
+  })().finally(() => {
+    inFlightAuthProviderProbe = null;
+  });
+
+  return inFlightAuthProviderProbe;
 }
 
 function loadFirebaseProjectId(): string {
@@ -507,14 +705,24 @@ function getFirebaseAdminAuth() {
   return getAuth();
 }
 
-async function verifyFirebaseBearerToken(req: Request): Promise<{ uid: string; email?: string }> {
+async function verifyFirebaseBearerToken(req: Request): Promise<{
+  uid: string;
+  email?: string;
+  emailVerified: boolean;
+  idToken: string;
+}> {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
   if (!token) {
     throw new Error('Authentication required. Please sign in and try again.');
   }
   const decoded = await getFirebaseAdminAuth().verifyIdToken(token);
-  return { uid: decoded.uid, email: decoded.email };
+  return {
+    uid: decoded.uid,
+    email: decoded.email,
+    emailVerified: Boolean(decoded.email_verified),
+    idToken: token,
+  };
 }
 
 export function getStripeBillingConfig() {
@@ -564,6 +772,7 @@ export function getGeminiServerConfig() {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
   return {
     configured: Boolean(apiKey),
+    pushConfigured: isPushMessagingCredentialAvailable(),
     chatModels: [...ALLOWED_GEMINI_CHAT_MODELS],
     videoModel: 'gemini-omni-1.2-flash',
     videoAspectRatios: [...ALLOWED_VIDEO_ASPECT_RATIOS],
@@ -571,16 +780,7 @@ export function getGeminiServerConfig() {
 }
 
 export function createServerGeminiClient(): GoogleGenAI | null {
-  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
-  if (!apiKey) return null;
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
+  return createServerGeminiClientOrNull();
 }
 
 export function mapGeminiUpstreamError(err: unknown): { status: number; message: string } {
@@ -796,19 +996,41 @@ export async function createNexoraServer(httpServer?: http.Server) {
     res.json(getGeminiServerConfig());
   });
 
-  app.post('/api/ai/chat', async (req: Request, res: Response) => {
+  app.get('/api/ai/quota', async (req: Request, res: Response) => {
+    let authedUser: { uid: string; email?: string; emailVerified: boolean; idToken: string };
     try {
-      await verifyFirebaseBearerToken(req);
+      authedUser = await verifyFirebaseBearerToken(req);
     } catch {
-      res.status(401).json({ error: 'Please sign in with your verified account before chatting with Gemini.' });
+      res.status(401).json({ error: 'Please sign in with your verified account to view Nexora AI quota.' });
       return;
     }
 
-    const ai = createServerGeminiClient();
-    if (!ai) {
-      res.status(503).json({
-        error: 'GEMINI_API_KEY is not configured on the server. Add your key in AI Studio Settings > Secrets.',
-      });
+    const [settings, caller] = await Promise.all([
+      loadGlobalAiSettings(authedUser.idToken),
+      resolveCallerTierAndRole(authedUser),
+    ]);
+    const quota = await getQuotaSnapshot({
+      uid: authedUser.uid,
+      tier: caller.tier,
+      isOwner: caller.isOwner,
+      settings,
+      idToken: authedUser.idToken,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ...quota,
+      globalEnabled: settings.enabled,
+      defaultModel: settings.defaultModel,
+      welcomeEnabled: settings.welcomeEnabled,
+    });
+  });
+
+  app.post('/api/ai/chat', async (req: Request, res: Response) => {
+    let authedUser: { uid: string; email?: string; emailVerified: boolean; idToken: string };
+    try {
+      authedUser = await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Please sign in with your verified account before chatting with Nexora AI.' });
       return;
     }
 
@@ -835,10 +1057,46 @@ export async function createNexoraServer(httpServer?: http.Server) {
       return;
     }
 
-    const systemInstruction =
-      typeof body.systemInstruction === 'string' && body.systemInstruction.trim().length > 0
-        ? body.systemInstruction.trim().slice(0, 4000)
-        : 'You are Nexora AI, a helpful assistant inside the Nexora social workspace.';
+    const [settings, caller] = await Promise.all([
+      loadGlobalAiSettings(authedUser.idToken),
+      resolveCallerTierAndRole(authedUser),
+    ]);
+
+    const prohibited = findProhibitedTopicMatch(message, settings.prohibitedTopics);
+    if (prohibited) {
+      res.status(422).json({
+        error: `This request touches a restricted safety topic (${prohibited}) and cannot be answered by Nexora AI.`,
+      });
+      return;
+    }
+
+    const quota = await enforceAndTrackAiQuota({
+      uid: authedUser.uid,
+      tier: caller.tier,
+      isOwner: caller.isOwner,
+      settings,
+      idToken: authedUser.idToken,
+    });
+    if (!quota.allowed) {
+      res.status(quota.statusCode).json({ error: quota.reason || 'Nexora AI quota exceeded.', quota });
+      return;
+    }
+
+    const ai = createServerGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server. Add your key in AI Studio Settings > Secrets.',
+      });
+      return;
+    }
+
+    const systemInstruction = buildNexoraSystemInstruction({
+      settings,
+      customInstruction:
+        typeof body.systemInstruction === 'string' && body.systemInstruction.trim().length > 0
+          ? body.systemInstruction.trim().slice(0, 3500)
+          : undefined,
+    });
 
     const formattedHistory: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
     if (Array.isArray(body.history)) {
@@ -873,9 +1131,29 @@ export async function createNexoraServer(httpServer?: http.Server) {
         message,
       });
 
+      const usage = extractTokenUsage(response, model);
+      const nextUsage = await recordCompletedAiUsage({
+        uid: authedUser.uid,
+        tier: caller.tier,
+        promptTokens: usage.promptTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        estimatedCostUsd: usage.estimatedCostUsd,
+        idToken: authedUser.idToken,
+      });
+
       res.json({
         model,
         reply: response.text || '',
+        usage,
+        quota: {
+          tier: caller.tier,
+          isOwner: caller.isOwner,
+          dailyLimit: quota.dailyLimit,
+          dailyUsed: nextUsage.requestsCount,
+          remaining: Math.max(0, quota.dailyLimit - nextUsage.requestsCount),
+          rateLimitPerMinute: quota.rateLimitPerMinute,
+        },
       });
     } catch (err) {
       const mapped = mapGeminiUpstreamError(err);
@@ -883,76 +1161,614 @@ export async function createNexoraServer(httpServer?: http.Server) {
     }
   });
 
-  app.get('/api/auth/providers', (_req: Request, res: Response) => {
+  app.post('/api/ai/community-reply', async (req: Request, res: Response) => {
+    let authedUser: { uid: string; email?: string; emailVerified: boolean; idToken: string };
+    try {
+      authedUser = await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Authentication required for community AI interaction.' });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      targetType?: unknown;
+      channelId?: unknown;
+      channelName?: unknown;
+      senderId?: unknown;
+      senderName?: unknown;
+      text?: unknown;
+      isAi?: unknown;
+      isNewParticipant?: unknown;
+      recentMessages?: unknown;
+    };
+
+    const targetType =
+      body.targetType === 'space' || body.targetType === 'group_chat' || body.targetType === 'private_dm'
+        ? body.targetType
+        : null;
+    if (!targetType) {
+      res.status(400).json({ error: 'Invalid community targetType.' });
+      return;
+    }
+
+    if (targetType === 'private_dm') {
+      res.status(403).json({
+        responded: false,
+        error: 'Privacy boundary: Nexora AI never automatically monitors private 1-on-1 direct messages.',
+      });
+      return;
+    }
+
+    const channelId = typeof body.channelId === 'string' ? body.channelId.trim().slice(0, 128) : '';
+    const text = typeof body.text === 'string' ? body.text.trim().slice(0, 2000) : '';
+    if (!channelId || !text) {
+      res.status(400).json({ error: 'channelId and message text are required.' });
+      return;
+    }
+
+    const [settings, caller, channelConfig] = await Promise.all([
+      loadGlobalAiSettings(authedUser.idToken),
+      resolveCallerTierAndRole(authedUser),
+      loadChannelAiConfig(channelId, authedUser.idToken),
+    ]);
+
+    const decision = evaluateCommunityAiDecision({
+      targetType,
+      channelId,
+      channelName: typeof body.channelName === 'string' ? body.channelName.slice(0, 80) : undefined,
+      senderId: typeof body.senderId === 'string' ? body.senderId : authedUser.uid,
+      senderName: typeof body.senderName === 'string' ? body.senderName.slice(0, 80) : 'Member',
+      text,
+      isAi: body.isAi === true,
+      isNewParticipant: body.isNewParticipant === true,
+      globalSettings: settings,
+      channelConfig,
+    });
+
+    if (decision.prohibitedTopic) {
+      res.status(422).json({
+        responded: false,
+        decision,
+        error: decision.reason,
+      });
+      return;
+    }
+
+    if (!decision.shouldRespond) {
+      res.json({ responded: false, decision });
+      return;
+    }
+
+    const quota = await enforceAndTrackAiQuota({
+      uid: authedUser.uid,
+      tier: caller.tier,
+      isOwner: caller.isOwner,
+      settings,
+      idToken: authedUser.idToken,
+    });
+    if (!quota.allowed) {
+      res.status(quota.statusCode).json({ responded: false, error: quota.reason, decision });
+      return;
+    }
+
+    const ai = createServerGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        responded: false,
+        error: 'GEMINI_API_KEY is not configured on the server.',
+        decision,
+      });
+      return;
+    }
+
+    const channelLabel =
+      channelConfig?.channelName ||
+      (typeof body.channelName === 'string' ? body.channelName.trim().slice(0, 80) : 'Community Channel');
+    const recentLines: string[] = [];
+    if (Array.isArray(body.recentMessages)) {
+      for (const m of body.recentMessages.slice(-8)) {
+        if (m && typeof m === 'object') {
+          const author = typeof (m as { author?: unknown }).author === 'string' ? (m as { author: string }).author : 'Member';
+          const content = typeof (m as { text?: unknown }).text === 'string' ? (m as { text: string }).text : '';
+          if (content.trim()) {
+            recentLines.push(`${author.slice(0, 40)}: ${content.trim().slice(0, 300)}`);
+          }
+        }
+      }
+    }
+
+    const modeContext = [
+      `Context: You are replying inside the Nexora ${targetType === 'space' ? 'Space discussion channel' : 'Group Chat'} "${channelLabel}".`,
+      `Trigger mode: ${decision.modeUsed === 'mode_a_direct' ? 'Direct mention/invitation (Mode A)' : 'Natural community participation (Mode B)'}.`,
+      'Keep your response concise (2-5 sentences), natural, welcoming, accurate, and community-safe.',
+    ].join('\n');
+
+    const promptText = [
+      recentLines.length > 0 ? `Recent messages:\n${recentLines.join('\n')}` : '',
+      `Latest message from ${typeof body.senderName === 'string' ? body.senderName.slice(0, 60) : 'Member'}: "${text}"`,
+      'Respond naturally as Nexora AI:',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    try {
+      const model = settings.defaultModel;
+      const response = await ai.models.generateContent({
+        model,
+        contents: promptText,
+        config: {
+          systemInstruction: buildNexoraSystemInstruction({ settings, modeContext }),
+        },
+      });
+
+      markChannelBotReplied(channelId);
+      const usage = extractTokenUsage(response, model);
+      await recordCompletedAiUsage({
+        uid: authedUser.uid,
+        tier: caller.tier,
+        promptTokens: usage.promptTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        estimatedCostUsd: usage.estimatedCostUsd,
+        idToken: authedUser.idToken,
+      });
+
+      res.json({
+        responded: true,
+        model,
+        reply: (response.text || '').trim().slice(0, 1000),
+        decision,
+        usage,
+      });
+    } catch (err) {
+      const mapped = mapGeminiUpstreamError(err);
+      res.status(mapped.status).json({ responded: false, error: mapped.message, decision });
+    }
+  });
+
+  app.post('/api/ai/welcome', async (req: Request, res: Response) => {
+    let authedUser: { uid: string; email?: string; emailVerified: boolean; idToken: string };
+    try {
+      authedUser = await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Authentication required to generate a welcome message.' });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      displayName?: unknown;
+      username?: unknown;
+      providerId?: unknown;
+    };
+    const [settings, caller] = await Promise.all([
+      loadGlobalAiSettings(authedUser.idToken),
+      resolveCallerTierAndRole(authedUser),
+    ]);
+
+    if (!settings.welcomeEnabled || !settings.enabled) {
+      res.json({
+        generated: false,
+        disabled: true,
+        configured: Boolean((process.env.GEMINI_API_KEY || '').trim()),
+        reason: 'Automated AI welcome messages are currently disabled in Nexora AI settings.',
+        messageText: '',
+      });
+      return;
+    }
+
+    const ai = createServerGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        generated: false,
+        configured: false,
+        reason: 'GEMINI_API_KEY is not configured on the server.',
+        messageText: '',
+      });
+      return;
+    }
+
+    const displayName =
+      typeof body.displayName === 'string' && body.displayName.trim()
+        ? body.displayName.trim().slice(0, 80)
+        : 'Creator';
+    const username =
+      typeof body.username === 'string' && body.username.trim()
+        ? body.username.trim().slice(0, 30)
+        : 'member';
+
+    try {
+      const model = settings.defaultModel;
+      const response = await ai.models.generateContent({
+        model,
+        contents: `Generate a warm, personalized onboarding welcome message for new Nexora member ${displayName} (@${username}). Template guidance: ${settings.welcomePromptTemplate}. Keep it concise (3-4 sentences max) and welcoming.`,
+        config: {
+          systemInstruction: buildNexoraSystemInstruction({
+            settings,
+            modeContext: 'Task: Personalized member welcome onboarding message.',
+          }),
+        },
+      });
+
+      const usage = extractTokenUsage(response, model);
+      await recordCompletedAiUsage({
+        uid: authedUser.uid,
+        tier: caller.tier,
+        promptTokens: usage.promptTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        estimatedCostUsd: usage.estimatedCostUsd,
+        idToken: authedUser.idToken,
+      });
+
+      res.json({
+        generated: true,
+        configured: true,
+        model,
+        messageText: (response.text || '').trim().slice(0, 600),
+        usage,
+      });
+    } catch (err) {
+      const mapped = mapGeminiUpstreamError(err);
+      res.status(mapped.status).json({
+        generated: false,
+        configured: true,
+        error: mapped.message,
+      });
+    }
+  });
+
+  app.post('/api/ai/draft-announcement', async (req: Request, res: Response) => {
+    let authedUser: { uid: string; email?: string; emailVerified: boolean; idToken: string };
+    try {
+      authedUser = await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    const [settings, caller] = await Promise.all([
+      loadGlobalAiSettings(authedUser.idToken),
+      resolveCallerTierAndRole(authedUser),
+    ]);
+    const canDraft =
+      caller.isOwner ||
+      caller.permissions.includes('manage_notifications') ||
+      caller.permissions.includes('manage_platform');
+    if (!canDraft) {
+      res.status(403).json({ error: 'Only authorized administrators or the Owner can draft official announcements.' });
+      return;
+    }
+
+    const ai = createServerGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server. Add your key in AI Studio Settings > Secrets.',
+      });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      category?: unknown;
+      audience?: unknown;
+      topic?: unknown;
+    };
+    const category = typeof body.category === 'string' ? body.category.trim().slice(0, 40) : 'product_release';
+    const audience = typeof body.audience === 'string' ? body.audience.trim().slice(0, 20) : 'all';
+    const topic = typeof body.topic === 'string' ? body.topic.trim().slice(0, 600) : '';
+    if (!topic) {
+      res.status(400).json({ error: 'Please describe the announcement topic or notes first.' });
+      return;
+    }
+
+    try {
+      const model = settings.defaultModel;
+      const response = await ai.models.generateContent({
+        model,
+        contents: [
+          `Draft a Nexora platform announcement as JSON with keys "title" (max 90 chars), "summary" (max 180 chars), and "body" (max 480 chars).`,
+          `Category: ${category}`,
+          `Target audience: ${audience}`,
+          `Topic / Admin Notes: ${topic}`,
+          `Official links you may reference: Web ${settings.officialLinks.webAppUrl}, Android ${settings.officialLinks.androidApkUrl}, Support ${settings.officialLinks.supportUrl}.`,
+          'Return valid JSON only without markdown fences.',
+        ].join('\n'),
+        config: {
+          systemInstruction: buildNexoraSystemInstruction({
+            settings,
+            modeContext: 'Task: Draft clear, trustworthy, polished official Nexora platform announcements.',
+          }),
+        },
+      });
+
+      const rawText = (response.text || '').trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+      let parsed: { title?: string; summary?: string; body?: string } = {};
+      try {
+        parsed = JSON.parse(rawText) as { title?: string; summary?: string; body?: string };
+      } catch {
+        parsed = {
+          title: `Nexora ${category.replace(/_/g, ' ')} Update`,
+          summary: rawText.slice(0, 180),
+          body: rawText.slice(0, 480),
+        };
+      }
+
+      const usage = extractTokenUsage(response, model);
+      await recordCompletedAiUsage({
+        uid: authedUser.uid,
+        tier: caller.tier,
+        promptTokens: usage.promptTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        estimatedCostUsd: usage.estimatedCostUsd,
+        idToken: authedUser.idToken,
+      });
+
+      res.json({
+        model,
+        title: String(parsed.title || 'Nexora Platform Update').slice(0, 100),
+        summary: String(parsed.summary || '').slice(0, 200),
+        body: String(parsed.body || '').slice(0, 500),
+        usage,
+      });
+    } catch (err) {
+      const mapped = mapGeminiUpstreamError(err);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
+  app.post('/api/ai/draft-release', async (req: Request, res: Response) => {
+    let authedUser: { uid: string; email?: string; emailVerified: boolean; idToken: string };
+    try {
+      authedUser = await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    const [settings, caller] = await Promise.all([
+      loadGlobalAiSettings(authedUser.idToken),
+      resolveCallerTierAndRole(authedUser),
+    ]);
+    const canManageReleases =
+      caller.isOwner ||
+      caller.permissions.includes('manage_platform') ||
+      caller.permissions.includes('manage_notifications');
+    if (!canManageReleases) {
+      res.status(403).json({ error: 'Only authorized administrators or the Owner can generate release notes.' });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      versionName?: unknown;
+      platform?: unknown;
+      highlights?: unknown;
+      releaseStatus?: unknown;
+      action?: unknown;
+    };
+
+    if (body.action === 'announce' && body.releaseStatus === 'draft') {
+      res.status(400).json({
+        error: 'Draft or unpublished releases cannot be announced globally. Publish and obtain Owner approval first.',
+      });
+      return;
+    }
+
+    const ai = createServerGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server. Add your key in AI Studio Settings > Secrets.',
+      });
+      return;
+    }
+
+    const androidRelease = getAndroidReleaseStatus(__dirname);
+    const versionName =
+      typeof body.versionName === 'string' && body.versionName.trim()
+        ? body.versionName.trim().slice(0, 40)
+        : androidRelease.versionName;
+    const platform =
+      body.platform === 'android' || body.platform === 'all' ? body.platform : 'web';
+    const highlights =
+      typeof body.highlights === 'string' && body.highlights.trim()
+        ? body.highlights.trim().slice(0, 800)
+        : 'Performance improvements, enhanced security, and new community features.';
+
+    try {
+      const model = settings.defaultModel;
+      const response = await ai.models.generateContent({
+        model,
+        contents: [
+          `Write official Nexora release notes as JSON with keys "title" (max 90 chars), "summary" (max 180 chars), and "releaseNotes" (max 500 chars).`,
+          `Version: ${versionName} (${platform})`,
+          `Android APK available on server: ${androidRelease.available ? 'Yes' : 'Not yet built'} (${settings.officialLinks.androidApkUrl})`,
+          `Web App URL: ${settings.officialLinks.webAppUrl}`,
+          `Engineering Highlights: ${highlights}`,
+          'Only state verifiable links and facts provided above. Return valid JSON only.',
+        ].join('\n'),
+        config: {
+          systemInstruction: buildNexoraSystemInstruction({
+            settings,
+            modeContext: 'Task: Accurate Nexora version release notes generator.',
+          }),
+        },
+      });
+
+      const rawText = (response.text || '').trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+      let parsed: { title?: string; summary?: string; releaseNotes?: string } = {};
+      try {
+        parsed = JSON.parse(rawText) as { title?: string; summary?: string; releaseNotes?: string };
+      } catch {
+        parsed = {
+          title: `Nexora v${versionName} Release`,
+          summary: rawText.slice(0, 180),
+          releaseNotes: rawText.slice(0, 500),
+        };
+      }
+
+      const usage = extractTokenUsage(response, model);
+      await recordCompletedAiUsage({
+        uid: authedUser.uid,
+        tier: caller.tier,
+        promptTokens: usage.promptTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        estimatedCostUsd: usage.estimatedCostUsd,
+        idToken: authedUser.idToken,
+      });
+
+      res.json({
+        model,
+        versionName,
+        platform,
+        androidAvailable: androidRelease.available,
+        downloadUrl: androidRelease.available ? androidRelease.downloadUrl || settings.officialLinks.androidApkUrl : settings.officialLinks.webAppUrl,
+        title: String(parsed.title || `Nexora v${versionName} is live`).slice(0, 100),
+        summary: String(parsed.summary || '').slice(0, 200),
+        releaseNotes: String(parsed.releaseNotes || '').slice(0, 500),
+        usage,
+      });
+    } catch (err) {
+      const mapped = mapGeminiUpstreamError(err);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
+  app.get('/api/push/status', (_req: Request, res: Response) => {
+    const configured = isPushMessagingCredentialAvailable();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      configured,
+      message: configured
+        ? 'Firebase Cloud Messaging server credentials detected.'
+        : 'Server push credentials (GOOGLE_APPLICATION_CREDENTIALS or Firebase Cloud Functions) are not configured on this runtime. Device tokens are saved cleanly in Firestore.',
+    });
+  });
+
+  app.post('/api/push/send', async (req: Request, res: Response) => {
+    let authedUser: { uid: string; email?: string; emailVerified: boolean; idToken: string };
+    try {
+      authedUser = await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Authentication required to send push notifications.' });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      tokens?: unknown;
+      title?: unknown;
+      body?: unknown;
+      link?: unknown;
+      purpose?: unknown;
+      targetUid?: unknown;
+    };
+
+    const caller = await resolveCallerTierAndRole(authedUser);
+    const isSelfWelcome = body.purpose === 'self_welcome' && body.targetUid === authedUser.uid;
+    const allowed =
+      caller.isOwner || caller.permissions.includes('manage_notifications') || isSelfWelcome;
+    if (!allowed) {
+      res.status(403).json({ error: 'Insufficient permissions to dispatch global push notifications.' });
+      return;
+    }
+
+    const tokens = Array.isArray(body.tokens)
+      ? body.tokens.filter((t): t is string => typeof t === 'string')
+      : [];
+    const title = typeof body.title === 'string' ? body.title.trim() : 'Nexora';
+    const messageBody = typeof body.body === 'string' ? body.body.trim() : '';
+    if (!messageBody) {
+      res.status(400).json({ error: 'Notification body is required.' });
+      return;
+    }
+
+    const outcome = await dispatchPushTokens({
+      tokens,
+      title,
+      body: messageBody,
+      link: typeof body.link === 'string' ? body.link : undefined,
+    });
+    res.json(outcome);
+  });
+
+  app.get('/api/auth/providers', async (_req: Request, res: Response) => {
     const meta = loadFirebaseAuthMeta();
     const callbackUrl = `https://${meta.authDomain}/__/auth/handler`;
+    const probe = await getLiveFirebaseAuthProviderStatus(meta);
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       projectId: meta.projectId,
       authDomain: meta.authDomain,
       callbackUrl,
+      authorizedDomains: probe.authorizedDomains,
       providers: [
         {
           id: 'google.com',
           label: 'Google',
           type: 'oauth',
-          provisionedInConfig: meta.hasGoogleOAuthClient,
+          provisionedInConfig: Boolean(probe.enabledMap['google.com']),
           requiresExternalCredentials: false,
-          setupNote: 'Provisioned with project Google OAuth client.',
+          setupNote: probe.enabledMap['google.com']
+            ? 'Google Sign-In is enabled and ready.'
+            : 'Enable Google in Firebase Console -> Authentication -> Sign-in method -> Google.',
         },
         {
           id: 'github.com',
           label: 'GitHub',
           type: 'oauth',
-          provisionedInConfig: false,
+          provisionedInConfig: Boolean(probe.enabledMap['github.com']),
           requiresExternalCredentials: true,
-          setupNote:
-            'Requires GitHub OAuth App Client ID & Client Secret enabled in Firebase Console -> Authentication -> Sign-in method -> GitHub.',
+          setupNote: probe.enabledMap['github.com']
+            ? 'GitHub Sign-In is enabled and ready.'
+            : `Requires GitHub OAuth App Client ID & Client Secret in Firebase Console -> Authentication -> Sign-in method -> GitHub (callback: ${callbackUrl}).`,
         },
         {
           id: 'apple.com',
           label: 'Apple',
           type: 'oauth',
-          provisionedInConfig: false,
+          provisionedInConfig: Boolean(probe.enabledMap['apple.com']),
           requiresExternalCredentials: true,
-          setupNote:
-            'Requires Apple Services ID, Team ID, Key ID, and private key (.p8) enabled in Firebase Console -> Authentication -> Sign-in method -> Apple.',
+          setupNote: probe.enabledMap['apple.com']
+            ? 'Apple Sign-In is enabled and ready.'
+            : `Requires Apple Services ID, Team ID, Key ID, and private key (.p8) in Firebase Console -> Authentication -> Sign-in method -> Apple (callback: ${callbackUrl}).`,
         },
         {
           id: 'microsoft.com',
           label: 'Microsoft',
           type: 'oauth',
-          provisionedInConfig: false,
+          provisionedInConfig: Boolean(probe.enabledMap['microsoft.com']),
           requiresExternalCredentials: true,
-          setupNote:
-            'Requires Microsoft Entra ID Application (client) ID & Client Secret enabled in Firebase Console -> Authentication -> Sign-in method -> Microsoft.',
+          setupNote: probe.enabledMap['microsoft.com']
+            ? 'Microsoft Sign-In is enabled and ready.'
+            : `Requires Microsoft Entra ID Application (client) ID & Client Secret in Firebase Console -> Authentication -> Sign-in method -> Microsoft (callback: ${callbackUrl}).`,
         },
         {
           id: 'facebook.com',
           label: 'Facebook',
           type: 'oauth',
-          provisionedInConfig: false,
+          provisionedInConfig: Boolean(probe.enabledMap['facebook.com']),
           requiresExternalCredentials: true,
-          setupNote:
-            'Requires Meta/Facebook App ID & App Secret enabled in Firebase Console -> Authentication -> Sign-in method -> Facebook.',
+          setupNote: probe.enabledMap['facebook.com']
+            ? 'Facebook Sign-In is enabled and ready.'
+            : `Requires Meta/Facebook App ID & App Secret in Firebase Console -> Authentication -> Sign-in method -> Facebook (callback: ${callbackUrl}).`,
         },
         {
           id: 'phone',
           label: 'Phone Number',
           type: 'sms_otp',
-          provisionedInConfig: false,
+          provisionedInConfig: Boolean(probe.enabledMap.phone),
           requiresExternalCredentials: false,
           setupNote:
-            'Uses Firebase Phone Authentication (SMS OTP + reCAPTCHA). Enable Phone provider and authorized domains in Firebase Console.',
+            'Uses Firebase Phone Authentication (SMS OTP + reCAPTCHA). Ensure Phone provider and authorized domains are enabled in Firebase Console.',
         },
         {
           id: 'password',
           label: 'Email & Password',
           type: 'email_password',
-          provisionedInConfig: false,
+          provisionedInConfig: Boolean(probe.enabledMap.password),
           requiresExternalCredentials: false,
-          setupNote:
-            'Uses Firebase Email/Password authentication with mandatory email verification. Enable Email/Password in Firebase Console.',
+          setupNote: probe.enabledMap.password
+            ? 'Email & Password authentication is enabled and ready.'
+            : 'Enable Email/Password in Firebase Console -> Authentication -> Sign-in method -> Email/Password.',
         },
       ],
     });
@@ -1192,6 +2008,34 @@ export async function createNexoraServer(httpServer?: http.Server) {
     }
   });
 
+  app.get('/api/rewards/status', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(getBankProviderStatus());
+  });
+
+  app.get('/api/rewards/banks', async (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    const result = await fetchNigerianBanks();
+    res.json(result);
+  });
+
+  app.post('/api/rewards/resolve-bank', async (req: Request, res: Response) => {
+    try {
+      await verifyFirebaseBearerToken(req);
+    } catch {
+      res.status(401).json({ error: 'Please sign in with your verified account before verifying bank details.' });
+      return;
+    }
+
+    const body = (req.body || {}) as { accountNumber?: unknown; bankCode?: unknown };
+    const accountNumber = typeof body.accountNumber === 'string' ? body.accountNumber : '';
+    const bankCode = typeof body.bankCode === 'string' ? body.bankCode : '';
+
+    const resolution = await resolveNigerianBankAccount(accountNumber, bankCode);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(resolution);
+  });
+
   app.get('/api/health', (_req: Request, res: Response) => {
     const emailConfig = getEmailProviderConfig();
     res.json({
@@ -1398,7 +2242,17 @@ export async function createNexoraServer(httpServer?: http.Server) {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: httpServer ? { server: httpServer } : process.env.DISABLE_HMR === 'true' ? false : true,
+        hmr:
+          process.env.DISABLE_HMR === 'true'
+            ? false
+            : httpServer
+            ? { server: httpServer }
+            : true,
+        ws: httpServer
+          ? { server: httpServer }
+          : process.env.DISABLE_HMR === 'true'
+          ? false
+          : undefined,
       },
       appType: 'spa',
     });

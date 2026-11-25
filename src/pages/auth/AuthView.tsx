@@ -24,8 +24,10 @@ import {
   attachAndVerifyAccountEmail,
   clearPhoneRecaptcha,
   confirmPhoneOtp,
+  fetchServerAuthProviders,
   getProviderLabel,
   isPendingAccountLinkError,
+  isPopupBlockedError,
   isUserAccountVerified,
   isUsernameAvailable,
   loginWithEmail,
@@ -41,10 +43,16 @@ import {
   resendVerificationEmail,
   sendPasswordReset,
   sendPhoneOtp,
+  ServerAuthProvidersResponse,
   signInWithOAuthProvider,
+  signInWithOAuthRedirect,
   validateE164Phone,
 } from '../../services/auth/authService';
 import { auth } from '../../services/firebase/config';
+import {
+  getPendingReferralCode,
+  savePendingReferralCode,
+} from '../../services/firebase/rewardsService';
 import { isValidUsername, normalizeUsername } from '../../utils/validation';
 
 interface AuthViewProps {
@@ -112,7 +120,15 @@ export function AuthView({
   onBackToLanding,
   onAuthTransitionState,
 }: AuthViewProps) {
-  const { user, emailVerified, accountVerified, platformConfig, refreshUserAndProfile } = useAuth();
+  const {
+    user,
+    emailVerified,
+    accountVerified,
+    platformConfig,
+    redirectAuthError,
+    clearRedirectAuthError,
+    refreshUserAndProfile,
+  } = useAuth();
   const prefersReducedMotion = useReducedMotion();
 
   const [mode, setMode] = useState<'login' | 'register' | 'phone' | 'forgot' | 'verify-email'>(initialMode);
@@ -127,6 +143,7 @@ export function AuthView({
   const [username, setUsername] = useState('');
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid'>('idle');
   const [acceptTerms, setAcceptTerms] = useState(false);
+  const [referralCode, setReferralCode] = useState(() => getPendingReferralCode());
   const [rememberSession, setRememberSession] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -142,8 +159,11 @@ export function AuthView({
   // Attach email flow for unverified OAuth account without email
   const [attachEmailInput, setAttachEmailInput] = useState('');
 
-  // In-memory account conflict resolution
+  // In-memory account conflict resolution & live provider readiness
   const [pendingLink, setPendingLink] = useState<PendingAccountLinkInfo | null>(null);
+  const [serverProviders, setServerProviders] = useState<ServerAuthProvidersResponse | null>(null);
+  const [blockedPopupProvider, setBlockedPopupProvider] = useState<OAuthProviderId | null>(null);
+  const [providerSetupHelp, setProviderSetupHelp] = useState<string | null>(null);
 
   // Terms modal
   const [showLegalModal, setShowLegalModal] = useState(false);
@@ -159,6 +179,26 @@ export function AuthView({
 
   const verifyStepTimerRef = useRef<number | null>(null);
   const transitionTimerRef = useRef<number | null>(null);
+  const lastAutoVerifyCheckMsRef = useRef<number>(0);
+
+  useEffect(() => {
+    let active = true;
+    void fetchServerAuthProviders().then((data) => {
+      if (active && data) {
+        setServerProviders(data);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (redirectAuthError) {
+      setError(redirectAuthError);
+      clearRedirectAuthError();
+    }
+  }, [redirectAuthError, clearRedirectAuthError]);
 
   useEffect(() => {
     if (user && !accountVerified) {
@@ -167,6 +207,31 @@ export function AuthView({
       setMode((prev) => (prev === 'phone' || prev === 'forgot' ? prev : initialMode));
     }
   }, [user, accountVerified, initialMode]);
+
+  // Auto-detect when user clicks Firebase verification link in another tab and returns
+  useEffect(() => {
+    if (mode !== 'verify-email' || !user || accountVerified) return;
+    const checkOnReturn = async () => {
+      if (document.visibilityState === 'hidden' || busy) return;
+      const now = Date.now();
+      if (now - lastAutoVerifyCheckMsRef.current < 2500) return;
+      lastAutoVerifyCheckMsRef.current = now;
+      try {
+        await auth.currentUser?.reload();
+        if (auth.currentUser && isUserAccountVerified(auth.currentUser)) {
+          await refreshUserAndProfile(false);
+        }
+      } catch {
+        // Silent background check; user still has manual "I've Verified — Continue" button
+      }
+    };
+    window.addEventListener('focus', checkOnReturn);
+    document.addEventListener('visibilitychange', checkOnReturn);
+    return () => {
+      window.removeEventListener('focus', checkOnReturn);
+      document.removeEventListener('visibilitychange', checkOnReturn);
+    };
+  }, [mode, user, accountVerified, busy, refreshUserAndProfile]);
 
   useEffect(() => {
     return () => {
@@ -226,6 +291,8 @@ export function AuthView({
   const clearAlerts = () => {
     setError('');
     setNotice('');
+    setBlockedPopupProvider(null);
+    setProviderSetupHelp(null);
   };
 
   const formatCountdown = (seconds: number) => {
@@ -318,8 +385,34 @@ export function AuthView({
         setLoginIdentifier(err.info.email);
         setNotice(err.message);
       } else {
+        const code = (err as { code?: string })?.code ?? '';
         abortRealAuthFailure(mapAuthErrorMessage(err));
+        if (isPopupBlockedError(err)) {
+          setBlockedPopupProvider(providerId);
+        } else if (code === 'auth/operation-not-allowed') {
+          const providerMeta = serverProviders?.providers.find((p) => p.id === providerId);
+          setProviderSetupHelp(
+            providerMeta?.setupNote ||
+              `Enable ${getProviderLabel(providerId)} in Firebase Console -> Authentication -> Sign-in method${
+                serverProviders?.callbackUrl ? ` (OAuth callback URL: ${serverProviders.callbackUrl})` : ''
+              }.`
+          );
+        }
       }
+    }
+  };
+
+  const handleOAuthRedirectFallback = async (providerId: OAuthProviderId) => {
+    if (busy) return;
+    clearAlerts();
+    beginRealAuthAnimation(providerId, true);
+    try {
+      await signInWithOAuthRedirect(providerId, rememberSession, {
+        preferredFullName: mode === 'register' ? fullName : undefined,
+        preferredUsername: mode === 'register' ? username : undefined,
+      });
+    } catch (err) {
+      abortRealAuthFailure(mapAuthErrorMessage(err));
     }
   };
 
@@ -484,7 +577,7 @@ export function AuthView({
 
     beginRealAuthAnimation('password', false);
     try {
-      await registerWithEmail({
+      const regResult = await registerWithEmail({
         fullName,
         username: cleanUsername,
         email,
@@ -492,7 +585,14 @@ export function AuthView({
       });
       abortRealAuthFailure();
       setMode('verify-email');
-      setNotice('Verification link sent to your email address. Please verify before entering Nexora.');
+      if (regResult.verificationEmailSent) {
+        setNotice('Verification link sent to your email address. Please verify before entering Nexora.');
+      } else {
+        setError(
+          regResult.verificationWarning ||
+            'Your account was created, but we could not send the verification email yet. Click Resend Verification Link below.'
+        );
+      }
     } catch (err) {
       abortRealAuthFailure(mapAuthErrorMessage(err));
     }
@@ -572,6 +672,11 @@ export function AuthView({
     <div className="space-y-2.5" role="group" aria-label="Sign-in options">
       {OAUTH_PROVIDERS.map((provider) => {
         const isCurrentBusy = busy && busyProvider === provider.id;
+        const providerStatus = serverProviders?.providers.find((p) => p.id === provider.id);
+        const needsConsoleSetup =
+          Boolean(serverProviders) &&
+          providerStatus !== undefined &&
+          providerStatus.provisionedInConfig === false;
         return (
           <button
             key={provider.id}
@@ -586,6 +691,11 @@ export function AuthView({
               <ProviderLogo providerId={provider.id} size={18} />
             )}
             <span>{isCurrentBusy ? `Connecting ${getProviderLabel(provider.id)}...` : provider.text}</span>
+            {needsConsoleSetup && !isCurrentBusy && (
+              <span className="ml-auto text-[10px] font-medium px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-400/30 text-amber-200">
+                Setup needed
+              </span>
+            )}
           </button>
         );
       })}
@@ -621,7 +731,7 @@ export function AuthView({
         </button>
 
         <div className="hidden sm:flex items-center">
-          <NexoraLogo size="sm" />
+          <NexoraLogo size="sm" animation="ambient" />
         </div>
 
         {(mode === 'login' || mode === 'register') && (
@@ -761,9 +871,24 @@ export function AuthView({
               {error && (
                 <div
                   role="alert"
-                  className="p-3.5 rounded-xl bg-rose-500/12 border border-rose-500/30 text-xs text-rose-200 leading-relaxed"
+                  className="p-3.5 rounded-xl bg-rose-500/12 border border-rose-500/30 text-xs text-rose-200 leading-relaxed space-y-2.5"
                 >
-                  {error}
+                  <p>{error}</p>
+                  {providerSetupHelp && (
+                    <p className="text-[11px] text-amber-200/95 bg-amber-500/10 border border-amber-400/25 rounded-lg p-2.5 break-all">
+                      {providerSetupHelp}
+                    </p>
+                  )}
+                  {blockedPopupProvider && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleOAuthRedirectFallback(blockedPopupProvider)}
+                      className="w-full min-h-[38px] px-3 py-2 rounded-lg bg-white text-[#09090F] hover:bg-slate-100 text-xs font-semibold transition-colors"
+                    >
+                      Continue with {getProviderLabel(blockedPopupProvider)} via Redirect
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -955,6 +1080,26 @@ export function AuthView({
                         </p>
                       </div>
 
+                      {phoneOriginMode === 'register' && (
+                        <label className="block space-y-1">
+                          <span className="text-xs font-medium text-[#CBD5E1]">
+                            Referral Code (Optional)
+                          </span>
+                          <input
+                            type="text"
+                            maxLength={24}
+                            value={referralCode}
+                            onChange={(e) => {
+                              const next = e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+                              setReferralCode(next);
+                              savePendingReferralCode(next);
+                            }}
+                            placeholder="NX..."
+                            className="w-full px-3.5 py-2.5 rounded-xl bg-[#06060A]/90 border border-white/12 focus:border-[#8B5CF6] outline-none text-sm font-mono uppercase text-white min-h-[44px]"
+                          />
+                        </label>
+                      )}
+
                       <label className="inline-flex items-center gap-2 text-xs text-[#CBD5E1] cursor-pointer min-h-[36px]">
                         <input
                           type="checkbox"
@@ -964,8 +1109,6 @@ export function AuthView({
                         />
                         Remember Me
                       </label>
-
-                      <div id={PHONE_RECAPTCHA_CONTAINER_ID} />
 
                       <button
                         type="submit"
@@ -1003,8 +1146,6 @@ export function AuthView({
                         />
                       </label>
 
-                      <div id={PHONE_RECAPTCHA_CONTAINER_ID} />
-
                       <button
                         type="submit"
                         disabled={busy || otpRemainingSec <= 0 || otpCode.length !== 6}
@@ -1039,6 +1180,9 @@ export function AuthView({
                       </div>
                     </form>
                   )}
+
+                  {/* Keep reCAPTCHA container persistently mounted in phone mode so resending SMS never loses its DOM anchor */}
+                  <div id={PHONE_RECAPTCHA_CONTAINER_ID} />
 
                   <div className="pt-2 border-t border-white/10 text-center">
                     <button
@@ -1261,6 +1405,24 @@ export function AuthView({
                           {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                         </button>
                       </div>
+                    </label>
+
+                    <label className="block space-y-1">
+                      <span className="text-xs font-medium text-[#CBD5E1]">
+                        Referral Code (Optional)
+                      </span>
+                      <input
+                        type="text"
+                        maxLength={24}
+                        value={referralCode}
+                        onChange={(e) => {
+                          const next = e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+                          setReferralCode(next);
+                          savePendingReferralCode(next);
+                        }}
+                        placeholder="NX..."
+                        className="w-full px-4 py-2.5 rounded-xl bg-[#06060A]/90 border border-white/12 focus:border-[#8B5CF6] outline-none text-sm font-mono uppercase text-white min-h-[44px]"
+                      />
                     </label>
 
                     <div className="flex items-start gap-2.5 text-xs text-[#94A3B8] pt-1">

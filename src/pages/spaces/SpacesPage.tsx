@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
+  Bot,
   Calendar,
   Check,
   Compass,
@@ -50,6 +51,8 @@ import {
   updateSpaceMemberRole,
 } from '../../services/firebase/socialService';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
+import { callCommunityAiReply } from '../../services/ai/geminiClientService';
+import { touchChannelLastBotReply } from '../../services/ai/nexoraAiFirestoreService';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
 import {
   NotificationItem,
@@ -437,42 +440,72 @@ export function SpacesPage({
                   </div>
                 ) : (
                   <>
+                    <div className="px-5 py-3 border-b border-white/[0.06] bg-[#0B0A13]/80 flex items-center justify-between gap-2">
+                      <div className="inline-flex items-center gap-2 text-xs text-[#E9D5FF]">
+                        <Bot size={14} className="text-[#C084FC]" />
+                        <span className="font-semibold">Nexora AI Community Assistant</span>
+                      </div>
+                      <span className="text-[11px] text-[#94A3B8]">
+                        Mention <span className="text-[#C084FC] font-medium">@Nexora</span> anytime
+                      </span>
+                    </div>
                     <div className="p-5 space-y-3.5 max-h-[460px] overflow-y-auto">
                       {discussions.length === 0 ? (
                         <p className="text-xs text-[#64748B]">
-                          Start a community discussion thread below.
+                          Start a community discussion thread below or mention @Nexora to invite Nexora AI.
                         </p>
                       ) : (
                         discussions.map((d) => {
-                          const adminStatus = getAdminEffectiveStatus(d.authorId);
+                          const isBot = Boolean(d.isAi);
+                          const adminStatus = isBot ? null : getAdminEffectiveStatus(d.authorId);
                           const badgeStatus =
                             adminStatus && adminStatus !== 'offline' ? adminStatus : null;
                           return (
-                            <div key={d.id} className="flex items-start gap-3">
+                            <div
+                              key={d.id}
+                              className={`flex items-start gap-3 ${
+                                isBot ? 'p-3 rounded-xl bg-[#7C3AED]/10 border border-[#8B5CF6]/25' : ''
+                              }`}
+                            >
                               <div className="relative shrink-0">
-                                <ResilientImage
-                                  src={d.authorAvatar}
-                                  alt={d.authorName}
-                                  className="w-8 h-8 rounded-full object-cover"
-                                />
+                                {isBot ? (
+                                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#6D28D9] to-[#9333EA] flex items-center justify-center text-white shadow-sm">
+                                    <Bot size={15} />
+                                  </div>
+                                ) : (
+                                  <ResilientImage
+                                    src={d.authorAvatar}
+                                    alt={d.authorName}
+                                    className="w-8 h-8 rounded-full object-cover"
+                                  />
+                                )}
                                 {badgeStatus && (
                                   <span className="absolute -bottom-0.5 -right-0.5">
                                     <PresenceBadge status={badgeStatus} size="xs" />
                                   </span>
                                 )}
                               </div>
-                              <div className="space-y-0.5 min-w-0">
+                              <div className="space-y-0.5 min-w-0 flex-1">
                                 <div className="flex items-center gap-2 text-xs flex-wrap">
-                                  <span className="font-semibold text-white inline-flex items-center gap-1">
-                                    {d.authorName}
-                                    <BadgeStrip badges={getUserBadges(d.authorId)} size={12} max={2} />
+                                  <span className="font-semibold text-white inline-flex items-center gap-1.5">
+                                    {isBot ? 'Nexora AI' : d.authorName}
+                                    {isBot && (
+                                      <span className="px-1.5 py-0.5 rounded-md bg-[#7C3AED]/30 border border-[#8B5CF6]/40 text-[10px] text-[#E9D5FF] font-semibold">
+                                        Assistant
+                                      </span>
+                                    )}
+                                    {!isBot && (
+                                      <BadgeStrip badges={getUserBadges(d.authorId)} size={12} max={2} />
+                                    )}
                                     {badgeStatus && <PresenceBadge status={badgeStatus} size="xs" />}
                                   </span>
                                   <span className="text-[#64748B]">
                                     {formatRelativeTime(d.createdAt)}
                                   </span>
                                 </div>
-                                <p className="text-sm text-[#CBD5E1] break-words">{d.text}</p>
+                                <p className="text-sm text-[#CBD5E1] break-words whitespace-pre-wrap">
+                                  {d.text}
+                                </p>
                               </div>
                             </div>
                           );
@@ -482,16 +515,44 @@ export function SpacesPage({
                     <form
                       onSubmit={async (e) => {
                         e.preventDefault();
-                        if (!discussionInput.trim()) return;
+                        const sentText = discussionInput.trim();
+                        if (!sentText) return;
                         setActionError('');
                         try {
                           await sendSpaceDiscussion({
                             spaceId: activeSpace.id,
                             author: profile,
-                            text: discussionInput,
+                            text: sentText,
                             channel: 'general',
                           });
                           setDiscussionInput('');
+                          const recentContext = discussions.slice(-6).map((item) => ({
+                            author: item.isAi ? 'Nexora AI' : item.authorName,
+                            text: item.text,
+                          }));
+                          void callCommunityAiReply({
+                            targetType: 'space',
+                            channelId: activeSpace.id,
+                            channelName: activeSpace.name,
+                            senderId: profile.uid,
+                            senderName: profile.displayName,
+                            text: sentText,
+                            recentMessages: recentContext,
+                          }).then(async (aiRes) => {
+                            if (aiRes.responded && aiRes.reply) {
+                              await sendSpaceDiscussion({
+                                spaceId: activeSpace.id,
+                                author: profile,
+                                text: aiRes.reply,
+                                channel: 'general',
+                                isAi: true,
+                                aiTriggeredBy: profile.uid,
+                                authorNameOverride: 'Nexora AI',
+                                authorAvatarOverride: '',
+                              });
+                              await touchChannelLastBotReply(activeSpace.id);
+                            }
+                          }).catch(() => {});
                         } catch (err) {
                           setActionError(
                             extractReadableErrorMessage(

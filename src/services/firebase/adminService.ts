@@ -109,6 +109,9 @@ export function subscribeAuditLogs(callback: (logs: AuditLogEntry[]) => void): U
       'notification',
       'billing',
       'customisation',
+      'ai',
+      'rewards',
+      'wallet',
     ]),
     limit(120)
   );
@@ -1414,7 +1417,7 @@ export async function fetchRealPlatformAnalytics(): Promise<PlatformAnalyticsSna
     getDocs(
       query(
         collection(db, 'reports'),
-        where('targetType', 'in', ['post', 'user', 'space', 'vibe', 'gift', 'collab']),
+        where('targetType', 'in', ['post', 'user', 'space', 'vibe', 'gift', 'collab', 'message']),
         limit(200)
       )
     ),
@@ -1491,7 +1494,7 @@ export async function fetchRealPlatformAnalytics(): Promise<PlatformAnalyticsSna
 export function subscribeReports(callback: (reports: ModerationReport[]) => void): Unsubscribe {
   const q = query(
     collection(db, 'reports'),
-    where('targetType', 'in', ['post', 'user', 'space', 'vibe', 'gift', 'collab']),
+    where('targetType', 'in', ['post', 'user', 'space', 'vibe', 'gift', 'collab', 'message']),
     limit(150)
   );
   return onSnapshot(

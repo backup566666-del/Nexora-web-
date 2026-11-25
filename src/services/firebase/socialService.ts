@@ -52,6 +52,7 @@ import {
   StoryPrivacy,
   StoryType,
   StoryView,
+  ThemeMode,
   UserPreferences,
   UserProfile,
   Vibe,
@@ -61,6 +62,7 @@ import {
   BLUEPRINT_LIMITS,
   extractHashtags,
   extractMentions,
+  normalizeThemeMode,
   normalizeUsername,
   sanitizeString,
   withHomepageCustomizationDefaults,
@@ -1438,16 +1440,21 @@ export async function sendSpaceDiscussion(params: {
   author: UserProfile;
   text: string;
   channel: string;
+  isAi?: boolean;
+  aiTriggeredBy?: string;
+  authorNameOverride?: string;
+  authorAvatarOverride?: string;
 }): Promise<void> {
   const clean = sanitizeString(params.text, 1000);
   if (!clean) return;
   try {
     await addDoc(collection(db, 'spaces', params.spaceId, 'discussions'), {
       authorId: params.author.uid,
-      authorName: sanitizeString(params.author.displayName, 80),
-      authorAvatar: sanitizeString(params.author.avatarUrl || '', 200000),
+      authorName: sanitizeString(params.authorNameOverride || params.author.displayName, 80),
+      authorAvatar: sanitizeString(params.authorAvatarOverride ?? (params.author.avatarUrl || ''), 200000),
       text: clean,
       channel: sanitizeString(params.channel, 40),
+      ...(params.isAi ? { isAi: true, aiTriggeredBy: sanitizeString(params.aiTriggeredBy || params.author.uid, 128) } : {}),
       createdAt: serverTimestamp(),
     });
   } catch (err) {
@@ -1649,6 +1656,9 @@ export async function sendChatMessage(params: {
   replyToId?: string;
   replyToText?: string;
   recipientIds?: string[];
+  isAi?: boolean;
+  aiTriggeredBy?: string;
+  senderNameOverride?: string;
 }): Promise<void> {
   const cleanText = sanitizeString(params.text, BLUEPRINT_LIMITS.CHAT_MESSAGE_MAX);
   const cleanMediaUrl = sanitizeString(params.mediaUrl || '', 500000);
@@ -1672,7 +1682,7 @@ export async function sendChatMessage(params: {
     const batch = writeBatch(db);
     batch.set(msgRef, {
       senderId: params.sender.uid,
-      senderName: sanitizeString(params.sender.displayName, 80),
+      senderName: sanitizeString(params.senderNameOverride || params.sender.displayName, 80),
       type: params.type,
       text: cleanText,
       mediaUrl: cleanMediaUrl,
@@ -1682,11 +1692,12 @@ export async function sendChatMessage(params: {
       reactions: {},
       edited: false,
       deleted: false,
+      ...(params.isAi ? { isAi: true, aiTriggeredBy: sanitizeString(params.aiTriggeredBy || params.sender.uid, 128) } : {}),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
     batch.update(convRef, {
-      lastMessageText: sanitizeString(preview, 300),
+      lastMessageText: sanitizeString(params.isAi ? `Nexora AI: ${preview}` : preview, 300),
       lastMessageSenderId: params.sender.uid,
       lastMessageAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -1699,10 +1710,12 @@ export async function sendChatMessage(params: {
       if (rId !== params.sender.uid) {
         await createNotification({
           recipientId: rId,
-          actor: params.sender,
+          actor: params.isAi
+            ? { ...params.sender, displayName: 'Nexora AI' }
+            : params.sender,
           type: 'message',
           targetId: params.convId,
-          preview: preview.slice(0, 80),
+          preview: (params.isAi ? `Nexora AI: ${preview}` : preview).slice(0, 80),
         });
       }
     }
@@ -2026,26 +2039,26 @@ export async function blockUserAccount(currentUid: string, targetUid: string, ex
   if (!currentUid || !targetUid || currentUid === targetUid) return existingBlocked;
   const next = Array.from(new Set([...existingBlocked, targetUid])).slice(0, 100);
   try {
-    await updateDoc(doc(db, 'users_private', currentUid), {
+    await updateDoc(doc(db, 'users', currentUid, 'private', 'account'), {
       blockedUserIds: next,
       updatedAt: serverTimestamp(),
     });
     return next;
   } catch (err) {
-    handleFirestoreError(err, OperationType.UPDATE, `users_private/${currentUid}`);
+    handleFirestoreError(err, OperationType.UPDATE, `users/${currentUid}/private/account`);
   }
 }
 
 export async function unblockUserAccount(currentUid: string, targetUid: string, existingBlocked: string[]): Promise<string[]> {
   const next = existingBlocked.filter((id) => id !== targetUid);
   try {
-    await updateDoc(doc(db, 'users_private', currentUid), {
+    await updateDoc(doc(db, 'users', currentUid, 'private', 'account'), {
       blockedUserIds: next,
       updatedAt: serverTimestamp(),
     });
     return next;
   } catch (err) {
-    handleFirestoreError(err, OperationType.UPDATE, `users_private/${currentUid}`);
+    handleFirestoreError(err, OperationType.UPDATE, `users/${currentUid}/private/account`);
   }
 }
 
@@ -2065,6 +2078,8 @@ export function subscribeUserPreferences(
           mutedConvIds: Array.isArray(data.mutedConvIds) ? data.mutedConvIds : [],
           recentSearches: Array.isArray(data.recentSearches) ? data.recentSearches : [],
           homepagePrefs: withHomepageCustomizationDefaults(data.homepagePrefs),
+          ...(data.themeMode ? { themeMode: normalizeThemeMode(data.themeMode) } : {}),
+          ...(typeof data.saveAiHistory === 'boolean' ? { saveAiHistory: data.saveAiHistory } : {}),
           updatedAt: data.updatedAt,
         });
       } else {
@@ -2092,10 +2107,16 @@ async function upsertUserPreferences(
   uid: string,
   current: UserPreferences | null | undefined,
   patch: Partial<
-    Pick<UserPreferences, 'pinnedConvIds' | 'mutedConvIds' | 'recentSearches' | 'homepagePrefs'>
+    Pick<
+      UserPreferences,
+      'pinnedConvIds' | 'mutedConvIds' | 'recentSearches' | 'homepagePrefs' | 'themeMode' | 'saveAiHistory'
+    >
   >
 ): Promise<void> {
   const nextHomepage = patch.homepagePrefs ?? current?.homepagePrefs;
+  const nextThemeMode = patch.themeMode ?? current?.themeMode;
+  const nextSaveAiHistory =
+    typeof patch.saveAiHistory === 'boolean' ? patch.saveAiHistory : current?.saveAiHistory;
   const nextPayload: Record<string, unknown> = {
     uid,
     pinnedConvIds: (patch.pinnedConvIds ?? current?.pinnedConvIds ?? []).slice(0, 30),
@@ -2106,7 +2127,27 @@ async function upsertUserPreferences(
   if (nextHomepage) {
     nextPayload.homepagePrefs = withHomepageCustomizationDefaults(nextHomepage);
   }
+  if (nextThemeMode) {
+    nextPayload.themeMode = normalizeThemeMode(nextThemeMode);
+  }
+  if (typeof nextSaveAiHistory === 'boolean') {
+    nextPayload.saveAiHistory = nextSaveAiHistory;
+  }
   await setDoc(doc(db, 'user_preferences', uid), nextPayload);
+}
+
+export async function saveUserThemePreference(
+  uid: string,
+  currentPrefs: UserPreferences | null | undefined,
+  themeMode: ThemeMode
+): Promise<ThemeMode> {
+  const normalized = normalizeThemeMode(themeMode);
+  try {
+    await upsertUserPreferences(uid, currentPrefs, { themeMode: normalized });
+    return normalized;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `user_preferences/${uid}`);
+  }
 }
 
 export async function saveHomepageCustomization(

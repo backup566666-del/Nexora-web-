@@ -13,6 +13,8 @@ const CATEGORIES: ('all' | AuditLogCategory)[] = [
   'platform',
   'moderation',
   'notification',
+  'rewards',
+  'wallet',
 ];
 
 export function AuditLogPanel() {

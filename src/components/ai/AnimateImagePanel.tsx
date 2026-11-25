@@ -16,6 +16,7 @@ import {
   fetchGeminiStatus,
   VideoAspectRatio,
 } from '../../services/ai/geminiClientService';
+import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 
 interface AnimateImagePanelProps {
   onSendVideoToVibes?: (blob: Blob, captionHint: string) => Promise<void> | void;
@@ -147,9 +148,11 @@ export function AnimateImagePanel({
       }
     } catch (err) {
       setErrorMsg(
-        err instanceof Error
-          ? err.message
-          : 'Unable to animate your photo right now. Please try again.'
+        extractReadableErrorMessage(
+          err,
+          'Unable to animate your photo right now. Please try again.',
+          { feature: 'animate-image' }
+        )
       );
     } finally {
       setGenerating(false);
@@ -178,7 +181,9 @@ export function AnimateImagePanel({
       }
     } catch (err) {
       setErrorMsg(
-        err instanceof Error ? err.message : 'Unable to send animated clip right now.'
+        extractReadableErrorMessage(err, 'Unable to send animated clip right now.', {
+          feature: 'animate-image-forward',
+        })
       );
     } finally {
       setForwardingTarget(null);
