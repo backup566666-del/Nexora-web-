@@ -38,6 +38,7 @@ import {
   GiftTransaction,
   HomepageCustomization,
   MessageType,
+  NotificationCategory,
   NotificationItem,
   NotificationTargetType,
   NotificationType,
@@ -60,8 +61,11 @@ import {
 } from '../../types/nexora';
 import {
   BLUEPRINT_LIMITS,
+  canCommentOnPost,
   extractHashtags,
   extractMentions,
+  isCommunityPost,
+  isPersonalTimelinePost,
   normalizeThemeMode,
   normalizeUsername,
   sanitizeString,
@@ -73,6 +77,7 @@ export async function createNotification(params: {
   recipientId: string;
   actor: UserProfile;
   type: NotificationType;
+  category?: NotificationCategory;
   targetId?: string;
   targetType?: NotificationTargetType;
   title?: string;
@@ -89,7 +94,7 @@ export async function createNotification(params: {
       actorName: sanitizeString(params.actor.displayName, 80),
       actorAvatar: sanitizeString(params.actor.avatarUrl || '', 200000),
       type: params.type,
-      category: inferCategoryFromNotificationType(params.type),
+      category: params.category || inferCategoryFromNotificationType(params.type),
       ...(params.title ? { title: sanitizeString(params.title, 120) } : {}),
       targetType: params.targetType || inferTargetTypeFromNotificationType(params.type),
       targetId: sanitizeString(params.targetId || '', 128),
@@ -327,12 +332,12 @@ export async function setFollowRelationship(
       const currentData = currentSnap.data() as UserProfile;
       const targetData = targetSnap.data() as UserProfile;
       const currentFollowingCount =
-        typeof currentData.followingCount === 'number' && currentData.followingCount >= 0
-          ? currentData.followingCount
+        typeof currentData.followingCount === 'number' && Number.isFinite(currentData.followingCount) && currentData.followingCount >= 0
+          ? Math.floor(currentData.followingCount)
           : 0;
       const targetFollowersCount =
-        typeof targetData.followersCount === 'number' && targetData.followersCount >= 0
-          ? targetData.followersCount
+        typeof targetData.followersCount === 'number' && Number.isFinite(targetData.followersCount) && targetData.followersCount >= 0
+          ? Math.floor(targetData.followersCount)
           : 0;
 
       const hasFollowing = followingSnap.exists();
@@ -421,7 +426,7 @@ export function subscribeFeedPosts(
       )
     : query(
         collection(db, 'posts'),
-        where('audience', 'in', ['public', 'followers', 'space']),
+        where('audience', 'in', ['public', 'followers']),
         orderBy('createdAt', 'desc'),
         limit(80)
       );
@@ -431,6 +436,7 @@ export function subscribeFeedPosts(
     (snap) => {
       const items = snap.docs
         .map((d) => ({ id: d.id, ...(d.data() as Omit<Post, 'id'>) }))
+        .filter((p) => (spaceId ? p.spaceId === spaceId && isCommunityPost(p) : isPersonalTimelinePost(p)))
         .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
       callback(items);
     },
@@ -450,6 +456,7 @@ export function subscribePublicLandingPosts(callback: (posts: Post[]) => void): 
     (snap) => {
       const items = snap.docs
         .map((d) => ({ id: d.id, ...(d.data() as Omit<Post, 'id'>) }))
+        .filter(isPersonalTimelinePost)
         .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
       callback(items);
     },
@@ -513,14 +520,27 @@ export async function createPost(params: {
     throw new Error('Attached media exceeds the safe per-post size budget. Please attach fewer or smaller files.');
   }
 
+  const cleanSpaceId = sanitizeString(params.spaceId || '', 128);
+  const isSpaceScoped = params.audience === 'space' || cleanSpaceId.length > 0;
+  if (isSpaceScoped && !cleanSpaceId) {
+    throw new Error('Community posts must belong to a specific Space.');
+  }
+  const effectiveAudience: AudienceType = isSpaceScoped
+    ? 'space'
+    : params.audience === 'followers'
+    ? 'followers'
+    : 'public';
+  const effectiveSpaceId = isSpaceScoped ? cleanSpaceId : '';
+  const effectiveSpaceName = isSpaceScoped ? sanitizeString(params.spaceName || '', 80) : '';
+
   const payload = {
     authorId: params.author.uid,
     authorName: sanitizeString(params.author.displayName, 80),
     authorUsername: params.author.username,
     authorAvatar: sanitizeString(params.author.avatarUrl || '', 200000),
     authorVerified: Boolean(params.author.verified),
-    spaceId: sanitizeString(params.spaceId || '', 128),
-    spaceName: sanitizeString(params.spaceName || '', 80),
+    spaceId: effectiveSpaceId,
+    spaceName: effectiveSpaceName,
     type: params.type,
     text: cleanText,
     mediaUrls: boundedMediaUrls,
@@ -535,7 +555,7 @@ export async function createPost(params: {
     collaboratorProfiles,
     giftsCount: 0,
     location: sanitizeString(params.location || '', 100),
-    audience: params.audience,
+    audience: effectiveAudience,
     pollOptions: pollOpts,
     pollCounts: pollOpts.map(() => 0),
     repostOfId: sanitizeString(params.repostOfId || '', 128),
@@ -549,10 +569,17 @@ export async function createPost(params: {
 
   try {
     const docRef = await addDoc(collection(db, 'posts'), payload);
-    await updateDoc(doc(db, 'users', params.author.uid), {
-      postsCount: increment(1),
-      updatedAt: serverTimestamp(),
-    });
+    // Complete Community Isolation: Community posts NEVER modify personal profile post counts
+    if (!isSpaceScoped) {
+      await updateDoc(doc(db, 'users', params.author.uid), {
+        postsCount: increment(1),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    const notifCategory: NotificationCategory = isSpaceScoped ? 'spaces' : 'social';
+    const notifTargetType: NotificationTargetType = isSpaceScoped ? 'space' : 'post';
+    const notifTargetId = isSpaceScoped ? effectiveSpaceId : docRef.id;
 
     for (const tagged of uniqueTagged) {
       void dispatchDualNotification({
@@ -560,11 +587,14 @@ export async function createPost(params: {
         recipientName: tagged.displayName,
         actor: params.author,
         type: 'post_tag',
-        category: 'social',
-        targetId: docRef.id,
-        inAppPreview: `@${params.author.username} tagged you in a post: "${cleanText.slice(0, 80)}"`,
+        category: notifCategory,
+        targetType: notifTargetType,
+        targetId: notifTargetId,
+        inAppPreview: isSpaceScoped
+          ? `@${params.author.username} tagged you inside ${effectiveSpaceName || 'a Space'}: "${cleanText.slice(0, 70)}"`
+          : `@${params.author.username} tagged you in a post: "${cleanText.slice(0, 80)}"`,
         emailSubject: `${params.author.displayName} tagged you on Nexora`,
-        emailBodyText: `${params.author.displayName} (@${params.author.username}) tagged you in a post on Nexora.`,
+        emailBodyText: `${params.author.displayName} (@${params.author.username}) tagged you in ${isSpaceScoped ? `Space "${effectiveSpaceName || 'Community'}"` : 'a post'} on Nexora.`,
         dedupeKey: `post_tag:${docRef.id}:${tagged.uid}`,
         skipEmailLog: true,
       });
@@ -576,11 +606,14 @@ export async function createPost(params: {
         recipientName: collab.displayName,
         actor: params.author,
         type: 'collab_invite',
-        category: 'social',
-        targetId: docRef.id,
-        inAppPreview: `@${params.author.username} invited you to collaborate on a post`,
+        category: notifCategory,
+        targetType: notifTargetType,
+        targetId: notifTargetId,
+        inAppPreview: isSpaceScoped
+          ? `@${params.author.username} invited you to collaborate inside ${effectiveSpaceName || 'a Space'}`
+          : `@${params.author.username} invited you to collaborate on a post`,
         emailSubject: `Collaboration Invitation from @${params.author.username}`,
-        emailBodyText: `${params.author.displayName} (@${params.author.username}) invited you to co-author a Nexora post. Open Nexora to Accept or Decline.`,
+        emailBodyText: `${params.author.displayName} (@${params.author.username}) invited you to co-author a Nexora ${isSpaceScoped ? 'Space post' : 'post'}. Open Nexora to Accept or Decline.`,
         dedupeKey: `collab_invite:${docRef.id}:${collab.uid}`,
         skipEmailLog: true,
       });
@@ -631,13 +664,15 @@ export async function respondToCollaborationInvite(params: {
       updatedAt: serverTimestamp(),
     });
 
+    const postIsCommunity = isCommunityPost(params.post);
     void dispatchDualNotification({
       recipientUid: params.post.authorId,
       recipientName: params.post.authorName,
       actor: params.responder,
       type: 'collab_response',
-      category: 'social',
-      targetId: params.post.id,
+      category: postIsCommunity ? 'spaces' : 'social',
+      targetType: postIsCommunity ? 'space' : 'post',
+      targetId: postIsCommunity ? params.post.spaceId || params.post.id : params.post.id,
       inAppPreview:
         params.decision === 'accept'
           ? `@${params.responder.username} accepted your post collaboration invite!`
@@ -677,45 +712,80 @@ export async function removeSelfTagFromPost(params: {
 
 export async function deletePost(postId: string, authorId: string): Promise<void> {
   try {
+    const snap = await getDoc(doc(db, 'posts', postId)).catch(() => null);
+    const existingPost = snap?.exists() ? (snap.data() as Post) : null;
     await deleteDoc(doc(db, 'posts', postId));
-    await updateDoc(doc(db, 'users', authorId), {
-      postsCount: increment(-1),
-      updatedAt: serverTimestamp(),
-    });
+    if (!existingPost || isPersonalTimelinePost(existingPost)) {
+      await updateDoc(doc(db, 'users', authorId), {
+        postsCount: increment(-1),
+        updatedAt: serverTimestamp(),
+      });
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, `posts/${postId}`);
   }
 }
 
 export async function togglePostLike(post: Post, actor: UserProfile): Promise<boolean> {
+  if (!post?.id || !actor?.uid) {
+    throw new Error('Post and user information are required to update like.');
+  }
+  if (auth.currentUser) {
+    if (auth.currentUser.uid !== actor.uid) {
+      throw new Error('You are not authorised to perform this action.');
+    }
+    await ensureVerifiedTokenClaims(auth.currentUser);
+  }
+
+  const postRef = doc(db, 'posts', post.id);
   const likeRef = doc(db, 'posts', post.id, 'likes', actor.uid);
+
   try {
-    const existing = await getDoc(likeRef);
-    const batch = writeBatch(db);
-    if (existing.exists()) {
-      batch.delete(likeRef);
-      batch.update(doc(db, 'posts', post.id), {
-        likesCount: increment(-1),
+    const likedNow = await runTransaction(db, async (tx) => {
+      const [likeSnap, postSnap] = await Promise.all([tx.get(likeRef), tx.get(postRef)]);
+      if (!postSnap.exists()) {
+        throw new Error('This post is no longer available.');
+      }
+
+      const postData = postSnap.data() as Post;
+      const currentLikes =
+        typeof postData.likesCount === 'number' &&
+        Number.isFinite(postData.likesCount) &&
+        postData.likesCount >= 0
+          ? Math.floor(postData.likesCount)
+          : 0;
+
+      if (likeSnap.exists()) {
+        tx.delete(likeRef);
+        tx.update(postRef, {
+          likesCount: Math.max(0, currentLikes - 1),
+          updatedAt: serverTimestamp(),
+        });
+        return false;
+      }
+
+      tx.set(likeRef, { uid: actor.uid, createdAt: serverTimestamp() });
+      tx.update(postRef, {
+        likesCount: currentLikes + 1,
         updatedAt: serverTimestamp(),
       });
-      await batch.commit();
-      return false;
-    } else {
-      batch.set(likeRef, { uid: actor.uid, createdAt: serverTimestamp() });
-      batch.update(doc(db, 'posts', post.id), {
-        likesCount: increment(1),
-        updatedAt: serverTimestamp(),
-      });
-      await batch.commit();
+      return true;
+    });
+
+    if (likedNow) {
+      const postIsCommunity = isCommunityPost(post);
       await createNotification({
         recipientId: post.authorId,
         actor,
         type: 'like',
-        targetId: post.id,
-        preview: post.text.slice(0, 80) || 'Liked your post',
+        category: postIsCommunity ? 'spaces' : 'social',
+        targetType: postIsCommunity ? 'space' : 'post',
+        targetId: postIsCommunity ? post.spaceId || post.id : post.id,
+        preview: post.text.slice(0, 80) || (postIsCommunity ? 'Liked your Space post' : 'Liked your post'),
       });
-      return true;
     }
+
+    return likedNow;
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `posts/${post.id}/likes/${actor.uid}`);
   }
@@ -731,27 +801,49 @@ export async function checkPostLiked(postId: string, uid: string): Promise<boole
 }
 
 export async function toggleSavePost(post: Post, uid: string): Promise<boolean> {
-  const saveRef = doc(db, 'users', uid, 'saved', post.id);
-  try {
-    const snap = await getDoc(saveRef);
-    const batch = writeBatch(db);
-    if (snap.exists()) {
-      batch.delete(saveRef);
-      batch.update(doc(db, 'posts', post.id), {
-        savesCount: increment(-1),
-        updatedAt: serverTimestamp(),
-      });
-      await batch.commit();
-      return false;
-    } else {
-      batch.set(saveRef, { postId: post.id, savedAt: serverTimestamp() });
-      batch.update(doc(db, 'posts', post.id), {
-        savesCount: increment(1),
-        updatedAt: serverTimestamp(),
-      });
-      await batch.commit();
-      return true;
+  if (!post?.id || !uid) {
+    throw new Error('Post and user information are required to save.');
+  }
+  if (auth.currentUser) {
+    if (auth.currentUser.uid !== uid) {
+      throw new Error('You are not authorised to perform this action.');
     }
+    await ensureVerifiedTokenClaims(auth.currentUser);
+  }
+
+  const postRef = doc(db, 'posts', post.id);
+  const saveRef = doc(db, 'users', uid, 'saved', post.id);
+
+  try {
+    return await runTransaction(db, async (tx) => {
+      const [saveSnap, postSnap] = await Promise.all([tx.get(saveRef), tx.get(postRef)]);
+      if (!postSnap.exists()) {
+        throw new Error('This post is no longer available.');
+      }
+      const postData = postSnap.data() as Post;
+      const currentSaves =
+        typeof postData.savesCount === 'number' &&
+        Number.isFinite(postData.savesCount) &&
+        postData.savesCount >= 0
+          ? Math.floor(postData.savesCount)
+          : 0;
+
+      if (saveSnap.exists()) {
+        tx.delete(saveRef);
+        tx.update(postRef, {
+          savesCount: Math.max(0, currentSaves - 1),
+          updatedAt: serverTimestamp(),
+        });
+        return false;
+      }
+
+      tx.set(saveRef, { postId: post.id, savedAt: serverTimestamp() });
+      tx.update(postRef, {
+        savesCount: currentSaves + 1,
+        updatedAt: serverTimestamp(),
+      });
+      return true;
+    });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `users/${uid}/saved/${post.id}`);
   }
@@ -766,6 +858,9 @@ export function subscribeSavedPostIds(uid: string, callback: (ids: string[]) => 
 }
 
 export async function repostPost(originalPost: Post, actor: UserProfile): Promise<void> {
+  if (isCommunityPost(originalPost)) {
+    throw new Error('Community posts must stay inside their Space and cannot be reposted to personal profiles or the public feed.');
+  }
   try {
     await createPost({
       author: actor,
@@ -833,9 +928,27 @@ export async function addPostComment(params: {
   text: string;
   parentCommentId?: string;
   replyToUid?: string;
+  authorUser?: UserProfile | null;
+  badgesMap?: Record<string, { badgeType?: string; badges?: string[] }>;
 }): Promise<void> {
   const clean = sanitizeString(params.text, BLUEPRINT_LIMITS.COMMENT_TEXT_MAX);
   if (!clean) return;
+
+  // Enforce tiered verification permission before attempting write (also strictly enforced in Firestore Rules)
+  let resolvedAuthorUser = params.authorUser || null;
+  if (!resolvedAuthorUser && params.post.authorId !== params.author.uid) {
+    resolvedAuthorUser = await getUserProfile(params.post.authorId).catch(() => null);
+  }
+  const perm = canCommentOnPost({
+    post: params.post,
+    currentUser: params.author,
+    authorUser: resolvedAuthorUser,
+    badgesMap: params.badgesMap,
+  });
+  if (!perm.allowed) {
+    throw new Error(perm.reason || 'Only verified users can comment on official Nexora owner posts.');
+  }
+
   try {
     const batch = writeBatch(db);
     const commentRef = doc(collection(db, 'posts', params.post.id, 'comments'));
@@ -857,12 +970,18 @@ export async function addPostComment(params: {
     await batch.commit();
 
     const isReply = Boolean(params.parentCommentId && params.replyToUid);
+    const postIsCommunity = isCommunityPost(params.post);
+    const notifCategory: NotificationCategory = postIsCommunity ? 'spaces' : 'social';
+    const notifTargetType: NotificationTargetType = postIsCommunity ? 'space' : 'post';
+    const notifTargetId = postIsCommunity ? params.post.spaceId || params.post.id : params.post.id;
+
     await createNotification({
       recipientId: isReply && params.replyToUid ? params.replyToUid : params.post.authorId,
       actor: params.author,
       type: isReply ? 'reply' : 'comment',
-      targetType: 'post',
-      targetId: params.post.id,
+      category: notifCategory,
+      targetType: notifTargetType,
+      targetId: notifTargetId,
       preview: clean.slice(0, 80),
       dedupeKey: `comment:${commentRef.id}`,
     });
@@ -875,8 +994,9 @@ export async function addPostComment(params: {
           recipientId: mentionedUid,
           actor: params.author,
           type: 'mention',
-          targetType: 'post',
-          targetId: params.post.id,
+          category: notifCategory,
+          targetType: notifTargetType,
+          targetId: notifTargetId,
           preview: clean.slice(0, 80),
           dedupeKey: `mention:${commentRef.id}:${mentionedUid}`,
         });
@@ -1261,6 +1381,8 @@ export async function sendSpaceInviteNotification(
       actorName: sanitizeString(inviter.displayName, 80),
       actorAvatar: sanitizeString(inviter.avatarUrl || '', 200000),
       type: 'space_invite',
+      category: 'spaces',
+      targetType: 'space',
       targetId: space.id,
       preview: sanitizeString(`Invited you to join ${space.name}`, 200),
       read: false,

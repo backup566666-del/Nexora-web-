@@ -49,13 +49,12 @@ import {
   NavSection,
   NotificationItem,
   Post,
+  ProfileContentTab,
   Space,
   Story,
   UserProfile,
   Vibe,
 } from './types/nexora';
-
-type ProfileContentTab = 'posts' | 'videos' | 'photos' | 'tagged' | 'collabs' | 'gifts' | 'spaces' | 'saved';
 
 function NexoraAppContent() {
   const {
@@ -108,6 +107,7 @@ function NexoraAppContent() {
   const [activeSection, setActiveSection] = useState<NavSection>('home');
   const [openAdminSettings, setOpenAdminSettings] = useState(false);
   const [openCustomizeHomepage, setOpenCustomizeHomepage] = useState(false);
+  const [openVerificationSettings, setOpenVerificationSettings] = useState(false);
   const [targetProfileUid, setTargetProfileUid] = useState<string | null>(null);
   const [targetProfileTab, setTargetProfileTab] = useState<ProfileContentTab | undefined>(undefined);
   const [targetSpaceId, setTargetSpaceId] = useState<string | null>(null);
@@ -445,6 +445,7 @@ function NexoraAppContent() {
   const handleNavigate = (section: NavSection, targetId?: string, profileTab?: ProfileContentTab) => {
     setOpenAdminSettings(false);
     setOpenCustomizeHomepage(false);
+    setOpenVerificationSettings(false);
     setSelectedPostId(null);
     setActiveSection(section);
     if (section === 'profile') {
@@ -485,7 +486,17 @@ function NexoraAppContent() {
 
   const handleOpenCustomizeHomepage = () => {
     setOpenAdminSettings(false);
+    setOpenVerificationSettings(false);
     setOpenCustomizeHomepage(true);
+    setSelectedPostId(null);
+    setActiveSection('settings');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleOpenVerification = () => {
+    setOpenAdminSettings(false);
+    setOpenCustomizeHomepage(false);
+    setOpenVerificationSettings(true);
     setSelectedPostId(null);
     setActiveSection('settings');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -525,6 +536,7 @@ function NexoraAppContent() {
             onNavigate={handleNavigate}
             onOpenVibes={() => handleNavigate('vibes')}
             onOpenCustomizeHomepage={handleOpenCustomizeHomepage}
+            onOpenVerification={handleOpenVerification}
             justSignedIn={justSignedIn}
           />
         )}
@@ -564,6 +576,7 @@ function NexoraAppContent() {
             savedPostIds={savedPostIds}
             initialSpaceId={targetSpaceId}
             onOpenProfile={handleOpenUserProfile}
+            onOpenVerification={handleOpenVerification}
           />
         )}
 
@@ -574,10 +587,12 @@ function NexoraAppContent() {
             posts={posts}
             vibes={vibes}
             spaces={spaces}
+            users={users}
             savedPostIds={savedPostIds}
             onOpenProfile={handleOpenUserProfile}
             onOpenChatThread={handleOpenChatThread}
             onOpenVibes={() => handleNavigate('vibes')}
+            onOpenVerification={handleOpenVerification}
             onNavigate={handleNavigate}
           />
         )}
@@ -652,7 +667,13 @@ function NexoraAppContent() {
             vibes={vibes}
             spaces={spaces}
             initialAdminOpen={openAdminSettings}
-            initialPersonalSection={openCustomizeHomepage ? 'customize-homepage' : 'all'}
+            initialPersonalSection={
+              openCustomizeHomepage
+                ? 'customize-homepage'
+                : openVerificationSettings
+                ? 'badges'
+                : 'all'
+            }
             onNavigate={handleNavigate}
           />
         )}
@@ -683,6 +704,7 @@ function NexoraAppContent() {
               post={selectedPost}
               isSaved={savedPostIds.includes(selectedPost.id)}
               onOpenProfile={handleOpenUserProfile}
+              onOpenVerification={handleOpenVerification}
               usersDirectory={users}
             />
           </div>

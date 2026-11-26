@@ -5,11 +5,13 @@ import {
   Flag,
   Gift,
   Heart,
+  Lock,
   MapPin,
   MessageCircle,
   MoreHorizontal,
   Repeat2,
   Share2,
+  ShieldCheck,
   Tag,
   Trash2,
   UserPlus,
@@ -38,13 +40,19 @@ import {
   voteOnPoll,
 } from '../../services/firebase/socialService';
 import { Post, PostComment, ProfileCustomisation, SubscriptionTier, UserProfile } from '../../types/nexora';
-import { formatCompactCount, formatRelativeTime } from '../../utils/validation';
+import {
+  canCommentOnPost,
+  formatCompactCount,
+  formatRelativeTime,
+  isCommunityPost,
+} from '../../utils/validation';
 
 interface PostCardProps {
   post: Post;
   isSaved: boolean;
   onOpenProfile: (uid: string) => void;
   onHashtagClick?: (tag: string) => void;
+  onOpenVerification?: () => void;
   usersDirectory?: UserProfile[];
   authorTier?: SubscriptionTier;
   authorCustomisation?: ProfileCustomisation | null;
@@ -56,14 +64,35 @@ export function PostCard({
   isSaved,
   onOpenProfile,
   onHashtagClick,
+  onOpenVerification,
   usersDirectory = [],
   authorTier,
   authorCustomisation,
   compact = false,
 }: PostCardProps) {
-  const { profile, effectiveTier, getUserBadges, getUserTier } = useAuth();
+  const {
+    profile,
+    myRole,
+    badgesMap,
+    effectiveTier,
+    getUserBadges,
+    getUserTier,
+    isUserOfficialOwner,
+  } = useAuth();
   const postBadges = getUserBadges(post.authorId, post.authorVerified);
   const directoryAuthor = usersDirectory.find((u) => u.uid === post.authorId);
+  const authorIsOfficialOwner = isUserOfficialOwner(
+    post.authorId,
+    directoryAuthor || (profile?.uid === post.authorId ? profile : undefined)
+  );
+  const postIsCommunity = isCommunityPost(post);
+  const commentPermission = canCommentOnPost({
+    post,
+    currentUser: profile,
+    authorUser: directoryAuthor || (profile?.uid === post.authorId ? profile : undefined),
+    badgesMap,
+    currentUserRole: myRole,
+  });
   const resolvedAuthorTier =
     authorTier ||
     (profile?.uid === post.authorId
@@ -89,6 +118,7 @@ export function PostCard({
   const [reportReason, setReportReason] = useState('');
   const [giftModalOpen, setGiftModalOpen] = useState(false);
   const [collabBusy, setCollabBusy] = useState(false);
+  const [likeBusy, setLikeBusy] = useState(false);
 
   useEffect(() => {
     if (!profile) return;
@@ -116,12 +146,16 @@ export function PostCard({
   const isTaggedUser = taggedUids.includes(profile.uid);
 
   const handleLike = async () => {
+    if (likeBusy) return;
     setActionError('');
+    setLikeBusy(true);
     try {
       const next = await togglePostLike(post, profile);
       setLiked(next);
     } catch (err) {
       setActionError(extractReadableErrorMessage(err, 'Unable to update like right now.'));
+    } finally {
+      setLikeBusy(false);
     }
   };
 
@@ -139,6 +173,10 @@ export function PostCard({
   const handleCommentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!commentText.trim()) return;
+    if (!commentPermission.allowed) {
+      setActionError(commentPermission.reason);
+      return;
+    }
     setActionError('');
     try {
       await addPostComment({
@@ -147,6 +185,8 @@ export function PostCard({
         text: commentText,
         parentCommentId: replyTo?.id || '',
         replyToUid: replyTo?.authorId,
+        authorUser: directoryAuthor || (profile.uid === post.authorId ? profile : undefined),
+        badgesMap,
       });
       setCommentText('');
       setReplyTo(null);
@@ -240,6 +280,11 @@ export function PostCard({
                 {post.authorName}
               </button>
               <BadgeStrip badges={postBadges} size={14} max={3} />
+              {authorIsOfficialOwner && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-500/15 border border-sky-400/35 text-[10px] font-semibold text-sky-300">
+                  <ShieldCheck size={11} /> Official Nexora
+                </span>
+              )}
               <TierBadge tier={resolvedAuthorTier} showFree={false} />
               <span className="text-xs text-[#64748B] truncate">@{post.authorUsername}</span>
               {acceptedCollabUids.length > 0 && (
@@ -516,25 +561,36 @@ export function PostCard({
             type="button"
             onClick={() => setShowComments((v) => !v)}
             className="inline-flex items-center gap-1.5 py-1.5 px-1 rounded-lg hover:text-white transition-colors min-h-[36px]"
+            title={
+              commentPermission.isOfficialOwnerPost && !commentPermission.allowed
+                ? 'Verified accounts only can comment (click to read replies)'
+                : 'Comments & replies'
+            }
           >
-            <MessageCircle size={16} />
+            {commentPermission.isOfficialOwnerPost && !commentPermission.allowed ? (
+              <Lock size={14} className="text-sky-400" />
+            ) : (
+              <MessageCircle size={16} />
+            )}
             <span className="font-mono-tabular">{formatCompactCount(post.commentsCount)}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                await repostPost(post, profile);
-              } catch (err) {
-                setActionError(extractReadableErrorMessage(err, 'Unable to repost right now.'));
-              }
-            }}
-            className="inline-flex items-center gap-1.5 py-1.5 px-1 rounded-lg hover:text-white transition-colors min-h-[36px]"
-          >
-            <Repeat2 size={16} />
-            <span className="font-mono-tabular">{formatCompactCount(post.repostsCount)}</span>
-          </button>
+          {!postIsCommunity && (
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await repostPost(post, profile);
+                } catch (err) {
+                  setActionError(extractReadableErrorMessage(err, 'Unable to repost right now.'));
+                }
+              }}
+              className="inline-flex items-center gap-1.5 py-1.5 px-1 rounded-lg hover:text-white transition-colors min-h-[36px]"
+            >
+              <Repeat2 size={16} />
+              <span className="font-mono-tabular">{formatCompactCount(post.repostsCount)}</span>
+            </button>
+          )}
 
           {post.authorId !== profile.uid ? (
             <button
@@ -590,36 +646,67 @@ export function PostCard({
       {/* Comments & Replies */}
       {showComments && (
         <div className="sm:pl-[52px] pt-3 border-t border-white/[0.06] space-y-3">
-          <form onSubmit={handleCommentSubmit} className="space-y-2">
-            {replyTo && (
-              <div className="flex items-center justify-between text-[11px] text-[#C084FC] bg-[#7C3AED]/10 px-3 py-1 rounded-lg">
-                <span>Replying to @{replyTo.authorUsername}</span>
-                <button type="button" onClick={() => setReplyTo(null)}>
-                  Cancel
+          {commentPermission.allowed ? (
+            <form onSubmit={handleCommentSubmit} className="space-y-2">
+              {replyTo && (
+                <div className="flex items-center justify-between text-[11px] text-[#C084FC] bg-[#7C3AED]/10 px-3 py-1 rounded-lg">
+                  <span>Replying to @{replyTo.authorUsername}</span>
+                  <button type="button" onClick={() => setReplyTo(null)}>
+                    Cancel
+                  </button>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  maxLength={1000}
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  placeholder="Write a reply..."
+                  className="flex-1 px-3.5 py-2 rounded-xl bg-[#08070F] border border-[#8B5CF6]/20 text-xs text-white outline-none focus:border-[#8B5CF6]"
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white"
+                >
+                  Reply
                 </button>
               </div>
-            )}
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                maxLength={1000}
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                placeholder="Write a reply..."
-                className="flex-1 px-3.5 py-2 rounded-xl bg-[#08070F] border border-[#8B5CF6]/20 text-xs text-white outline-none focus:border-[#8B5CF6]"
-              />
-              <button
-                type="submit"
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-xs font-semibold text-white"
-              >
-                Reply
-              </button>
+            </form>
+          ) : (
+            <div className="rounded-xl bg-[#0B1220] border border-sky-400/30 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-sky-500/15 border border-sky-400/30 flex items-center justify-center shrink-0 mt-0.5">
+                  <Lock size={14} className="text-sky-300" />
+                </div>
+                <div className="space-y-0.5 min-w-0">
+                  <p className="text-xs font-semibold text-white">
+                    Verified Account Required to Comment
+                  </p>
+                  <p className="text-[11px] text-[#94A3B8] leading-relaxed">
+                    Anyone can follow this Official Nexora account and like its posts. Only verified Nexora accounts can submit comments or replies here.
+                  </p>
+                </div>
+              </div>
+              {onOpenVerification && (
+                <button
+                  type="button"
+                  onClick={onOpenVerification}
+                  className="px-3.5 py-2 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-xs font-semibold text-sky-200 whitespace-nowrap shrink-0"
+                >
+                  Apply for Verification
+                </button>
+              )}
             </div>
-          </form>
+          )}
 
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {comments.length === 0 ? (
-              <p className="text-xs text-[#64748B]">No replies yet. Start the discussion.</p>
+              <p className="text-xs text-[#64748B]">
+                {commentPermission.allowed
+                  ? 'No replies yet. Start the discussion.'
+                  : 'No verified replies yet.'}
+              </p>
             ) : (
               comments.map((c) => (
                 <div
@@ -647,13 +734,15 @@ export function PostCard({
                         {formatRelativeTime(c.createdAt)}
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setReplyTo(c)}
-                      className="text-[11px] text-[#C084FC] hover:underline"
-                    >
-                      Reply
-                    </button>
+                    {commentPermission.allowed && (
+                      <button
+                        type="button"
+                        onClick={() => setReplyTo(c)}
+                        className="text-[11px] text-[#C084FC] hover:underline"
+                      >
+                        Reply
+                      </button>
+                    )}
                   </div>
                   <p className="text-xs text-[#CBD5E1]">{c.text}</p>
                 </div>

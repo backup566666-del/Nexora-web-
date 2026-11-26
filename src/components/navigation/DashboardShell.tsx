@@ -24,6 +24,7 @@ import {
   Settings,
   Shield,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Sun,
   Tag,
@@ -54,25 +55,16 @@ import {
   NotificationCategory,
   NotificationItem,
   Post,
+  ProfileContentTab,
   Space,
   UserProfile,
 } from '../../types/nexora';
 import { inferCategoryFromNotificationType } from '../../services/notifications/notificationDispatcher';
-import { formatRelativeTime } from '../../utils/validation';
-
-type ProfileTab =
-  | 'posts'
-  | 'videos'
-  | 'photos'
-  | 'tagged'
-  | 'collabs'
-  | 'gifts'
-  | 'spaces'
-  | 'saved';
+import { formatRelativeTime, isPersonalTimelinePost } from '../../utils/validation';
 
 interface DashboardShellProps {
   activeSection: NavSection;
-  onNavigate: (section: NavSection, targetId?: string, profileTab?: ProfileTab) => void;
+  onNavigate: (section: NavSection, targetId?: string, profileTab?: ProfileContentTab) => void;
   onOpenSearch?: (query?: string) => void;
   onOpenAdminSettings?: () => void;
   onOpenCustomizeHomepage?: () => void;
@@ -159,6 +151,7 @@ const NOTIF_FILTERS: { id: 'all' | 'unread' | NotificationCategory; label: strin
   { id: 'all', label: 'All' },
   { id: 'unread', label: 'Unread' },
   { id: 'social', label: 'Social' },
+  { id: 'spaces', label: 'Spaces' },
   { id: 'rewards', label: 'Rewards' },
   { id: 'badges', label: 'Badges' },
   { id: 'gifts', label: 'Gifts' },
@@ -217,6 +210,7 @@ export function DashboardShell({
     platformConfig,
     effectiveTier,
     getUserBadges,
+    isUserOfficialOwner,
   } = useAuth();
   const { themeMode, cycleThemeMode } = useTheme();
   const [dockVisible, setDockVisible] = useState(true);
@@ -349,7 +343,7 @@ export function DashboardShell({
         )
         .slice(0, 3),
       posts: posts
-        .filter((p) => p.text.toLowerCase().includes(q))
+        .filter((p) => isPersonalTimelinePost(p) && p.text.toLowerCase().includes(q))
         .slice(0, 3),
     };
   }, [searchQuery, users, remoteSearchUsers, spaces, posts]);
@@ -392,8 +386,15 @@ export function DashboardShell({
       void markNotificationRead(n.id);
     }
     setShowNotifs(false);
-    if (n.type === 'space_invite' && n.targetId) {
-      onNavigate('spaces', n.targetId);
+    if (
+      n.category === 'spaces' ||
+      n.targetType === 'space' ||
+      n.type === 'space_invite' ||
+      n.type === 'space_announcement' ||
+      n.type === 'event_reminder' ||
+      n.type === 'community_status'
+    ) {
+      onNavigate('spaces', n.targetId || undefined);
     } else if (n.type === 'message' && n.targetId) {
       onNavigate('chat', n.targetId);
     } else if (n.type === 'follow' && n.actorId) {
@@ -642,11 +643,41 @@ export function DashboardShell({
               </h1>
             </div>
 
-            {/* Right: Inline Search (md+), Alerts, Settings shortcut, Account */}
+            {/* Right: Mobile Earn/Invite, Inline Search (md+), Alerts, Settings shortcut, Account */}
             <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
               <div className="hidden md:block">
                 <PWAInstallButton variant="compact" />
               </div>
+
+              {/* Mobile & Tablet Quick Access: Tasks & Invite */}
+              <button
+                type="button"
+                onClick={() => onNavigate('tasks')}
+                aria-label="Tasks & Rewards"
+                title="Tasks & Rewards"
+                className={`lg:hidden min-h-[38px] px-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap ${
+                  activeSection === 'tasks'
+                    ? 'bg-[#7C3AED] border-[#8B5CF6] text-white'
+                    : 'bg-[#0E0C18] border-white/[0.08] text-amber-300 hover:border-[#8B5CF6]/45'
+                }`}
+              >
+                <Gift size={14} />
+                <span className="hidden xs:inline sm:inline">Tasks</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('invite')}
+                aria-label="Invite Friends"
+                title="Invite Friends"
+                className={`lg:hidden min-h-[38px] px-2.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap ${
+                  activeSection === 'invite'
+                    ? 'bg-[#7C3AED] border-[#8B5CF6] text-white'
+                    : 'bg-[#0E0C18] border-white/[0.08] text-emerald-300 hover:border-[#8B5CF6]/45'
+                }`}
+              >
+                <UserPlus size={14} />
+                <span className="hidden sm:inline">Invite</span>
+              </button>
 
               {/* Mobile Search Trigger */}
               <button
@@ -733,6 +764,13 @@ export function DashboardShell({
                                       max={2}
                                       interactive={false}
                                     />
+                                    {isUserOfficialOwner(u.uid, u) && (
+                                      <ShieldCheck
+                                        size={12}
+                                        className="text-[#C084FC] shrink-0"
+                                        aria-label="Official Nexora Account"
+                                      />
+                                    )}
                                   </p>
                                   <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
                                 </div>
@@ -1253,6 +1291,13 @@ export function DashboardShell({
                                     max={2}
                                     interactive={false}
                                   />
+                                  {isUserOfficialOwner(u.uid, u) && (
+                                    <ShieldCheck
+                                      size={12}
+                                      className="text-[#C084FC] shrink-0"
+                                      aria-label="Official Nexora Account"
+                                    />
+                                  )}
                                 </p>
                                 <p className="text-[11px] text-[#94A3B8] truncate">@{u.username}</p>
                               </div>

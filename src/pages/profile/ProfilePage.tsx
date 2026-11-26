@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Award,
   BarChart3,
   Camera,
   Check,
+  Copy,
   Edit3,
   Film,
   Gift,
@@ -16,9 +18,11 @@ import {
   Plus,
   Share2,
   ShieldBan,
+  ShieldCheck,
   Sparkles,
   Tag,
   UserPlus,
+  Wallet,
   X,
 } from 'lucide-react';
 import { resolveAssetUrl } from '../../assets/defaultAssets';
@@ -33,6 +37,7 @@ import {
   resolveBannerBackground,
   resolveGradientStyle,
 } from '../../components/profile/ProfileEffectLayer';
+import { ProfileTasksPanel } from '../../components/rewards/ProfileTasksPanel';
 import { PostCard } from '../../features/posts/PostCard';
 import { useAuth } from '../../hooks/useAuth';
 import {
@@ -43,6 +48,17 @@ import {
 } from '../../services/auth/authService';
 import { recordProfileVisit } from '../../services/firebase/analyticsService';
 import {
+  buildReferralShareUrl,
+  emptyWalletAccount,
+  ensurePersonalInvitationCode,
+  subscribeMyInvitations,
+  subscribeMyReferralClaims,
+  subscribeMyTaskSubmissions,
+  subscribeMyWallet,
+  subscribeRewardsConfig,
+  subscribeTasks,
+} from '../../services/firebase/rewardsService';
+import {
   createOrGetDirectConversation,
   respondToCollaborationInvite,
   subscribeIsFollowing,
@@ -52,24 +68,30 @@ import {
 } from '../../services/firebase/socialService';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import { uploadMediaAsset } from '../../services/storage/mediaUploadService';
-import { GiftTransaction, NavSection, Post, Space, UserProfile, Vibe } from '../../types/nexora';
 import {
+  GiftTransaction,
+  InvitationRecord,
+  NavSection,
+  Post,
+  ProfileContentTab,
+  ReferralClaim,
+  RewardsConfig,
+  Space,
+  TaskItem,
+  TaskSubmission,
+  UserProfile,
+  Vibe,
+  WalletAccount,
+} from '../../types/nexora';
+import {
+  DEFAULT_REWARDS_CONFIG,
   formatCompactCount,
   formatRelativeTime,
+  isPersonalTimelinePost,
   isValidUsername,
   normalizeUsername,
   sanitizeProfileCustomisation,
 } from '../../utils/validation';
-
-type ProfileContentTab =
-  | 'posts'
-  | 'videos'
-  | 'photos'
-  | 'tagged'
-  | 'collabs'
-  | 'gifts'
-  | 'spaces'
-  | 'saved';
 
 interface ProfilePageProps {
   targetUid: string | null;
@@ -77,10 +99,12 @@ interface ProfilePageProps {
   posts: Post[];
   vibes: Vibe[];
   spaces: Space[];
+  users?: UserProfile[];
   savedPostIds: string[];
   onOpenProfile: (uid: string) => void;
   onOpenChatThread: (convId: string) => void;
   onOpenVibes: () => void;
+  onOpenVerification?: () => void;
   onNavigate?: (
     section: NavSection,
     targetId?: string,
@@ -94,10 +118,12 @@ export function ProfilePage({
   posts,
   vibes,
   spaces,
+  users = [],
   savedPostIds,
   onOpenProfile,
   onOpenChatThread,
   onOpenVibes,
+  onOpenVerification,
   onNavigate,
 }: ProfilePageProps) {
   const {
@@ -111,6 +137,8 @@ export function ProfilePage({
     customisationCatalog,
     getUserBadges,
     getUserTier,
+    isUserOfficialOwner,
+    isUserPlatformVerified,
     getAdminEffectiveStatus,
     setMyAdminStatus,
     refreshUserAndProfile,
@@ -127,6 +155,18 @@ export function ProfilePage({
     sent: GiftTransaction[];
   }>({ received: [], sent: [] });
   const [showGiftModal, setShowGiftModal] = useState(false);
+
+  // Own-profile Rewards, Tasks & Invitation live state
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [taskSubmissions, setTaskSubmissions] = useState<TaskSubmission[]>([]);
+  const [wallet, setWallet] = useState<WalletAccount>(() =>
+    emptyWalletAccount(currentUser?.uid || '')
+  );
+  const [rewardsConfig, setRewardsConfig] = useState<RewardsConfig>(DEFAULT_REWARDS_CONFIG);
+  const [myInvitations, setMyInvitations] = useState<InvitationRecord[]>([]);
+  const [myReferralClaims, setMyReferralClaims] = useState<ReferralClaim[]>([]);
+  const [quickInviteFallback, setQuickInviteFallback] = useState<InvitationRecord | null>(null);
+  const [copiedQuickInvite, setCopiedQuickInvite] = useState(false);
 
   const [showCoverEditor, setShowCoverEditor] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
@@ -158,8 +198,16 @@ export function ProfilePage({
   const isOwnProfile = !targetUid || targetUid === currentUser?.uid;
 
   useEffect(() => {
-    if (initialTab) setContentTab(initialTab);
-  }, [initialTab]);
+    if (initialTab) {
+      setContentTab(initialTab === 'tasks' && !isOwnProfile ? 'posts' : initialTab);
+    }
+  }, [initialTab, isOwnProfile]);
+
+  useEffect(() => {
+    if (!isOwnProfile && contentTab === 'tasks') {
+      setContentTab('posts');
+    }
+  }, [isOwnProfile, contentTab]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -208,6 +256,47 @@ export function ProfilePage({
     return subscribeUserGifts(activeProfile.uid, setUserGifts);
   }, [activeProfile?.uid, currentUser?.uid]);
 
+  useEffect(() => {
+    if (!isOwnProfile || !currentUser?.uid) {
+      setTasks([]);
+      setTaskSubmissions([]);
+      setMyInvitations([]);
+      setMyReferralClaims([]);
+      setQuickInviteFallback(null);
+      return;
+    }
+    const uid = currentUser.uid;
+    const u1 = subscribeTasks(setTasks);
+    const u2 = subscribeMyTaskSubmissions(uid, setTaskSubmissions);
+    const u3 = subscribeMyWallet(uid, setWallet);
+    const u4 = subscribeRewardsConfig(setRewardsConfig);
+    const u5 = subscribeMyInvitations(uid, setMyInvitations);
+    const u6 = subscribeMyReferralClaims(uid, setMyReferralClaims);
+    void ensurePersonalInvitationCode(currentUser)
+      .then((rec) => {
+        if (rec) setQuickInviteFallback(rec);
+      })
+      .catch(() => {});
+    return () => {
+      u1();
+      u2();
+      u3();
+      u4();
+      u5();
+      u6();
+    };
+  }, [isOwnProfile, currentUser?.uid]);
+
+  const activeFreeTasks = useMemo(
+    () => tasks.filter((t) => t.active && t.freeToParticipate),
+    [tasks]
+  );
+
+  const personalInvite = useMemo(
+    () => myInvitations.find((i) => i.kind === 'personal') || quickInviteFallback,
+    [myInvitations, quickInviteFallback]
+  );
+
   // Resolve real uploaded or authenticated profile picture without premature fallback
   const primaryAvatarUrl = useMemo(() => {
     if (!activeProfile) return '';
@@ -236,39 +325,45 @@ export function ProfilePage({
     setEditError('');
   }, [activeProfile?.uid, showEditProfile]);
 
+  // Community Isolation: profile timelines only ever surface intentional personal profile posts.
+  const personalPosts = useMemo(() => posts.filter(isPersonalTimelinePost), [posts]);
+
   const userPosts = useMemo(
-    () => (activeProfile ? posts.filter((p) => p.authorId === activeProfile.uid) : []),
-    [posts, activeProfile]
+    () => (activeProfile ? personalPosts.filter((p) => p.authorId === activeProfile.uid) : []),
+    [personalPosts, activeProfile]
   );
 
   const taggedPosts = useMemo(
-    () => (activeProfile ? posts.filter((p) => (p.taggedUids || []).includes(activeProfile.uid)) : []),
-    [posts, activeProfile]
+    () =>
+      activeProfile
+        ? personalPosts.filter((p) => (p.taggedUids || []).includes(activeProfile.uid))
+        : [],
+    [personalPosts, activeProfile]
   );
 
   const pendingCollabInvites = useMemo(
     () =>
       activeProfile && isOwnProfile
-        ? posts.filter(
+        ? personalPosts.filter(
             (p) =>
               (p.collaboratorInviteUids || []).includes(activeProfile.uid) &&
               !(p.collaboratorUids || []).includes(activeProfile.uid) &&
               !(p.declinedCollaboratorUids || []).includes(activeProfile.uid)
           )
         : [],
-    [posts, activeProfile, isOwnProfile]
+    [personalPosts, activeProfile, isOwnProfile]
   );
 
   const collabPosts = useMemo(
     () =>
       activeProfile
-        ? posts.filter(
+        ? personalPosts.filter(
             (p) =>
               (p.collaboratorUids || []).includes(activeProfile.uid) ||
               (isOwnProfile && pendingCollabInvites.some((inv) => inv.id === p.id))
           )
         : [],
-    [posts, activeProfile, isOwnProfile, pendingCollabInvites]
+    [personalPosts, activeProfile, isOwnProfile, pendingCollabInvites]
   );
 
   const receivedGifts = userGifts.received;
@@ -292,8 +387,8 @@ export function ProfilePage({
   );
 
   const savedPosts = useMemo(
-    () => posts.filter((p) => savedPostIds.includes(p.id)),
-    [posts, savedPostIds]
+    () => personalPosts.filter((p) => savedPostIds.includes(p.id)),
+    [personalPosts, savedPostIds]
   );
 
   const savedVibes = useMemo(
@@ -357,6 +452,9 @@ export function ProfilePage({
     : null;
 
   const isBlocked = (privateInfo?.blockedUserIds || []).includes(activeProfile.uid);
+  const isOfficialAccount = isUserOfficialOwner(activeProfile.uid, activeProfile);
+  const isViewerPlatformVerified = isUserPlatformVerified(currentUser.uid, currentUser);
+  const postUsersDirectory = users.length > 0 ? users : [activeProfile];
   const avatarInitial = (activeProfile.displayName || activeProfile.username || 'N')
     .trim()
     .charAt(0)
@@ -653,6 +751,12 @@ export function ProfilePage({
                     {activeProfile.displayName}
                   </h1>
                   <BadgeStrip badges={activeBadges} size={20} max={6} />
+                  {isOfficialAccount && (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-[#7C3AED]/25 border border-[#A855F7]/50 text-[11px] font-semibold text-[#E9D5FF]">
+                      <ShieldCheck size={13} className="text-[#C084FC]" />
+                      Official Nexora
+                    </span>
+                  )}
                   <TierBadge tier={activeTier} showFree={false} />
                   {viewedAdminBadgeStatus && (
                     <PresenceBadge
@@ -667,6 +771,33 @@ export function ProfilePage({
                 <p className="text-sm font-medium" style={{ color: accentColor }}>
                   @{activeProfile.username}
                 </p>
+
+                {isOfficialAccount && (
+                  <div className="p-3 rounded-xl bg-[#140F24]/95 border border-[#A855F7]/35 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#E9D5FF]">
+                        <ShieldCheck size={14} className="text-[#C084FC]" />
+                        {activeProfile.officialTitle || 'Official Nexora Account'}
+                      </span>
+                      <span className="text-[11px] font-mono-tabular text-[#C084FC]">
+                        {formatCompactCount(activeProfile.followersCount)} followers ·{' '}
+                        {formatCompactCount(totalLikesReceived)} likes
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#CBD5E1] leading-relaxed">
+                      Everyone on Nexora can follow this official account and like its updates. Only platform-verified members can submit comments on official posts.
+                    </p>
+                    {!isOwnProfile && !isViewerPlatformVerified && onOpenVerification && (
+                      <button
+                        type="button"
+                        onClick={onOpenVerification}
+                        className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#C084FC] hover:text-white underline underline-offset-2"
+                      >
+                        <ShieldCheck size={12} /> Apply for Verification to Comment
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {activeProfile.bio && (
                   <p className="text-sm text-[#E2E8F0] leading-relaxed pt-1.5 break-words">
@@ -880,7 +1011,83 @@ export function ProfilePage({
         </div>
       </section>
 
-      {/* 6. PROFILE CONTENT TABS: Posts | Videos | Photos | Tagged | Collabs | Gifts | Spaces | Saved */}
+      {/* Own-Profile Compact Tasks, Wallet & Invitation Strip */}
+      {isOwnProfile && (
+        <section className="rounded-2xl bg-gradient-to-r from-[#0F0C1D] via-[#130E24] to-[#0B111A] border border-[#8B5CF6]/25 p-3.5 sm:p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 min-w-0">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-400/30 flex items-center justify-center shrink-0">
+                <Award size={15} className="text-amber-300" />
+              </div>
+              <div>
+                <p className="text-[11px] text-[#94A3B8]">Earn Free Key Points</p>
+                <p className="text-xs sm:text-sm font-semibold text-white">
+                  <span className="font-mono-tabular text-emerald-300">{wallet.availablePoints} KP</span>
+                  <span className="text-[#64748B] mx-1.5">·</span>
+                  <span className="font-mono-tabular text-[#CBD5E1]">
+                    {activeFreeTasks.length} free task{activeFreeTasks.length === 1 ? '' : 's'}
+                  </span>
+                  {personalInvite && (
+                    <>
+                      <span className="text-[#64748B] mx-1.5">·</span>
+                      <span className="font-mono-tabular text-[#C084FC]">
+                        Invite: {personalInvite.code}
+                      </span>
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {personalInvite && (
+              <button
+                type="button"
+                onClick={() => {
+                  const url = buildReferralShareUrl(personalInvite.code);
+                  void navigator.clipboard.writeText(url).then(() => {
+                    setCopiedQuickInvite(true);
+                    setShareToast('Referral link copied!');
+                    setTimeout(() => {
+                      setCopiedQuickInvite(false);
+                      setShareToast('');
+                    }, 2200);
+                  });
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-xs font-medium text-[#E2E8F0] whitespace-nowrap min-h-[38px]"
+              >
+                {copiedQuickInvite ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                <span>{copiedQuickInvite ? 'Link Copied' : 'Copy Invite Link'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setContentTab('tasks')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap min-h-[38px] transition-colors ${
+                contentTab === 'tasks'
+                  ? 'bg-emerald-500/20 border border-emerald-400/40 text-emerald-200'
+                  : 'bg-gradient-to-r from-[#6D28D9] to-[#7C3AED] text-white'
+              }`}
+            >
+              <Gift size={13} />
+              <span>{contentTab === 'tasks' ? 'Viewing Tasks & Earn' : 'Earn KP & Tasks'}</span>
+            </button>
+            {onNavigate && (
+              <button
+                type="button"
+                onClick={() => onNavigate('wallet')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-xs font-medium text-[#CBD5E1] hover:text-white whitespace-nowrap min-h-[38px]"
+              >
+                <Wallet size={13} className="text-emerald-400" />
+                <span>Wallet</span>
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* 6. PROFILE CONTENT TABS: Posts | Videos | Photos | Tagged | Collabs | Gifts | Tasks & Earn | Spaces | Saved */}
       <div className="flex items-center gap-2 border-b border-white/[0.08] pb-3.5 overflow-x-auto no-scrollbar">
         {[
           { id: 'posts', label: 'Posts', count: userPosts.length },
@@ -889,6 +1096,9 @@ export function ProfilePage({
           { id: 'tagged', label: 'Tagged', count: taggedPosts.length },
           { id: 'collabs', label: 'Collabs', count: collabPosts.length },
           { id: 'gifts', label: 'Gifts', count: receivedGifts.length },
+          ...(isOwnProfile
+            ? [{ id: 'tasks', label: 'Tasks & Earn', count: activeFreeTasks.length }]
+            : []),
           { id: 'spaces', label: 'Spaces', count: userSpaces.length },
           ...(isOwnProfile
             ? [{ id: 'saved', label: 'Saved', count: savedPosts.length + savedVibes.length }]
@@ -927,6 +1137,8 @@ export function ProfilePage({
                 post={post}
                 isSaved={savedPostIds.includes(post.id)}
                 onOpenProfile={onOpenProfile}
+                onOpenVerification={onOpenVerification}
+                usersDirectory={postUsersDirectory}
               />
             ))}
           </div>
@@ -1076,6 +1288,8 @@ export function ProfilePage({
                 post={post}
                 isSaved={savedPostIds.includes(post.id)}
                 onOpenProfile={onOpenProfile}
+                onOpenVerification={onOpenVerification}
+                usersDirectory={postUsersDirectory}
               />
             ))}
           </div>
@@ -1146,6 +1360,8 @@ export function ProfilePage({
                   post={post}
                   isSaved={savedPostIds.includes(post.id)}
                   onOpenProfile={onOpenProfile}
+                  onOpenVerification={onOpenVerification}
+                  usersDirectory={postUsersDirectory}
                 />
               ))}
             </div>
@@ -1353,6 +1569,27 @@ export function ProfilePage({
         </div>
       )}
 
+      {contentTab === 'tasks' && isOwnProfile && currentUser && (
+        <ProfileTasksPanel
+          profile={currentUser}
+          tasks={tasks}
+          submissions={taskSubmissions}
+          wallet={wallet}
+          rewardsConfig={rewardsConfig}
+          invitations={myInvitations}
+          referralClaims={myReferralClaims}
+          postsCount={userPosts.length}
+          followingCount={currentUser.followingCount}
+          joinedSpacesCount={userSpaces.length}
+          onEditProfile={() => setShowEditProfile(true)}
+          onNavigate={onNavigate}
+          onNotify={(msg) => {
+            setShareToast(msg);
+            setTimeout(() => setShareToast(''), 2500);
+          }}
+        />
+      )}
+
       {contentTab === 'saved' && (
         savedPosts.length === 0 && savedVibes.length === 0 ? (
           <div className="p-12 rounded-2xl bg-[#0D0B16] border border-white/[0.08] text-center text-xs text-[#64748B]">
@@ -1368,6 +1605,8 @@ export function ProfilePage({
                     post={post}
                     isSaved={true}
                     onOpenProfile={onOpenProfile}
+                    onOpenVerification={onOpenVerification}
+                    usersDirectory={postUsersDirectory}
                   />
                 ))}
               </div>

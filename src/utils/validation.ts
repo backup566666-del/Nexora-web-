@@ -5,6 +5,10 @@ import {
   AnyVerifiedBadgeType,
   BadgeConfig,
   BadgeDefinition,
+  BotDefinition,
+  BotPermissionKey,
+  BotSlashCommandMeta,
+  BotSlashCommandName,
   CustomisationItem,
   HomepageCustomization,
   HomepageFeedDensity,
@@ -20,6 +24,7 @@ import {
   ProfileCustomisation,
   RewardsConfig,
   Space,
+  SpaceBotConfig,
   SubscriptionPlan,
   SubscriptionTier,
   ThemeMode,
@@ -603,6 +608,7 @@ export const DEFAULT_NOTIFICATION_CHANNELS: Record<NotificationCategory, boolean
   spaces: true,
   subscriptions: true,
   rewards: true,
+  bots: true,
 };
 
 export const LOCKED_NOTIFICATION_CATEGORIES: NotificationCategory[] = ['security'];
@@ -624,6 +630,15 @@ export function withPrivacyDefaults(settings?: Partial<PrivacySettings> | null):
       settings?.allowCollaborations === 'followers' || settings?.allowCollaborations === 'nobody'
         ? settings.allowCollaborations
         : 'everyone',
+    communityPrivacy:
+      settings?.communityPrivacy === 'members_only' || settings?.communityPrivacy === 'hidden'
+        ? settings.communityPrivacy
+        : 'visible',
+    messageVisibility:
+      settings?.messageVisibility === 'followers' || settings?.messageVisibility === 'none'
+        ? settings.messageVisibility
+        : 'everyone',
+    allowBotProcessing: settings?.allowBotProcessing !== false,
     emailNotifications: {
       ...DEFAULT_NOTIFICATION_CHANNELS,
       ...(settings?.emailNotifications || {}),
@@ -1461,13 +1476,15 @@ export function filterSearchablePosts(
   followingIds: string[] = [],
   joinedSpaceIds: string[] = [],
   privateSpaceIds: Set<string> = new Set(),
-  suspendedUserIds: Set<string> = new Set()
+  suspendedUserIds: Set<string> = new Set(),
+  excludeCommunityPosts = false
 ): Post[] {
   const blocked = new Set(blockedUserIds);
   const following = new Set(followingIds);
   const joinedSpaces = new Set(joinedSpaceIds);
   return posts.filter((post) => {
     if (!post || !post.id) return false;
+    if (excludeCommunityPosts && isCommunityPost(post)) return false;
     if (blocked.has(post.authorId) || suspendedUserIds.has(post.authorId)) return false;
     if (post.authorId === viewerUid) return true;
     if (post.audience === 'public') {
@@ -1790,4 +1807,578 @@ export function validateWithdrawalEligibility(params: {
   }
   return { ok: true, nairaAmount };
 }
+
+export const STARTER_FREE_TASKS: ReadonlyArray<{
+  id:
+    | 'starter_complete_profile'
+    | 'starter_publish_first_post'
+    | 'starter_join_community_space'
+    | 'starter_engage_creators'
+    | 'starter_invite_member';
+  title: string;
+  description: string;
+  category: 'onboarding' | 'content' | 'community' | 'engagement' | 'social';
+  rewardPoints: number;
+  maxCompletionsPerUser: number;
+  proofInstructions: string;
+  actionUrl: string;
+}> = [
+  {
+    id: 'starter_complete_profile',
+    title: 'Complete Your Nexora Profile',
+    description:
+      'Add a display name, personal bio, and profile photo so community members recognize you across Nexora.',
+    category: 'onboarding',
+    rewardPoints: 1,
+    maxCompletionsPerUser: 1,
+    proofInstructions:
+      'Make sure your bio and avatar are saved on your profile, then enter your @username or a short note to submit.',
+    actionUrl: '',
+  },
+  {
+    id: 'starter_publish_first_post',
+    title: 'Publish Your First Nexora Post',
+    description:
+      'Introduce yourself or share an original creative thought, photo, or discussion in the community feed (100% free).',
+    category: 'content',
+    rewardPoints: 1,
+    maxCompletionsPerUser: 1,
+    proofInstructions:
+      'Publish at least 1 post on Nexora, then describe what you posted so reviewers can verify it.',
+    actionUrl: '',
+  },
+  {
+    id: 'starter_join_community_space',
+    title: 'Join a Community Space',
+    description:
+      'Discover Nexora Spaces and join a free community circle that aligns with your interests.',
+    category: 'community',
+    rewardPoints: 1,
+    maxCompletionsPerUser: 1,
+    proofInstructions:
+      'Join any public Space on Nexora and type the Space name as proof of membership.',
+    actionUrl: '',
+  },
+  {
+    id: 'starter_engage_creators',
+    title: 'Support & Engage Community Creators',
+    description:
+      'Follow creators or interact thoughtfully with posts and Vibes in your home feed.',
+    category: 'engagement',
+    rewardPoints: 1,
+    maxCompletionsPerUser: 1,
+    proofInstructions:
+      'Share the creator @handle(s) or post topic you engaged with.',
+    actionUrl: '',
+  },
+  {
+    id: 'starter_invite_member',
+    title: 'Share Your Personal Invite Link',
+    description:
+      'Copy your unique referral URL and invite genuine friends. Plus earn 1 Key Point for every 10 qualified referrals!',
+    category: 'social',
+    rewardPoints: 2,
+    maxCompletionsPerUser: 1,
+    proofInstructions:
+      'Share your personal invitation link with friends and paste your referral code or share summary.',
+    actionUrl: '',
+  },
+];
+
+export interface StarterTaskReadiness {
+  isStarter: boolean;
+  readyToSubmit: boolean;
+  statusLabel: string;
+  actionType?: 'edit_profile' | 'create_post' | 'open_spaces' | 'open_home' | 'copy_invite';
+  actionLabel?: string;
+  suggestedProof?: string;
+}
+
+export function evaluateStarterTaskReadiness(
+  taskId: string,
+  context: {
+    username?: string;
+    hasBio?: boolean;
+    hasAvatar?: boolean;
+    postsCount?: number;
+    followingCount?: number;
+    joinedSpacesCount?: number;
+    personalInviteCode?: string;
+    qualifiedReferrals?: number;
+  }
+): StarterTaskReadiness {
+  switch (taskId) {
+    case 'starter_complete_profile': {
+      const ready = Boolean(context.hasBio && context.hasAvatar);
+      return {
+        isStarter: true,
+        readyToSubmit: ready,
+        statusLabel: ready ? 'Profile ready to claim' : 'Add bio & photo to unlock',
+        actionType: ready ? undefined : 'edit_profile',
+        actionLabel: ready ? undefined : 'Edit Profile',
+        suggestedProof: context.username
+          ? `Profile completed for @${context.username} with bio and photo.`
+          : 'Completed my Nexora profile bio and avatar.',
+      };
+    }
+    case 'starter_publish_first_post': {
+      const count = Number(context.postsCount || 0);
+      const ready = count >= 1;
+      return {
+        isStarter: true,
+        readyToSubmit: ready,
+        statusLabel: ready ? `${count} post${count === 1 ? '' : 's'} published` : 'Publish 1 post to unlock',
+        actionType: ready ? undefined : 'create_post',
+        actionLabel: ready ? undefined : 'Create Post',
+        suggestedProof: `Published ${Math.max(1, count)} post(s) on @${context.username || 'my_profile'}.`,
+      };
+    }
+    case 'starter_join_community_space': {
+      const count = Number(context.joinedSpacesCount || 0);
+      const ready = count >= 1;
+      return {
+        isStarter: true,
+        readyToSubmit: ready,
+        statusLabel: ready ? `Member of ${count} space${count === 1 ? '' : 's'}` : 'Join 1 Space to unlock',
+        actionType: ready ? undefined : 'open_spaces',
+        actionLabel: ready ? undefined : 'Explore Spaces',
+        suggestedProof: `Joined ${Math.max(1, count)} Nexora Space(s).`,
+      };
+    }
+    case 'starter_engage_creators': {
+      const following = Number(context.followingCount || 0);
+      const ready = following >= 1;
+      return {
+        isStarter: true,
+        readyToSubmit: ready,
+        statusLabel: ready ? `Following ${following} creator${following === 1 ? '' : 's'}` : 'Follow or engage 1 creator',
+        actionType: ready ? undefined : 'open_home',
+        actionLabel: ready ? undefined : 'Explore Feed',
+        suggestedProof: `Followed ${Math.max(1, following)} creator(s) and engaged with posts in Nexora.`,
+      };
+    }
+    case 'starter_invite_member': {
+      const hasCode = Boolean(context.personalInviteCode);
+      const qualified = Number(context.qualifiedReferrals || 0);
+      return {
+        isStarter: true,
+        readyToSubmit: hasCode,
+        statusLabel:
+          qualified > 0
+            ? `${qualified} qualified referral${qualified === 1 ? '' : 's'}`
+            : hasCode
+            ? `Invite code ${context.personalInviteCode} ready`
+            : 'Generate & share invite code',
+        actionType: 'copy_invite',
+        actionLabel: 'Copy Invite Link',
+        suggestedProof: context.personalInviteCode
+          ? `Shared personal invitation code ${context.personalInviteCode}.`
+          : 'Shared my personal Nexora invitation link.',
+      };
+    }
+    default:
+      return {
+        isStarter: false,
+        readyToSubmit: true,
+        statusLabel: 'Free task available',
+      };
+  }
+}
+
+// --- Community Isolation & Official Account Permission Helpers ---
+
+export function isCommunityPost(
+  post?: Pick<Post, 'audience' | 'spaceId'> | null
+): boolean {
+  if (!post) return false;
+  return post.audience === 'space' || (typeof post.spaceId === 'string' && post.spaceId.trim().length > 0);
+}
+
+export function isPersonalTimelinePost(
+  post?: Pick<Post, 'audience' | 'spaceId'> | null
+): boolean {
+  if (!post) return false;
+  return !isCommunityPost(post);
+}
+
+export function isOfficialOwnerAccount(
+  user?: Partial<UserProfile> | null,
+  badgesMap?: Record<string, { badgeType?: string; badges?: string[] }>,
+  role?: { role?: string; active?: boolean } | null
+): boolean {
+  if (role?.active && role.role === 'owner') return true;
+  if (user?.isOfficialOwner === true) return true;
+  const uid = user?.uid;
+  if (uid && badgesMap?.[uid]) {
+    const rec = badgesMap[uid];
+    if (
+      rec.badgeType === 'founder' ||
+      rec.badgeType === 'owner' ||
+      (Array.isArray(rec.badges) && (rec.badges.includes('founder') || rec.badges.includes('owner')))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isPlatformVerifiedAccount(
+  user?: Partial<UserProfile> | null,
+  badgesMap?: Record<string, { badgeType?: string; badges?: string[] }>,
+  role?: { role?: string; active?: boolean } | null
+): boolean {
+  if (!user) return false;
+  if (isOfficialOwnerAccount(user, badgesMap, role)) return true;
+  if (user.verified === true) return true;
+  const uid = user.uid;
+  if (uid && badgesMap?.[uid]) {
+    const rec = badgesMap[uid];
+    const list = normalizeBadgeList(
+      rec.badges as any,
+      rec.badgeType as any
+    );
+    if (list.length > 0) return true;
+  }
+  return false;
+}
+
+export interface CommentPermissionResult {
+  allowed: boolean;
+  isOfficialOwnerPost: boolean;
+  requiresVerification: boolean;
+  reason: string;
+}
+
+export function canCommentOnPost(params: {
+  post: Pick<Post, 'authorId' | 'audience' | 'spaceId'>;
+  currentUser?: Partial<UserProfile> | null;
+  authorUser?: Partial<UserProfile> | null;
+  badgesMap?: Record<string, { badgeType?: string; badges?: string[] }>;
+  currentUserRole?: { role?: string; active?: boolean } | null;
+}): CommentPermissionResult {
+  const { post, currentUser, authorUser, badgesMap, currentUserRole } = params;
+  if (!currentUser?.uid) {
+    return {
+      allowed: false,
+      isOfficialOwnerPost: false,
+      requiresVerification: false,
+      reason: 'Sign in to comment on posts.',
+    };
+  }
+  if (currentUser.suspended) {
+    return {
+      allowed: false,
+      isOfficialOwnerPost: false,
+      requiresVerification: false,
+      reason: 'Suspended accounts cannot submit comments.',
+    };
+  }
+
+  const authorStub: Partial<UserProfile> = authorUser || { uid: post.authorId };
+  const isOfficialOwnerPost = isOfficialOwnerAccount(
+    authorStub,
+    badgesMap,
+    currentUser.uid === post.authorId ? currentUserRole : undefined
+  );
+
+  if (!isOfficialOwnerPost) {
+    return {
+      allowed: true,
+      isOfficialOwnerPost: false,
+      requiresVerification: false,
+      reason: '',
+    };
+  }
+
+  // Anyone who is the Official Owner or a verified Nexora user can comment on Official Owner posts
+  if (
+    currentUser.uid === post.authorId ||
+    isPlatformVerifiedAccount(currentUser, badgesMap, currentUserRole)
+  ) {
+    return {
+      allowed: true,
+      isOfficialOwnerPost: true,
+      requiresVerification: false,
+      reason: '',
+    };
+  }
+
+  return {
+    allowed: false,
+    isOfficialOwnerPost: true,
+    requiresVerification: true,
+    reason:
+      'Verification Required: Only verified Nexora users can comment on official Nexora owner posts. Anyone can still follow and like!',
+  };
+}
+
+// --- Nexora Official Bot Ecosystem & Dexora Helpers ---
+
+export const DEXORA_OFFICIAL_BOT_ID = 'dexora_support';
+export const DEXORA_WELCOME_MESSAGE =
+  "Welcome to Nexora! I'm Dexora, your official Nexora Support Assistant. I'm here to help you with account questions, platform assistance, security, and community support.";
+
+export const DEXORA_OFFICIAL_PROFILE = {
+  uid: DEXORA_OFFICIAL_BOT_ID,
+  accountName: 'Dexora',
+  botName: 'Dexora Support Special Bot',
+  username: 'dexora',
+  accountType: 'Official System Account',
+  purpose: 'Customer support, platform identity, announcements, and automated assistance.',
+  verified: true,
+  protected: true,
+  welcomeMessage: DEXORA_WELCOME_MESSAGE,
+} as const;
+
+export const RESERVED_OFFICIAL_USERNAMES = ['dexora', 'dexora_support', 'dexora_bot', 'nexora_official'] as const;
+
+export function isReservedOfficialUsername(username: string): boolean {
+  const clean = normalizeUsername(username);
+  return (RESERVED_OFFICIAL_USERNAMES as readonly string[]).includes(clean);
+}
+
+export const BOT_PERMISSION_CATALOG: ReadonlyArray<{
+  key: BotPermissionKey;
+  label: string;
+  description: string;
+}> = [
+  { key: 'read_messages', label: 'Read Messages', description: 'Read community messages to process slash commands and moderation.' },
+  { key: 'send_messages', label: 'Send Messages', description: 'Post bot responses, welcomes, and command outputs in channels.' },
+  { key: 'delete_messages', label: 'Delete Messages', description: 'Remove spam, flagged content, or cleared messages when authorized.' },
+  { key: 'manage_members', label: 'Manage Members', description: 'Warn, mute, timeout, kick, or ban members when triggered by admins.' },
+  { key: 'manage_roles', label: 'Manage Roles', description: 'Inspect and update community member roles where permitted.' },
+  { key: 'manage_channels', label: 'Manage Channels', description: 'Lock and unlock discussion channels during moderation actions.' },
+  { key: 'send_notifications', label: 'Send Notifications', description: 'Send welcomes, security notices, and official community alerts.' },
+  { key: 'access_community_info', label: 'Access Community Info', description: 'Read non-private Space statistics, member counts, and rules.' },
+  { key: 'manage_support_tickets', label: 'Manage Support Tickets', description: 'Create and respond to member support requests via /ticket and /support.' },
+  { key: 'access_moderation_tools', label: 'Access Moderation Tools', description: 'Run automated spam/repeated-message and safety checks.' },
+];
+
+export const ALL_BOT_PERMISSION_KEYS: BotPermissionKey[] = BOT_PERMISSION_CATALOG.map((p) => p.key);
+
+export const BOT_SLASH_COMMANDS: ReadonlyArray<BotSlashCommandMeta> = [
+  { name: 'help', usage: '/help', description: 'List available bot commands and permissions.', category: 'info', requiredSpaceRole: 'member', requiredBotPermission: 'send_messages' },
+  { name: 'about', usage: '/about', description: 'Show verified Nexora & Dexora bot details.', category: 'info', requiredSpaceRole: 'member', requiredBotPermission: 'send_messages' },
+  { name: 'rules', usage: '/rules', description: 'Display the community rules and safety policy.', category: 'info', requiredSpaceRole: 'member', requiredBotPermission: 'access_community_info' },
+  { name: 'profile', usage: '/profile [@username]', description: 'View a member summary inside the Space.', category: 'info', requiredSpaceRole: 'member', requiredBotPermission: 'access_community_info' },
+  { name: 'warn', usage: '/warn @username [reason]', description: 'Issue an official moderation warning to a member.', category: 'moderation', requiredSpaceRole: 'admin', requiredBotPermission: 'manage_members' },
+  { name: 'timeout', usage: '/timeout @username [minutes] [reason]', description: 'Temporarily pause a member from posting.', category: 'moderation', requiredSpaceRole: 'admin', requiredBotPermission: 'manage_members' },
+  { name: 'ban', usage: '/ban @username [reason]', description: 'Ban a member from participating in this Space.', category: 'moderation', requiredSpaceRole: 'admin', requiredBotPermission: 'manage_members' },
+  { name: 'unban', usage: '/unban @username', description: 'Lift an active ban inside this Space.', category: 'moderation', requiredSpaceRole: 'admin', requiredBotPermission: 'manage_members' },
+  { name: 'kick', usage: '/kick @username [reason]', description: 'Remove a member from this Space.', category: 'moderation', requiredSpaceRole: 'owner', requiredBotPermission: 'manage_members' },
+  { name: 'mute', usage: '/mute @username [minutes]', description: 'Mute a member in community discussions.', category: 'moderation', requiredSpaceRole: 'admin', requiredBotPermission: 'manage_members' },
+  { name: 'unmute', usage: '/unmute @username', description: 'Unmute a muted Space member.', category: 'moderation', requiredSpaceRole: 'admin', requiredBotPermission: 'manage_members' },
+  { name: 'clear', usage: '/clear [count]', description: 'Clear recent messages in the active channel.', category: 'moderation', requiredSpaceRole: 'admin', requiredBotPermission: 'delete_messages' },
+  { name: 'announce', usage: '/announce [message]', description: 'Publish an official Space announcement.', category: 'community', requiredSpaceRole: 'admin', requiredBotPermission: 'send_notifications' },
+  { name: 'poll', usage: '/poll Question | Option 1 | Option 2', description: 'Create a structured discussion poll.', category: 'community', requiredSpaceRole: 'member', requiredBotPermission: 'send_messages' },
+  { name: 'lock', usage: '/lock [channel]', description: 'Lock the active channel so only Space admins can post.', category: 'moderation', requiredSpaceRole: 'admin', requiredBotPermission: 'manage_channels' },
+  { name: 'unlock', usage: '/unlock [channel]', description: 'Reopen a locked discussion channel.', category: 'moderation', requiredSpaceRole: 'admin', requiredBotPermission: 'manage_channels' },
+  { name: 'memberinfo', usage: '/memberinfo [@username]', description: 'Inspect Space role, warnings, and moderation state.', category: 'info', requiredSpaceRole: 'member', requiredBotPermission: 'access_community_info' },
+  { name: 'serverinfo', usage: '/serverinfo', description: 'View Space profile, owner, privacy, and active bots.', category: 'info', requiredSpaceRole: 'member', requiredBotPermission: 'access_community_info' },
+  { name: 'stats', usage: '/stats', description: 'Display member count, discussions, events, and posts stats.', category: 'community', requiredSpaceRole: 'member', requiredBotPermission: 'access_community_info' },
+  { name: 'ticket', usage: '/ticket [issue summary]', description: 'Open a tracked support ticket with Dexora Support.', category: 'support', requiredSpaceRole: 'member', requiredBotPermission: 'manage_support_tickets' },
+  { name: 'support', usage: '/support [question]', description: 'Get instant official help from Dexora Support Special Bot.', category: 'support', requiredSpaceRole: 'member', requiredBotPermission: 'manage_support_tickets' },
+];
+
+export const ALL_BOT_COMMAND_NAMES: BotSlashCommandName[] = BOT_SLASH_COMMANDS.map((c) => c.name);
+
+export const DEFAULT_BOT_CATALOG: ReadonlyArray<Omit<BotDefinition, 'createdAt' | 'updatedAt'>> = [
+  {
+    id: DEXORA_OFFICIAL_BOT_ID,
+    accountName: 'Dexora',
+    botName: 'Dexora Support Special Bot',
+    username: 'dexora',
+    accountType: 'official_system_account',
+    official: true,
+    protected: true,
+    verified: true,
+    description: 'Official Nexora System Account & Support Special Bot providing verified help, community welcomes, security notices, and slash-command automation.',
+    purpose: 'Customer support, platform identity, announcements, and automated assistance.',
+    status: 'active',
+    enabled: true,
+    version: '2.4.0',
+    availableUpdateVersion: '2.4.1',
+    defaultPermissions: [...ALL_BOT_PERMISSION_KEYS],
+    enabledCommands: [...ALL_BOT_COMMAND_NAMES],
+    notificationSettings: {
+      welcomeNewMembers: true,
+      securityAlerts: true,
+      supportReplies: true,
+      maintenanceNotices: true,
+      deploymentFailures: true,
+    },
+    autoRestartOnCrash: true,
+    maxAutoRestarts: 5,
+    restartCount: 0,
+    updatedBy: 'system',
+  },
+  {
+    id: 'nexora_automod',
+    accountName: 'Nexora Guardian',
+    botName: 'Nexora AutoMod Bot',
+    username: 'nexora_guardian',
+    accountType: 'community_bot',
+    official: true,
+    protected: false,
+    verified: true,
+    description: 'Automated community safety bot detecting spam bursts, repeated messages, suspicious invite links, and inappropriate phrases.',
+    purpose: 'Space moderation, spam screening, warnings, mutes, and channel locks.',
+    status: 'active',
+    enabled: true,
+    version: '1.8.0',
+    defaultPermissions: [
+      'read_messages',
+      'send_messages',
+      'delete_messages',
+      'manage_members',
+      'manage_channels',
+      'access_community_info',
+      'access_moderation_tools',
+    ],
+    enabledCommands: ['help', 'rules', 'warn', 'timeout', 'ban', 'unban', 'kick', 'mute', 'unmute', 'clear', 'lock', 'unlock', 'memberinfo', 'stats'],
+    notificationSettings: {
+      welcomeNewMembers: false,
+      securityAlerts: true,
+      supportReplies: false,
+      maintenanceNotices: false,
+      deploymentFailures: true,
+    },
+    autoRestartOnCrash: true,
+    maxAutoRestarts: 5,
+    restartCount: 0,
+    updatedBy: 'system',
+  },
+  {
+    id: 'nexora_welcome',
+    accountName: 'Nexora Concierge',
+    botName: 'Nexora Welcome & Events Bot',
+    username: 'nexora_concierge',
+    accountType: 'community_bot',
+    official: true,
+    protected: false,
+    verified: true,
+    description: 'Welcomes new Space members, shares rules and community stats, and assists with polls and announcements.',
+    purpose: 'Member onboarding, community stats, announcements, and Space polls.',
+    status: 'active',
+    enabled: true,
+    version: '1.5.2',
+    defaultPermissions: [
+      'read_messages',
+      'send_messages',
+      'send_notifications',
+      'access_community_info',
+    ],
+    enabledCommands: ['help', 'about', 'rules', 'profile', 'announce', 'poll', 'serverinfo', 'stats'],
+    notificationSettings: {
+      welcomeNewMembers: true,
+      securityAlerts: false,
+      supportReplies: false,
+      maintenanceNotices: true,
+      deploymentFailures: true,
+    },
+    autoRestartOnCrash: true,
+    maxAutoRestarts: 3,
+    restartCount: 0,
+    updatedBy: 'system',
+  },
+];
+
+export function defaultSpaceBotConfig(spaceId: string): Omit<SpaceBotConfig, 'updatedAt'> {
+  return {
+    spaceId,
+    enabled: true,
+    botId: DEXORA_OFFICIAL_BOT_ID,
+    welcomeEnabled: true,
+    autoModEnabled: true,
+    spamProtectionEnabled: true,
+    repeatedMessageThreshold: 3,
+    blockedWords: ['phishing', 'free nitro scam', 'steal password'],
+    rulesText: 'Be respectful, avoid spam or repeated messages, protect member privacy, and never impersonate official Nexora staff or Dexora.',
+    lockedChannels: [],
+    permissions: [...ALL_BOT_PERMISSION_KEYS],
+    enabledCommands: [...ALL_BOT_COMMAND_NAMES],
+    updatedBy: 'system',
+  };
+}
+
+export function canUserExecuteBotCommand(params: {
+  commandName: BotSlashCommandName;
+  spaceRole: 'owner' | 'admin' | 'member' | 'none';
+  spaceConfig: Pick<SpaceBotConfig, 'enabled' | 'permissions' | 'enabledCommands'>;
+}): { allowed: boolean; reason?: string; meta?: BotSlashCommandMeta } {
+  const meta = BOT_SLASH_COMMANDS.find((c) => c.name === params.commandName);
+  if (!meta) {
+    return { allowed: false, reason: `Unknown command /${params.commandName}. Type /help for supported commands.` };
+  }
+  if (!params.spaceConfig.enabled) {
+    return { allowed: false, reason: 'Community bots are currently disabled for this Space.' };
+  }
+  if (!params.spaceConfig.enabledCommands.includes(meta.name)) {
+    return { allowed: false, reason: `Command /${meta.name} is disabled by this Space's administrators.`, meta };
+  }
+  if (!params.spaceConfig.permissions.includes(meta.requiredBotPermission)) {
+    return {
+      allowed: false,
+      reason: `Bot permission "${meta.requiredBotPermission}" is required for /${meta.name}.`,
+      meta,
+    };
+  }
+  const rank = { none: 0, member: 1, admin: 2, owner: 3 };
+  if (rank[params.spaceRole] < rank[meta.requiredSpaceRole]) {
+    return {
+      allowed: false,
+      reason: `Only Space ${meta.requiredSpaceRole}s can run /${meta.name}.`,
+      meta,
+    };
+  }
+  return { allowed: true, meta };
+}
+
+export function evaluateMessageSafetyAndSpam(params: {
+  text: string;
+  recentTexts?: string[];
+  blockedWords?: string[];
+  repeatedThreshold?: number;
+  spamProtectionEnabled?: boolean;
+  autoModEnabled?: boolean;
+}): { flagged: boolean; category?: 'spam_repeat' | 'blocked_phrase' | 'suspicious_link'; reason?: string } {
+  const clean = (params.text || '').trim().toLowerCase();
+  if (!clean) return { flagged: false };
+
+  if (params.autoModEnabled !== false) {
+    const blocked = (params.blockedWords || []).map((w) => w.trim().toLowerCase()).filter(Boolean);
+    const hitWord = blocked.find((w) => clean.includes(w));
+    if (hitWord) {
+      return {
+        flagged: true,
+        category: 'blocked_phrase',
+        reason: `Message matched community safety filter ("${hitWord}").`,
+      };
+    }
+    if (/(bit\.ly|tinyurl\.com|grabify|iplogger)/i.test(clean)) {
+      return {
+        flagged: true,
+        category: 'suspicious_link',
+        reason: 'Suspicious shortened or tracking link detected by Nexora Bot AutoMod.',
+      };
+    }
+  }
+
+  if (params.spamProtectionEnabled !== false && Array.isArray(params.recentTexts)) {
+    const threshold = Math.max(2, params.repeatedThreshold || 3);
+    const sameCount = params.recentTexts.filter((t) => t.trim().toLowerCase() === clean).length;
+    if (sameCount + 1 >= threshold) {
+      return {
+        flagged: true,
+        category: 'spam_repeat',
+        reason: 'Repeated message spam detected by Nexora Bot AutoMod.',
+      };
+    }
+  }
+
+  return { flagged: false };
+}
+
+
+
 

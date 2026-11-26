@@ -37,6 +37,10 @@ import {
   subscribeUserProfile,
 } from '../services/firebase/socialService';
 import {
+  ensurePersonalInvitationCode,
+  seedStarterTasksIfEmpty,
+} from '../services/firebase/rewardsService';
+import {
   subscribeMySubscription,
   subscribeSubscriptionPlans,
   syncExpiredSubscriptionDowngrade,
@@ -66,6 +70,8 @@ import {
   DEFAULT_PLATFORM_CONFIG,
   DEFAULT_SUBSCRIPTION_PLANS,
   FOUNDER_OWNER_EMAIL,
+  isOfficialOwnerAccount,
+  isPlatformVerifiedAccount,
   normalizeBadgeList,
   normalizeBadgeType,
   resolveEffectiveSubscriptionTier,
@@ -100,6 +106,8 @@ interface AuthContextValue {
   getBadgeVariant: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType | null;
   getUserBadges: (uid?: string | null, fallbackVerified?: boolean) => VerifiedBadgeType[];
   getUserTier: (uid?: string | null, fallbackTier?: SubscriptionTier) => SubscriptionTier;
+  isUserOfficialOwner: (uid?: string | null, userProfile?: Partial<UserProfile> | null) => boolean;
+  isUserPlatformVerified: (uid?: string | null, userProfile?: Partial<UserProfile> | null) => boolean;
   getAdminEffectiveStatus: (uid?: string | null) => PublicAdminPresenceStatus | null;
   setMyAdminStatus: (mode: AdminManualMode) => Promise<void>;
   refreshUserAndProfile: (reloadAuthUser?: boolean) => Promise<void>;
@@ -134,6 +142,8 @@ const AuthContext = createContext<AuthContextValue>({
   getBadgeVariant: () => null,
   getUserBadges: () => [],
   getUserTier: (_uid, fallbackTier) => fallbackTier || 'free',
+  isUserOfficialOwner: () => false,
+  isUserPlatformVerified: () => false,
   getAdminEffectiveStatus: () => null,
   setMyAdminStatus: async () => {},
   refreshUserAndProfile: async () => {},
@@ -231,6 +241,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         );
         if (finalProfile.onboardingCompleted && !finalProfile.suspended) {
           void seedInitialSpacesIfEmpty(finalProfile);
+          void seedStarterTasksIfEmpty(finalProfile);
+          void ensurePersonalInvitationCode(finalProfile).catch(() => {});
         }
       } catch (err) {
         const readable = extractReadableErrorMessage(
@@ -668,6 +680,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [profile?.uid, effectiveTier, badgesMap]
   );
 
+  const isUserOfficialOwner = useCallback(
+    (uid?: string | null, userProfile?: Partial<UserProfile> | null): boolean => {
+      if (!uid && !userProfile) return false;
+      const targetUid = uid || userProfile?.uid;
+      if (targetUid && targetUid === profile?.uid && isOwnerAccount) return true;
+      return isOfficialOwnerAccount(
+        userProfile || (targetUid ? { uid: targetUid } : null),
+        badgesMap,
+        targetUid === profile?.uid ? myRole : null
+      );
+    },
+    [profile?.uid, isOwnerAccount, badgesMap, myRole]
+  );
+
+  const isUserPlatformVerified = useCallback(
+    (uid?: string | null, userProfile?: Partial<UserProfile> | null): boolean => {
+      if (!uid && !userProfile) return false;
+      const targetUid = uid || userProfile?.uid;
+      if (targetUid && targetUid === profile?.uid) {
+        return isPlatformVerifiedAccount(profile, badgesMap, myRole) || isOwnerAccount;
+      }
+      return isPlatformVerifiedAccount(
+        userProfile || (targetUid ? { uid: targetUid } : null),
+        badgesMap
+      );
+    },
+    [profile, isOwnerAccount, badgesMap, myRole]
+  );
+
   return (
     <AuthContext.Provider
       value={{
@@ -698,6 +739,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         getBadgeVariant,
         getUserBadges,
         getUserTier,
+        isUserOfficialOwner,
+        isUserPlatformVerified,
         getAdminEffectiveStatus,
         setMyAdminStatus,
         refreshUserAndProfile,

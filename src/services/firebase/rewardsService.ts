@@ -5,7 +5,6 @@ import {
   getDocs,
   limit,
   onSnapshot,
-  orderBy,
   query,
   runTransaction,
   serverTimestamp,
@@ -51,8 +50,16 @@ import {
   maskBankAccountNumber,
   sanitizeInviteCode,
   sanitizeString,
+  STARTER_FREE_TASKS,
   validateWithdrawalEligibility,
 } from '../../utils/validation';
+
+function sortByTimestampDesc<T extends { createdAt?: Timestamp; registeredAt?: Timestamp }>(
+  items: T[],
+  field: 'createdAt' | 'registeredAt' = 'createdAt'
+): T[] {
+  return items.sort((a, b) => (b[field]?.toMillis?.() || 0) - (a[field]?.toMillis?.() || 0));
+}
 
 const PENDING_REF_STORAGE_KEY = 'nexora_pending_ref_code';
 
@@ -253,16 +260,15 @@ export function subscribeMyWalletTransactions(
   uid: string,
   callback: (txs: WalletTransaction[]) => void
 ): Unsubscribe {
-  const q = query(
-    collection(db, 'wallet_transactions'),
-    where('uid', '==', uid),
-    orderBy('createdAt', 'desc'),
-    limit(100)
-  );
+  const q = query(collection(db, 'wallet_transactions'), where('uid', '==', uid), limit(100));
   return onSnapshot(
     q,
     (snap) => {
-      callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<WalletTransaction, 'id'>) })));
+      const items = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<WalletTransaction, 'id'>),
+      }));
+      callback(sortByTimestampDesc(items, 'createdAt'));
     },
     (err) => logFirestoreListenerError(err, OperationType.LIST, `wallet_transactions/${uid}`)
   );
@@ -274,13 +280,16 @@ export function subscribeAllWalletTransactionsAdmin(
   const q = query(
     collection(db, 'wallet_transactions'),
     where('direction', 'in', ['credit', 'debit']),
-    orderBy('createdAt', 'desc'),
     limit(200)
   );
   return onSnapshot(
     q,
     (snap) => {
-      callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<WalletTransaction, 'id'>) })));
+      const items = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<WalletTransaction, 'id'>),
+      }));
+      callback(sortByTimestampDesc(items, 'createdAt'));
     },
     (err) => logFirestoreListenerError(err, OperationType.LIST, 'wallet_transactions')
   );
@@ -325,16 +334,15 @@ export function subscribeMyReferralClaims(
   inviterUid: string,
   callback: (claims: ReferralClaim[]) => void
 ): Unsubscribe {
-  const q = query(
-    collection(db, 'referral_claims'),
-    where('inviterUid', '==', inviterUid),
-    orderBy('registeredAt', 'desc'),
-    limit(150)
-  );
+  const q = query(collection(db, 'referral_claims'), where('inviterUid', '==', inviterUid), limit(150));
   return onSnapshot(
     q,
     (snap) => {
-      callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ReferralClaim, 'id'>) })));
+      const items = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<ReferralClaim, 'id'>),
+      }));
+      callback(sortByTimestampDesc(items, 'registeredAt'));
     },
     (err) => logFirestoreListenerError(err, OperationType.LIST, `referral_claims/inviter/${inviterUid}`)
   );
@@ -346,13 +354,16 @@ export function subscribeAllReferralClaimsAdmin(
   const q = query(
     collection(db, 'referral_claims'),
     where('status', 'in', ['pending', 'qualified', 'flagged', 'rejected']),
-    orderBy('registeredAt', 'desc'),
     limit(200)
   );
   return onSnapshot(
     q,
     (snap) => {
-      callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ReferralClaim, 'id'>) })));
+      const items = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<ReferralClaim, 'id'>),
+      }));
+      callback(sortByTimestampDesc(items, 'registeredAt'));
     },
     (err) => logFirestoreListenerError(err, OperationType.LIST, 'referral_claims')
   );
@@ -394,16 +405,15 @@ export function subscribeMyTaskSubmissions(
   uid: string,
   callback: (submissions: TaskSubmission[]) => void
 ): Unsubscribe {
-  const q = query(
-    collection(db, 'task_submissions'),
-    where('uid', '==', uid),
-    orderBy('createdAt', 'desc'),
-    limit(100)
-  );
+  const q = query(collection(db, 'task_submissions'), where('uid', '==', uid), limit(100));
   return onSnapshot(
     q,
     (snap) => {
-      callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<TaskSubmission, 'id'>) })));
+      const items = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<TaskSubmission, 'id'>),
+      }));
+      callback(sortByTimestampDesc(items, 'createdAt'));
     },
     (err) => logFirestoreListenerError(err, OperationType.LIST, `task_submissions/${uid}`)
   );
@@ -415,13 +425,16 @@ export function subscribeAllTaskSubmissionsAdmin(
   const q = query(
     collection(db, 'task_submissions'),
     where('status', 'in', ['pending', 'approved', 'rejected']),
-    orderBy('createdAt', 'desc'),
     limit(200)
   );
   return onSnapshot(
     q,
     (snap) => {
-      callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<TaskSubmission, 'id'>) })));
+      const items = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<TaskSubmission, 'id'>),
+      }));
+      callback(sortByTimestampDesc(items, 'createdAt'));
     },
     (err) => logFirestoreListenerError(err, OperationType.LIST, 'task_submissions')
   );
@@ -431,16 +444,15 @@ export function subscribeMyWithdrawals(
   uid: string,
   callback: (items: WithdrawalRequest[]) => void
 ): Unsubscribe {
-  const q = query(
-    collection(db, 'withdrawal_requests'),
-    where('uid', '==', uid),
-    orderBy('createdAt', 'desc'),
-    limit(100)
-  );
+  const q = query(collection(db, 'withdrawal_requests'), where('uid', '==', uid), limit(100));
   return onSnapshot(
     q,
     (snap) => {
-      callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<WithdrawalRequest, 'id'>) })));
+      const items = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<WithdrawalRequest, 'id'>),
+      }));
+      callback(sortByTimestampDesc(items, 'createdAt'));
     },
     (err) => logFirestoreListenerError(err, OperationType.LIST, `withdrawal_requests/${uid}`)
   );
@@ -452,13 +464,16 @@ export function subscribeAllWithdrawalsAdmin(
   const q = query(
     collection(db, 'withdrawal_requests'),
     where('status', 'in', ['pending', 'under_review', 'approved', 'rejected', 'processing', 'paid']),
-    orderBy('createdAt', 'desc'),
     limit(200)
   );
   return onSnapshot(
     q,
     (snap) => {
-      callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<WithdrawalRequest, 'id'>) })));
+      const items = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<WithdrawalRequest, 'id'>),
+      }));
+      callback(sortByTimestampDesc(items, 'createdAt'));
     },
     (err) => logFirestoreListenerError(err, OperationType.LIST, 'withdrawal_requests')
   );
@@ -479,13 +494,12 @@ export async function ensurePersonalInvitationCode(user: UserProfile): Promise<I
   const existingQ = query(
     collection(db, 'invitations'),
     where('ownerUid', '==', user.uid),
-    where('kind', '==', 'personal'),
-    limit(1)
+    limit(20)
   );
   const existingSnap = await getDocs(existingQ);
-  if (!existingSnap.empty) {
-    const first = existingSnap.docs[0];
-    return { ...(first.data() as InvitationRecord), code: first.id };
+  const personalDoc = existingSnap.docs.find((d) => d.data().kind === 'personal');
+  if (personalDoc) {
+    return { ...(personalDoc.data() as InvitationRecord), code: personalDoc.id };
   }
 
   let candidateCode = generateInviteCode(user.username || user.displayName || user.uid);
@@ -897,6 +911,91 @@ export async function reviewFraudAlertAdmin(
 }
 
 // --- Free Tasks & Verification ---
+
+export async function seedStarterTasksIfEmpty(user: UserProfile): Promise<number> {
+  if (!auth.currentUser || !user?.uid || user.suspended) return 0;
+  try {
+    const existingSnap = await getDocs(
+      query(collection(db, 'tasks'), where('freeToParticipate', '==', true), limit(1))
+    );
+    if (!existingSnap.empty) return 0;
+
+    let seededCount = 0;
+    for (const starter of STARTER_FREE_TASKS) {
+      const taskRef = doc(db, 'tasks', starter.id);
+      const docSnap = await getDoc(taskRef);
+      if (docSnap.exists()) continue;
+      await setDoc(taskRef, {
+        title: starter.title,
+        description: starter.description,
+        category: starter.category,
+        rewardPoints: starter.rewardPoints,
+        freeToParticipate: true,
+        active: true,
+        maxCompletionsPerUser: starter.maxCompletionsPerUser,
+        proofInstructions: starter.proofInstructions,
+        actionUrl: starter.actionUrl,
+        submissionsCount: 0,
+        approvedCount: 0,
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      seededCount += 1;
+    }
+    return seededCount;
+  } catch {
+    return 0;
+  }
+}
+
+export async function seedStarterTasksAdmin(
+  actor: UserProfile,
+  roleDoc: PlatformRole | null
+): Promise<number> {
+  if (!isActorRewardsAdmin(actor, roleDoc)) {
+    throw new Error('Only authorized administrators or the Owner can seed starter tasks.');
+  }
+
+  let seededCount = 0;
+  for (const starter of STARTER_FREE_TASKS) {
+    const taskRef = doc(db, 'tasks', starter.id);
+    const docSnap = await getDoc(taskRef);
+    if (docSnap.exists()) continue;
+    await setDoc(taskRef, {
+      title: starter.title,
+      description: starter.description,
+      category: starter.category,
+      rewardPoints: starter.rewardPoints,
+      freeToParticipate: true,
+      active: true,
+      maxCompletionsPerUser: starter.maxCompletionsPerUser,
+      proofInstructions: starter.proofInstructions,
+      actionUrl: starter.actionUrl,
+      submissionsCount: 0,
+      approvedCount: 0,
+      createdBy: actor.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    seededCount += 1;
+  }
+
+  if (seededCount > 0) {
+    await recordAuditLog({
+      actor,
+      actorRole: roleDoc?.role || 'administrator',
+      action: 'seed_starter_tasks',
+      category: 'rewards',
+      targetType: 'task',
+      targetId: 'starter_free_tasks',
+      targetLabel: `${seededCount} starter task(s)`,
+      details: `Seeded ${seededCount} free starter reward tasks`,
+    });
+  }
+
+  return seededCount;
+}
 
 export async function createOrUpdateTaskAdmin(
   actor: UserProfile,

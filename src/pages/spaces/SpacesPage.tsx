@@ -76,6 +76,7 @@ interface SpacesPageProps {
   savedPostIds: string[];
   initialSpaceId?: string | null;
   onOpenProfile: (uid: string) => void;
+  onOpenVerification?: () => void;
 }
 
 const PRIMARY_CATEGORIES = ['All', 'Faith', 'Business', 'Finance', 'Lifestyle', 'Education'];
@@ -97,6 +98,7 @@ export function SpacesPage({
   savedPostIds,
   initialSpaceId,
   onOpenProfile,
+  onOpenVerification,
 }: SpacesPageProps) {
   const { profile, myRole, platformConfig, getUserBadges, getUserTier, getAdminEffectiveStatus } = useAuth();
   const [sidebarTab, setSidebarTab] = useState<'discover' | 'mine' | 'invites' | 'joined' | 'create'>('discover');
@@ -417,6 +419,7 @@ export function SpacesPage({
                       post={p}
                       isSaved={savedPostIds.includes(p.id)}
                       onOpenProfile={onOpenProfile}
+                      onOpenVerification={onOpenVerification}
                       usersDirectory={users}
                     />
                   ))

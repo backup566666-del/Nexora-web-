@@ -235,6 +235,12 @@ export async function bootstrapFounderGovernance(
     if (!profile.verified) {
       userPatch.verified = true;
     }
+    if (profile.isOfficialOwner !== true) {
+      userPatch.isOfficialOwner = true;
+    }
+    if (profile.officialTitle !== 'Official Nexora Account') {
+      userPatch.officialTitle = 'Official Nexora Account';
+    }
     if (profile.subscriptionTier !== 'pro') {
       userPatch.subscriptionTier = 'pro' satisfies SubscriptionTier;
     }

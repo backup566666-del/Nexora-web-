@@ -6,6 +6,7 @@ import {
   CreditCard,
   Film,
   Flame,
+  Gift,
   Hash,
   Heart,
   LayoutGrid,
@@ -13,6 +14,7 @@ import {
   Palette,
   Play,
   Plus,
+  ShieldCheck,
   Sparkles,
   TrendingUp,
   UserPlus,
@@ -40,6 +42,7 @@ import {
   NavSection,
   NotificationItem,
   Post,
+  ProfileContentTab,
   Space,
   Story,
   UserProfile,
@@ -49,21 +52,12 @@ import {
   computePostEngagementScore,
   formatCompactCount,
   formatRelativeTime,
+  isPersonalTimelinePost,
   rankTrendingPosts,
   withHomepageCustomizationDefaults,
 } from '../../utils/validation';
 
 export { computePostEngagementScore, rankTrendingPosts };
-
-type ProfileContentTab =
-  | 'posts'
-  | 'videos'
-  | 'photos'
-  | 'tagged'
-  | 'collabs'
-  | 'gifts'
-  | 'spaces'
-  | 'saved';
 
 interface HomePageProps {
   posts: Post[];
@@ -82,6 +76,7 @@ interface HomePageProps {
   ) => void;
   onOpenVibes?: () => void;
   onOpenCustomizeHomepage?: () => void;
+  onOpenVerification?: () => void;
   justSignedIn?: boolean;
 }
 
@@ -98,6 +93,7 @@ export function HomePage({
   onNavigate,
   onOpenVibes,
   onOpenCustomizeHomepage,
+  onOpenVerification,
   justSignedIn = false,
 }: HomePageProps) {
   const {
@@ -109,6 +105,7 @@ export function HomePage({
     effectiveTier,
     getUserBadges,
     getUserTier,
+    isUserOfficialOwner,
   } = useAuth();
 
   const homepagePrefs = useMemo(
@@ -199,8 +196,11 @@ export function HomePage({
       .slice(0, 8);
   }, [vibes, blockedSet]);
 
+  // Community Isolation: general public Home feed strictly excludes community posts.
+  const personalFeedPosts = useMemo(() => posts.filter(isPersonalTimelinePost), [posts]);
+
   const videoPosts = useMemo(() => {
-    return posts
+    return personalFeedPosts
       .filter(
         (p) =>
           !blockedSet.has(p.authorId) &&
@@ -208,11 +208,11 @@ export function HomePage({
           p.mediaUrls?.length > 0
       )
       .slice(0, 4);
-  }, [posts, blockedSet]);
+  }, [personalFeedPosts, blockedSet]);
 
   const trendingHashtags = useMemo(() => {
     const counts = new Map<string, number>();
-    posts.forEach((p) => {
+    personalFeedPosts.forEach((p) => {
       if (blockedSet.has(p.authorId)) return;
       (p.hashtags || []).forEach((tag) => {
         const clean = tag.replace(/^#+/, '').trim().toLowerCase();
@@ -222,10 +222,10 @@ export function HomePage({
     return Array.from(counts.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 8);
-  }, [posts, blockedSet]);
+  }, [personalFeedPosts, blockedSet]);
 
   const visiblePosts = useMemo(() => {
-    const base = posts.filter((p) => {
+    const base = personalFeedPosts.filter((p) => {
       if (blockedSet.has(p.authorId)) return false;
       if (selectedHashtag) {
         const tags = (p.hashtags || []).map((t) =>
@@ -248,7 +248,7 @@ export function HomePage({
       return rankTrendingPosts(base);
     }
     return base;
-  }, [posts, blockedSet, filter, selectedHashtag]);
+  }, [personalFeedPosts, blockedSet, filter, selectedHashtag]);
 
   const handleToggleFollow = async (target: UserProfile) => {
     if (!profile || followBusyUids[target.uid]) return;
@@ -360,6 +360,14 @@ export function HomePage({
                           max={2}
                           interactive={false}
                         />
+                        {isUserOfficialOwner(u.uid, u) && (
+                          <span
+                            title="Official Nexora Account"
+                            className="inline-flex items-center px-1 py-0.5 rounded bg-[#7C3AED]/25 border border-[#A855F7]/45 text-[9px] font-semibold text-[#E9D5FF] shrink-0"
+                          >
+                            <ShieldCheck size={9} className="text-[#C084FC]" />
+                          </span>
+                        )}
                         <TierBadge
                           tier={getUserTier(u.uid, u.subscriptionTier)}
                           showFree={false}
@@ -679,6 +687,7 @@ export function HomePage({
               post={post}
               isSaved={savedPostIds.includes(post.id)}
               onOpenProfile={onOpenProfile}
+              onOpenVerification={onOpenVerification}
               onHashtagClick={(tag) => setSelectedHashtag(tag)}
               usersDirectory={users}
               compact={isCompact}
@@ -755,8 +764,12 @@ export function HomePage({
                   onNavigate?.('profile', profile.uid, 'gifts');
                 } else if (latest.type === 'follow' && latest.actorId) {
                   onOpenProfile(latest.actorId);
-                } else if (latest.type === 'space_invite' && latest.targetId) {
-                  onNavigate?.('spaces', latest.targetId);
+                } else if (
+                  latest.category === 'spaces' ||
+                  latest.targetType === 'space' ||
+                  latest.type === 'space_invite'
+                ) {
+                  onNavigate?.('spaces', latest.targetId || undefined);
                 } else {
                   onNavigate?.('notifications');
                 }
@@ -765,6 +778,26 @@ export function HomePage({
             >
               <Bell size={13} className="text-[#C084FC]" />
               <span className="font-mono-tabular">{unreadNotifications.length} New</span>
+            </button>
+          )}
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('profile', profile.uid, 'tasks')}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-400/25 text-xs font-semibold text-amber-200 transition-colors whitespace-nowrap min-h-[38px]"
+            >
+              <Gift size={13} className="text-amber-300" />
+              <span>Tasks &amp; Earn</span>
+            </button>
+          )}
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('invite')}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-400/25 text-xs font-semibold text-emerald-200 transition-colors whitespace-nowrap min-h-[38px]"
+            >
+              <UserPlus size={13} className="text-emerald-300" />
+              <span>Invite</span>
             </button>
           )}
           {onNavigate && (
@@ -995,6 +1028,13 @@ export function HomePage({
                                           max={2}
                                           interactive={false}
                                         />
+                                        {isUserOfficialOwner(u.uid, u) && (
+                                          <ShieldCheck
+                                            size={11}
+                                            className="text-[#C084FC] shrink-0"
+                                            aria-label="Official Nexora Account"
+                                          />
+                                        )}
                                       </p>
                                       <p className="text-[11px] text-[#94A3B8] truncate">
                                         @{u.username}

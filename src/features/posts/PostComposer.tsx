@@ -192,7 +192,8 @@ export function PostComposer({
     else if (mediaTypes.includes('video')) type = 'video';
     else if (mediaUrls.length > 0) type = 'photo';
 
-    const targetSpace = spaces.find((s) => s.id === selectedSpaceId);
+    const effectiveSpaceId = defaultSpaceId || '';
+    const targetSpace = spaces.find((s) => s.id === effectiveSpaceId);
 
     setSubmitting(true);
     try {
@@ -203,8 +204,8 @@ export function PostComposer({
         mediaUrls,
         mediaTypes,
         location,
-        audience: selectedSpaceId ? 'space' : audience,
-        spaceId: selectedSpaceId,
+        audience: effectiveSpaceId ? 'space' : audience === 'followers' ? 'followers' : 'public',
+        spaceId: effectiveSpaceId,
         spaceName: targetSpace?.name || '',
         pollOptions: validPollOptions,
         taggedUsers,
@@ -246,12 +247,22 @@ export function PostComposer({
           className="w-11 h-11 rounded-full object-cover shrink-0 ring-1 ring-[#8B5CF6]/40"
         />
         <div className="flex-1 space-y-3 min-w-0">
+          {defaultSpaceId && (
+            <p className="text-[11px] text-[#C084FC]/90 font-medium">
+              Community post — published only inside{' '}
+              {spaces.find((s) => s.id === defaultSpaceId)?.name || 'this Space'}, never on your personal profile or Home feed.
+            </p>
+          )}
           <textarea
             rows={3}
             maxLength={2000}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="What's on your mind?"
+            placeholder={
+              defaultSpaceId
+                ? 'Share an update with this Space community...'
+                : "What's on your mind?"
+            }
             className="w-full bg-transparent text-sm text-white placeholder:text-[#7C6E9B] outline-none resize-none leading-relaxed"
           />
 
@@ -556,30 +567,19 @@ export function PostComposer({
             <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#08070F] border border-[#8B5CF6]/20">
               <Globe size={13} className="text-[#94A3B8]" />
               <select
-                value={selectedSpaceId ? `space:${selectedSpaceId}` : audience}
+                value={audience === 'followers' ? 'followers' : 'public'}
                 onChange={(e) => {
-                  const val = e.target.value;
-                  if (val.startsWith('space:')) {
-                    setSelectedSpaceId(val.replace('space:', ''));
-                    setAudience('space');
-                  } else {
-                    setSelectedSpaceId('');
-                    setAudience(val as AudienceType);
-                  }
+                  setSelectedSpaceId('');
+                  setAudience(e.target.value === 'followers' ? 'followers' : 'public');
                 }}
                 className="bg-transparent text-xs text-[#E2E8F0] outline-none"
               >
                 <option value="public" className="bg-[#0D0B16]">
-                  Public
+                  Public Profile &amp; Feed
                 </option>
                 <option value="followers" className="bg-[#0D0B16]">
-                  Followers
+                  Followers Only
                 </option>
-                {spaces.map((s) => (
-                  <option key={s.id} value={`space:${s.id}`} className="bg-[#0D0B16]">
-                    Space: {s.name}
-                  </option>
-                ))}
               </select>
             </div>
           )}

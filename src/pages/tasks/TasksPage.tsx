@@ -14,6 +14,7 @@ import {
 import { useAuth } from '../../hooks/useAuth';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
 import {
+  seedStarterTasksIfEmpty,
   submitFreeTaskProof,
   subscribeMyTaskSubmissions,
   subscribeRewardsConfig,
@@ -32,6 +33,7 @@ export function TasksPage() {
   const [proofText, setProofText] = useState('');
   const [proofUrl, setProofUrl] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [seedAttempted, setSeedAttempted] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   useEffect(() => {
@@ -47,6 +49,12 @@ export function TasksPage() {
     if (!profile?.uid) return;
     return subscribeMyTaskSubmissions(profile.uid, setSubmissions);
   }, [profile?.uid]);
+
+  useEffect(() => {
+    if (!profile?.uid || tasks.length > 0 || seedAttempted) return;
+    setSeedAttempted(true);
+    void seedStarterTasksIfEmpty(profile);
+  }, [profile?.uid, tasks.length, seedAttempted]);
 
   const submissionByTaskId = useMemo(() => {
     const map = new Map<string, TaskSubmission>();

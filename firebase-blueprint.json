@@ -16,6 +16,8 @@
         "location": { "type": "string", "maxLength": 100 },
         "interests": { "type": "array" },
         "verified": { "type": "boolean" },
+        "isOfficialOwner": { "type": "boolean" },
+        "officialTitle": { "type": "string", "maxLength": 60 },
         "suspended": { "type": "boolean" },
         "suspendedReason": { "type": "string", "maxLength": 300 },
         "suspendedAt": { "type": "string", "format": "date-time" },
@@ -213,7 +215,7 @@
         "actorName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "actorRole": { "type": "string", "minLength": 1, "maxLength": 40 },
         "action": { "type": "string", "minLength": 1, "maxLength": 100 },
-        "category": { "type": "string", "enum": ["admin", "community", "verification", "identity", "platform", "moderation", "notification", "billing", "customisation", "ai", "rewards", "wallet"] },
+        "category": { "type": "string", "enum": ["admin", "community", "verification", "identity", "platform", "moderation", "notification", "billing", "customisation", "ai", "rewards", "wallet", "bots", "privacy"] },
         "targetType": { "type": "string", "minLength": 1, "maxLength": 40 },
         "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "targetLabel": { "type": "string", "maxLength": 120 },
@@ -433,7 +435,14 @@
         "text": { "type": "string", "minLength": 1, "maxLength": 1000 },
         "channel": { "type": "string", "minLength": 1, "maxLength": 40 },
         "isAi": { "type": "boolean" },
+        "isBot": { "type": "boolean" },
+        "botId": { "type": "string", "maxLength": 128 },
+        "botName": { "type": "string", "maxLength": 80 },
+        "commandName": { "type": "string", "maxLength": 40 },
         "aiTriggeredBy": { "type": "string", "maxLength": 128 },
+        "pollQuestion": { "type": "string", "maxLength": 200 },
+        "pollOptions": { "type": "array" },
+        "pollVotes": { "type": "object" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["authorId", "authorName", "text", "channel", "createdAt"]
@@ -513,12 +522,13 @@
             "verification_decision", "collab_invite", "collab_response",
             "post_tag", "gift_received", "support_ticket",
             "subscription_notice", "subscription_renewal", "system_update", "ai_welcome",
-            "referral_reward", "task_reward", "withdrawal_update", "wallet_adjustment"
+            "referral_reward", "task_reward", "withdrawal_update", "wallet_adjustment",
+            "bot_alert", "bot_welcome", "deployment_failed", "privacy_update"
           ]
         },
-        "category": { "type": "string", "enum": ["account", "social", "badges", "gifts", "admin", "security", "messages", "spaces", "subscriptions", "rewards"] },
+        "category": { "type": "string", "enum": ["account", "social", "badges", "gifts", "admin", "security", "messages", "spaces", "subscriptions", "rewards", "bots"] },
         "title": { "type": "string", "maxLength": 120 },
-        "targetType": { "type": "string", "enum": ["post", "vibe", "profile", "chat", "space", "subscription", "settings", "rewards", "wallet", "invite", "tasks", "system"] },
+        "targetType": { "type": "string", "enum": ["post", "vibe", "profile", "chat", "space", "subscription", "settings", "rewards", "wallet", "invite", "tasks", "system", "dexora", "bots", "privacy"] },
         "targetId": { "type": "string", "maxLength": 128 },
         "dedupeKey": { "type": "string", "maxLength": 128 },
         "preview": { "type": "string", "maxLength": 200 },
@@ -1178,6 +1188,157 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["withdrawalId", "uid", "bankName", "bankCode", "accountNumber", "accountHolderName", "verificationProvider", "createdAt"]
+    },
+    "BotDefinition": {
+      "title": "BotDefinition",
+      "description": "Official and community Nexora bot configuration, permissions, commands, and deployment settings.",
+      "type": "object",
+      "properties": {
+        "botId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "handle": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "description": { "type": "string", "maxLength": 400 },
+        "avatarUrl": { "type": "string", "maxLength": 200000 },
+        "kind": { "type": "string", "enum": ["official", "installed"] },
+        "officialProtected": { "type": "boolean" },
+        "active": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["online", "offline", "deploying", "restarting", "error"] },
+        "version": { "type": "string", "maxLength": 32 },
+        "pendingUpdateVersion": { "type": ["string", "null"], "maxLength": 32 },
+        "autoDeploy": { "type": "boolean" },
+        "autoRestartOnCrash": { "type": "boolean" },
+        "maxAutoRestarts": { "type": "number" },
+        "restartCount": { "type": "number" },
+        "uptimeSeconds": { "type": "number" },
+        "permissions": { "type": "array" },
+        "enabledCommands": { "type": "array" },
+        "notificationSettings": { "type": "object" },
+        "lastDeployedAt": { "type": "string", "format": "date-time" },
+        "lastHeartbeatAt": { "type": "string", "format": "date-time" },
+        "lastError": { "type": "string", "maxLength": 400 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["botId", "name", "handle", "description", "kind", "officialProtected", "active", "status", "version", "autoDeploy", "autoRestartOnCrash", "maxAutoRestarts", "restartCount", "uptimeSeconds", "permissions", "enabledCommands", "notificationSettings", "updatedAt"]
+    },
+    "BotDeploymentRecord": {
+      "title": "BotDeploymentRecord",
+      "description": "Automatic and manual bot deployment execution audit records.",
+      "type": "object",
+      "properties": {
+        "botId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "botName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "trigger": { "type": "string", "enum": ["startup_auto", "manual_deploy", "crash_recovery", "update_approved", "config_reload"] },
+        "status": { "type": "string", "enum": ["deploying", "succeeded", "failed"] },
+        "commandsRegistered": { "type": "number" },
+        "summary": { "type": "string", "maxLength": 300 },
+        "errorMessage": { "type": "string", "maxLength": 400 },
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["botId", "botName", "version", "trigger", "status", "commandsRegistered", "summary", "actorUid", "createdAt"]
+    },
+    "BotActivityLog": {
+      "title": "BotActivityLog",
+      "description": "Structured bot command, moderation, spam detection, welcome, and failure event log.",
+      "type": "object",
+      "properties": {
+        "botId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "botName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "spaceId": { "type": "string", "maxLength": 128 },
+        "spaceName": { "type": "string", "maxLength": 80 },
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "actorName": { "type": "string", "maxLength": 80 },
+        "targetUid": { "type": "string", "maxLength": 128 },
+        "command": { "type": "string", "maxLength": 40 },
+        "eventType": { "type": "string", "enum": ["command", "welcome", "moderation", "spam_detected", "notification", "deployment", "crash_recovery", "support"] },
+        "severity": { "type": "string", "enum": ["info", "warning", "error"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 320 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["botId", "botName", "eventType", "severity", "summary", "createdAt"]
+    },
+    "SpaceBotConfig": {
+      "title": "SpaceBotConfig",
+      "description": "Per-Space community bot automation, command toggles, rules, and granular permission configuration.",
+      "type": "object",
+      "properties": {
+        "spaceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "activeBotIds": { "type": "array" },
+        "welcomeEnabled": { "type": "boolean" },
+        "welcomeMessage": { "type": "string", "maxLength": 400 },
+        "autoModEnabled": { "type": "boolean" },
+        "spamProtectionEnabled": { "type": "boolean" },
+        "repeatedMessageThreshold": { "type": "number" },
+        "blockedPhrases": { "type": "array" },
+        "rulesText": { "type": "string", "maxLength": 1500 },
+        "channelLocked": { "type": "boolean" },
+        "lockedChannelName": { "type": "string", "maxLength": 60 },
+        "grantedPermissions": { "type": "array" },
+        "enabledCommands": { "type": "array" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["spaceId", "activeBotIds", "welcomeEnabled", "welcomeMessage", "autoModEnabled", "spamProtectionEnabled", "repeatedMessageThreshold", "blockedPhrases", "rulesText", "channelLocked", "grantedPermissions", "enabledCommands", "updatedBy", "updatedAt"]
+    },
+    "SpaceMemberModerationState": {
+      "title": "SpaceMemberModerationState",
+      "description": "Per-Space member warnings, mutes, timeouts, and ban records managed by Space owners/admins and bots.",
+      "type": "object",
+      "properties": {
+        "spaceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "maxLength": 80 },
+        "username": { "type": "string", "maxLength": 30 },
+        "warningsCount": { "type": "number" },
+        "lastWarningReason": { "type": "string", "maxLength": 240 },
+        "mutedUntil": { "type": ["string", "null"] },
+        "timedOutUntil": { "type": ["string", "null"] },
+        "banned": { "type": "boolean" },
+        "banReason": { "type": "string", "maxLength": 240 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["spaceId", "uid", "warningsCount", "banned", "updatedBy", "updatedAt"]
+    },
+    "DexoraSupportTicket": {
+      "title": "DexoraSupportTicket",
+      "description": "Official Dexora customer support tickets and platform assistance inquiries.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "userDisplayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "userUsername": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "spaceId": { "type": "string", "maxLength": 128 },
+        "category": { "type": "string", "enum": ["account", "security", "billing", "community", "bug", "privacy"] },
+        "subject": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "message": { "type": "string", "minLength": 2, "maxLength": 1500 },
+        "dexoraReply": { "type": "string", "maxLength": 2000 },
+        "status": { "type": "string", "enum": ["open", "answered", "resolved"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "userDisplayName", "userUsername", "category", "subject", "message", "status", "createdAt", "updatedAt"]
+    },
+    "PrivacyDeletionRequest": {
+      "title": "PrivacyDeletionRequest",
+      "description": "Verifiable user data/account deletion request and administrative review lifecycle.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "userEmail": { "type": "string", "maxLength": 254 },
+        "userDisplayName": { "type": "string", "maxLength": 80 },
+        "scope": { "type": "string", "enum": ["full_account", "content_and_messages", "ai_and_bot_history"] },
+        "reason": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "in_review", "completed", "cancelled"] },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "resolutionNote": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "userEmail", "userDisplayName", "scope", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -1432,6 +1593,34 @@
     "/withdrawal_private/{withdrawalId}": {
       "schema": { "$ref": "#/entities/WithdrawalPrivatePII" },
       "description": "Restricted raw bank account number records isolated from public queries."
+    },
+    "/bots/{botId}": {
+      "schema": { "$ref": "#/entities/BotDefinition" },
+      "description": "Platform bots catalog, configuration, permissions, and deployment settings."
+    },
+    "/bot_deployments/{deploymentId}": {
+      "schema": { "$ref": "#/entities/BotDeploymentRecord" },
+      "description": "Bot deployment and crash-recovery records."
+    },
+    "/bot_logs/{logId}": {
+      "schema": { "$ref": "#/entities/BotActivityLog" },
+      "description": "Bot command, moderation, spam, welcome, and error activity logs."
+    },
+    "/space_bot_configs/{spaceId}": {
+      "schema": { "$ref": "#/entities/SpaceBotConfig" },
+      "description": "Per-Space community bot automation and permission settings."
+    },
+    "/space_moderation/{recordId}": {
+      "schema": { "$ref": "#/entities/SpaceMemberModerationState" },
+      "description": "Per-Space member warnings, mutes, timeouts, and bans."
+    },
+    "/dexora_support_tickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/DexoraSupportTicket" },
+      "description": "Official Dexora customer support tickets."
+    },
+    "/privacy_deletion_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/PrivacyDeletionRequest" },
+      "description": "User data and account deletion requests tracked for compliance."
     }
   }
 }

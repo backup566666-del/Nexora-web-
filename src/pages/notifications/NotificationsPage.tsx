@@ -207,6 +207,7 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({
       return;
     }
     if (
+      item.category === 'spaces' ||
       t === 'space' ||
       item.type === 'space_invite' ||
       item.type === 'space_announcement' ||

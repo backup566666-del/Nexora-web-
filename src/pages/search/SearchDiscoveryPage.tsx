@@ -7,6 +7,7 @@ import {
   Layers,
   MessageSquare,
   Search,
+  ShieldCheck,
   Sparkles,
   TrendingUp,
   UserPlus,
@@ -34,7 +35,13 @@ import {
   saveRecentSearchTerm,
 } from '../../services/firebase/socialService';
 import { extractReadableErrorMessage } from '../../services/firebase/errorHandler';
-import { formatCompactCount, formatRelativeTime, normalizeBadgeList } from '../../utils/validation';
+import {
+  formatCompactCount,
+  formatRelativeTime,
+  isOfficialOwnerAccount,
+  isPersonalTimelinePost,
+  normalizeBadgeList,
+} from '../../utils/validation';
 import { ResilientImage } from '../../components/common/ResilientImage';
 import { BadgeStrip } from '../../components/common/VerifiedBadge';
 import { TierBadge } from '../../components/common/TierBadge';
@@ -88,6 +95,11 @@ export const SearchDiscoveryPage: React.FC<SearchDiscoveryPageProps> = ({
   const [pageSize, setPageSize] = useState(12);
   const [loadingCorpus, setLoadingCorpus] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+  const personalFeedPosts = useMemo(
+    () => feedPosts.filter(isPersonalTimelinePost),
+    [feedPosts]
+  );
+
   const [corpus, setCorpus] = useState<{
     users: UserProfile[];
     posts: Post[];
@@ -96,7 +108,7 @@ export const SearchDiscoveryPage: React.FC<SearchDiscoveryPageProps> = ({
     discussions: Awaited<ReturnType<typeof loadSearchableCorpus>>['discussions'];
   }>({
     users: directoryUsers,
-    posts: feedPosts,
+    posts: personalFeedPosts,
     vibes: [],
     spaces,
     discussions: [],
@@ -114,7 +126,7 @@ export const SearchDiscoveryPage: React.FC<SearchDiscoveryPageProps> = ({
       blockedUserIds,
       followingIds,
       directoryUsers,
-      feedPosts,
+      feedPosts: personalFeedPosts,
       spaces,
     })
       .then((res) => {
@@ -130,7 +142,7 @@ export const SearchDiscoveryPage: React.FC<SearchDiscoveryPageProps> = ({
     return () => {
       active = false;
     };
-  }, [currentUser.uid, blockedUserIds, followingIds, directoryUsers, feedPosts, spaces]);
+  }, [currentUser.uid, blockedUserIds, followingIds, directoryUsers, personalFeedPosts, spaces]);
 
   const results = useMemo(
     () =>
@@ -422,11 +434,16 @@ export const SearchDiscoveryPage: React.FC<SearchDiscoveryPageProps> = ({
                         className="w-11 h-11 rounded-full object-cover shrink-0"
                       />
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                           <span className="text-sm font-semibold text-white truncate">
                             {person.displayName}
                           </span>
                           <BadgeStrip badges={getBadges(person.uid, person.verified)} size={13} max={2} interactive={false} />
+                          {isOfficialOwnerAccount(person, verifiedBadgesMap) && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#7C3AED]/25 border border-[#A855F7]/45 text-[10px] font-semibold text-[#E9D5FF] shrink-0">
+                              <ShieldCheck size={10} className="text-[#C084FC]" /> Official Nexora
+                            </span>
+                          )}
                           <TierBadge tier={tier} size="xs" />
                         </div>
                         <p className="text-xs text-[#94A3B8] truncate">

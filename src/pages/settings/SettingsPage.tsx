@@ -119,7 +119,7 @@ interface SettingsPageProps {
   vibes?: Vibe[];
   spaces?: Space[];
   initialAdminOpen?: boolean;
-  initialPersonalSection?: 'all' | 'customize-homepage';
+  initialPersonalSection?: 'all' | 'customize-homepage' | 'badges';
   onNavigate?: (section: NavSection) => void;
 }
 
@@ -202,9 +202,12 @@ export function SettingsPage({
   }, [initialAdminOpen, canAccessAdmin, viewMode]);
 
   useEffect(() => {
-    if (initialPersonalSection === 'customize-homepage') {
+    if (
+      initialPersonalSection === 'customize-homepage' ||
+      initialPersonalSection === 'badges'
+    ) {
       setViewMode('personal');
-      setPersonalTab('customize-homepage');
+      setPersonalTab(initialPersonalSection);
     }
   }, [initialPersonalSection]);
 
@@ -748,6 +751,60 @@ export function SettingsPage({
               );
             })}
           </nav>
+
+          {/* Tasks, Invitations & Rewards Quick Access */}
+          {onNavigate && (personalTab === 'all' || personalTab === 'account') && (
+            <section className="p-5 sm:p-6 rounded-2xl bg-white dark:bg-[#0D0B16] border border-slate-200 dark:border-[#8B5CF6]/20 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h2 className="font-display text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Gift size={17} className="text-amber-400" /> Tasks, Invitations &amp; Wallet
+                  </h2>
+                  <p className="text-xs text-slate-600 dark:text-[#94A3B8] mt-0.5">
+                    Complete free tasks, share your personal referral link, and track your Key Points wallet.
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onNavigate('tasks')}
+                  className="p-3 rounded-xl bg-slate-50 dark:bg-[#08070F] border border-slate-200 dark:border-white/10 hover:border-[#8B5CF6]/45 text-left space-y-1 transition-colors"
+                >
+                  <Gift size={15} className="text-amber-300" />
+                  <p className="text-xs font-semibold text-slate-900 dark:text-white">Free Tasks</p>
+                  <p className="text-[11px] text-slate-500 dark:text-[#94A3B8]">Earn Key Points</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('invite')}
+                  className="p-3 rounded-xl bg-slate-50 dark:bg-[#08070F] border border-slate-200 dark:border-white/10 hover:border-[#8B5CF6]/45 text-left space-y-1 transition-colors"
+                >
+                  <Link2 size={15} className="text-emerald-400" />
+                  <p className="text-xs font-semibold text-slate-900 dark:text-white">Invite Friends</p>
+                  <p className="text-[11px] text-slate-500 dark:text-[#94A3B8]">1 KP / 10 referrals</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('wallet')}
+                  className="p-3 rounded-xl bg-slate-50 dark:bg-[#08070F] border border-slate-200 dark:border-white/10 hover:border-[#8B5CF6]/45 text-left space-y-1 transition-colors"
+                >
+                  <Banknote size={15} className="text-[#C084FC]" />
+                  <p className="text-xs font-semibold text-slate-900 dark:text-white">Nexora Wallet</p>
+                  <p className="text-[11px] text-slate-500 dark:text-[#94A3B8]">Naira withdrawals</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('rewards-history')}
+                  className="p-3 rounded-xl bg-slate-50 dark:bg-[#08070F] border border-slate-200 dark:border-white/10 hover:border-[#8B5CF6]/45 text-left space-y-1 transition-colors"
+                >
+                  <History size={15} className="text-sky-400" />
+                  <p className="text-xs font-semibold text-slate-900 dark:text-white">Rewards History</p>
+                  <p className="text-[11px] text-slate-500 dark:text-[#94A3B8]">Ledger &amp; payouts</p>
+                </button>
+              </div>
+            </section>
+          )}
 
           {/* Global Appearance & Theme Mode (Synced across devices via Firestore) */}
           {(personalTab === 'all' || personalTab === 'account' || personalTab === 'customize-homepage') && (

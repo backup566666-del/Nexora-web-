@@ -73,7 +73,12 @@ export function InvitePage() {
     if (!profile || invitations.length > 0 || creatingPersonal) return;
     setCreatingPersonal(true);
     ensurePersonalInvitationCode(profile)
-      .catch(() => {})
+      .catch((err) => {
+        setFeedback({
+          type: 'err',
+          text: extractReadableErrorMessage(err, 'Unable to initialize your personal invitation link.'),
+        });
+      })
       .finally(() => setCreatingPersonal(false));
   }, [profile?.uid, invitations.length]);
 
@@ -230,10 +235,21 @@ export function InvitePage() {
             <button
               type="button"
               disabled={creatingPersonal}
-              onClick={() => ensurePersonalInvitationCode(profile)}
-              className="px-4 py-2 rounded-xl bg-[#7C3AED] text-xs font-semibold text-white"
+              onClick={() => {
+                setCreatingPersonal(true);
+                setFeedback(null);
+                void ensurePersonalInvitationCode(profile)
+                  .catch((err) => {
+                    setFeedback({
+                      type: 'err',
+                      text: extractReadableErrorMessage(err, 'Unable to generate your personal invitation link.'),
+                    });
+                  })
+                  .finally(() => setCreatingPersonal(false));
+              }}
+              className="px-4 py-2 rounded-xl bg-[#7C3AED] text-xs font-semibold text-white disabled:opacity-50"
             >
-              Generate Link
+              {creatingPersonal ? 'Generating...' : 'Generate Link'}
             </button>
           </div>
         )}

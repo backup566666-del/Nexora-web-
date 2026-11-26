@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { CreatorAnalyticsDaily, Post, UserProfile, Vibe } from '../../types/nexora';
+import { isPersonalTimelinePost } from '../../utils/validation';
 
 export type AnalyticsRangePreset = '7d' | '30d' | '90d' | 'custom';
 
@@ -201,7 +202,9 @@ export function aggregateCreatorAnalytics(params: {
     };
   });
 
-  const ownPosts = params.posts.filter((p) => p.authorId === params.profile.uid);
+  const ownPosts = params.posts.filter(
+    (p) => p.authorId === params.profile.uid && isPersonalTimelinePost(p)
+  );
   const ownVibes = params.vibes.filter((v) => v.authorId === params.profile.uid);
 
   const postsInRange = ownPosts.filter((p) => {

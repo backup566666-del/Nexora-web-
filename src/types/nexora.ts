@@ -17,7 +17,9 @@ export type NavSection =
   | 'invite'
   | 'tasks'
   | 'wallet'
-  | 'rewards-history';
+  | 'rewards-history'
+  | 'dexora'
+  | 'privacy';
 
 export type ThemeMode = 'dark' | 'light' | 'system';
 
@@ -59,7 +61,8 @@ export type NotificationCategory =
   | 'messages'
   | 'spaces'
   | 'subscriptions'
-  | 'rewards';
+  | 'rewards'
+  | 'bots';
 
 export type NotificationType =
   | 'like'
@@ -93,6 +96,10 @@ export type NotificationType =
   | 'task_reward'
   | 'withdrawal_update'
   | 'wallet_adjustment'
+  | 'bot_alert'
+  | 'bot_welcome'
+  | 'deployment_failed'
+  | 'privacy_update'
   | 'system_update';
 
 // --- Governance & 5-Tier RBAC ---
@@ -293,7 +300,9 @@ export type AuditLogCategory =
   | 'customisation'
   | 'ai'
   | 'rewards'
-  | 'wallet';
+  | 'wallet'
+  | 'bots'
+  | 'privacy';
 
 export interface AuditLogEntry {
   id: string;
@@ -343,6 +352,8 @@ export interface UserProfile {
   location: string;
   interests: string[];
   verified: boolean;
+  isOfficialOwner?: boolean;
+  officialTitle?: string;
   suspended?: boolean;
   suspendedReason?: string;
   suspendedAt?: Timestamp;
@@ -366,6 +377,9 @@ export interface PrivacySettings {
   showOnlineStatus: boolean;
   allowTags?: 'everyone' | 'followers' | 'nobody';
   allowCollaborations?: 'everyone' | 'followers' | 'nobody';
+  communityPrivacy?: 'visible' | 'members_only' | 'hidden';
+  messageVisibility?: 'everyone' | 'followers' | 'none';
+  allowBotProcessing?: boolean;
   emailNotifications?: Record<NotificationCategory, boolean>;
   inAppNotifications?: Record<NotificationCategory, boolean>;
 }
@@ -550,7 +564,14 @@ export interface SpaceDiscussion {
   text: string;
   channel: string;
   isAi?: boolean;
+  isBot?: boolean;
+  botId?: string;
+  botName?: string;
+  commandName?: string;
   aiTriggeredBy?: string;
+  pollQuestion?: string;
+  pollOptions?: string[];
+  pollVotes?: Record<string, number>;
   createdAt: Timestamp;
 }
 
@@ -614,6 +635,9 @@ export type NotificationTargetType =
   | 'wallet'
   | 'invite'
   | 'tasks'
+  | 'dexora'
+  | 'bots'
+  | 'privacy'
   | 'system';
 
 export interface NotificationItem {
@@ -1226,3 +1250,205 @@ export interface BankAccountResolution {
   accountName?: string;
   message: string;
 }
+
+export type ProfileContentTab =
+  | 'posts'
+  | 'videos'
+  | 'photos'
+  | 'tagged'
+  | 'collabs'
+  | 'gifts'
+  | 'tasks'
+  | 'spaces'
+  | 'saved';
+
+export interface StarterTaskSeedDefinition {
+  id:
+    | 'starter_complete_profile'
+    | 'starter_publish_first_post'
+    | 'starter_join_community_space'
+    | 'starter_engage_creators'
+    | 'starter_invite_member';
+  title: string;
+  description: string;
+  category: TaskItem['category'];
+  rewardPoints: number;
+  maxCompletionsPerUser: number;
+  proofInstructions: string;
+  actionUrl: string;
+}
+
+// --- Nexora Official Bot Ecosystem, Dexora & Privacy Protection ---
+export type BotPermissionKey =
+  | 'read_messages'
+  | 'send_messages'
+  | 'delete_messages'
+  | 'manage_members'
+  | 'manage_roles'
+  | 'manage_channels'
+  | 'send_notifications'
+  | 'access_community_info'
+  | 'manage_support_tickets'
+  | 'access_moderation_tools';
+
+export type BotSlashCommandName =
+  | 'help'
+  | 'about'
+  | 'rules'
+  | 'profile'
+  | 'warn'
+  | 'timeout'
+  | 'ban'
+  | 'unban'
+  | 'kick'
+  | 'mute'
+  | 'unmute'
+  | 'clear'
+  | 'announce'
+  | 'poll'
+  | 'lock'
+  | 'unlock'
+  | 'memberinfo'
+  | 'serverinfo'
+  | 'stats'
+  | 'ticket'
+  | 'support';
+
+export interface BotSlashCommandMeta {
+  name: BotSlashCommandName;
+  usage: string;
+  description: string;
+  category: 'info' | 'moderation' | 'community' | 'support';
+  requiredSpaceRole: 'member' | 'admin' | 'owner';
+  requiredBotPermission: BotPermissionKey;
+}
+
+export interface BotNotificationSettings {
+  welcomeNewMembers: boolean;
+  securityAlerts: boolean;
+  supportReplies: boolean;
+  maintenanceNotices: boolean;
+  deploymentFailures: boolean;
+}
+
+export interface BotDefinition {
+  id: string;
+  accountName: string;
+  botName: string;
+  username: string;
+  accountType: 'official_system_account' | 'community_bot';
+  official: boolean;
+  protected: boolean;
+  verified: boolean;
+  description: string;
+  purpose: string;
+  status: 'active' | 'offline' | 'deploying' | 'error';
+  enabled: boolean;
+  version: string;
+  availableUpdateVersion?: string;
+  defaultPermissions: BotPermissionKey[];
+  enabledCommands: BotSlashCommandName[];
+  notificationSettings: BotNotificationSettings;
+  autoRestartOnCrash: boolean;
+  maxAutoRestarts: number;
+  uptimeStartedMs?: number;
+  restartCount: number;
+  lastError?: string;
+  updatedBy: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface BotDeploymentRecord {
+  id: string;
+  botId: string;
+  botName: string;
+  version: string;
+  trigger: 'startup' | 'manual' | 'auto_restart' | 'update';
+  status: 'deploying' | 'succeeded' | 'failed' | 'restarted';
+  commandsRegistered: number;
+  uptimeSeconds: number;
+  errorSummary?: string;
+  actorUid: string;
+  createdAt?: Timestamp;
+}
+
+export interface BotActivityLog {
+  id: string;
+  botId: string;
+  botName: string;
+  spaceId?: string;
+  actorUid: string;
+  actorName: string;
+  eventType: 'command' | 'moderation' | 'welcome' | 'support' | 'deployment' | 'error' | 'security';
+  command?: string;
+  summary: string;
+  severity: 'info' | 'warning' | 'error';
+  createdAt?: Timestamp;
+}
+
+export interface SpaceBotConfig {
+  spaceId: string;
+  enabled: boolean;
+  botId: string;
+  welcomeEnabled: boolean;
+  autoModEnabled: boolean;
+  spamProtectionEnabled: boolean;
+  repeatedMessageThreshold: number;
+  blockedWords: string[];
+  rulesText: string;
+  lockedChannels: string[];
+  permissions: BotPermissionKey[];
+  enabledCommands: BotSlashCommandName[];
+  updatedBy: string;
+  updatedAt?: Timestamp;
+}
+
+export interface SpaceMemberModerationState {
+  id: string; // `${spaceId}_${targetUid}`
+  spaceId: string;
+  targetUid: string;
+  targetUsername: string;
+  targetDisplayName: string;
+  warningsCount: number;
+  lastWarningReason?: string;
+  mutedUntilMs?: number;
+  banned: boolean;
+  banReason?: string;
+  updatedBy: string;
+  updatedAt?: Timestamp;
+}
+
+export interface DexoraSupportTicket {
+  id: string;
+  uid: string;
+  userDisplayName: string;
+  userUsername: string;
+  category: 'account' | 'security' | 'community' | 'bug' | 'billing' | 'verification' | 'other';
+  subject: string;
+  message: string;
+  status: 'open' | 'bot_replied' | 'escalated' | 'resolved';
+  botResponse?: string;
+  responderName: string;
+  adminNote?: string;
+  handledBy?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface PrivacyDeletionRequest {
+  id: string;
+  uid: string;
+  userDisplayName: string;
+  userUsername: string;
+  email: string;
+  scope: 'account_and_profile' | 'ai_history_only' | 'community_activity';
+  reason: string;
+  status: 'pending' | 'processing' | 'completed' | 'canceled';
+  processedBy?: string;
+  resolutionSummary?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+

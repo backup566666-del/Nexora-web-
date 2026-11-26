@@ -4,10 +4,12 @@ import test from 'node:test';
 import {
   DEFAULT_MIN_WITHDRAWAL_NAIRA,
   DEFAULT_REWARDS_CONFIG,
+  STARTER_FREE_TASKS,
   calculateReferralMilestonesToAward,
   canTransitionWithdrawalStatus,
   computeConvertedNaira,
   evaluateReferralFraudSignals,
+  evaluateStarterTaskReadiness,
   formatNaira,
   generateInviteCode,
   maskBankAccountNumber,
@@ -285,3 +287,59 @@ test('7. Firestore rules, Cloud Functions, Server APIs, and UI Navigation wire R
   const settingsSrc = fs.readFileSync('src/pages/settings/SettingsPage.tsx', 'utf8');
   assert.ok(settingsSrc.includes('<RewardsAndPaymentsAdminPanel />'));
 });
+
+test('8. Starter free tasks, readiness checks, Profile tasks/invite UI, and mobile visibility are properly wired', () => {
+  assert.equal(STARTER_FREE_TASKS.length, 5);
+  for (const t of STARTER_FREE_TASKS) {
+    assert.ok(t.id.startsWith('starter_'));
+    assert.ok(t.rewardPoints === 1 || t.rewardPoints === 2);
+    assert.equal(t.maxCompletionsPerUser, 1);
+  }
+
+  const incompleteProfile = evaluateStarterTaskReadiness('starter_complete_profile', {
+    username: 'alex',
+    hasBio: false,
+    hasAvatar: true,
+  });
+  assert.equal(incompleteProfile.isStarter, true);
+  assert.equal(incompleteProfile.readyToSubmit, false);
+  assert.equal(incompleteProfile.actionType, 'edit_profile');
+
+  const readyProfile = evaluateStarterTaskReadiness('starter_complete_profile', {
+    username: 'alex',
+    hasBio: true,
+    hasAvatar: true,
+  });
+  assert.equal(readyProfile.readyToSubmit, true);
+  assert.match(readyProfile.suggestedProof || '', /@alex/);
+
+  const inviteReady = evaluateStarterTaskReadiness('starter_invite_member', {
+    personalInviteCode: 'NEXALEX99',
+    qualifiedReferrals: 4,
+  });
+  assert.equal(inviteReady.readyToSubmit, true);
+  assert.match(inviteReady.suggestedProof || '', /NEXALEX99/);
+
+  const rules = fs.readFileSync('firestore.rules', 'utf8');
+  assert.ok(rules.includes('function isStarterTaskSeed(taskId, data)'));
+  assert.ok(rules.includes('isStarterTaskSeed(taskId, incoming())'));
+
+  const rewardsSvc = fs.readFileSync('src/services/firebase/rewardsService.ts', 'utf8');
+  assert.ok(rewardsSvc.includes('export async function seedStarterTasksIfEmpty'));
+  assert.ok(rewardsSvc.includes('export async function seedStarterTasksAdmin'));
+  // Ensure ensurePersonalInvitationCode does not issue an unindexed dual where(ownerUid)+where(kind) query
+  const invFnSlice = rewardsSvc.slice(
+    rewardsSvc.indexOf('export async function ensurePersonalInvitationCode'),
+    rewardsSvc.indexOf('export async function createAdminInvitationCode')
+  );
+  assert.ok(!invFnSlice.includes("where('kind'"));
+
+  const profileSrc = fs.readFileSync('src/pages/profile/ProfilePage.tsx', 'utf8');
+  assert.ok(profileSrc.includes('<ProfileTasksPanel'));
+  assert.ok(profileSrc.includes("id: 'tasks', label: 'Tasks & Earn'"));
+
+  const shellSrc = fs.readFileSync('src/components/navigation/DashboardShell.tsx', 'utf8');
+  assert.ok(shellSrc.includes("onClick={() => onNavigate('tasks')}"));
+  assert.ok(shellSrc.includes("onClick={() => onNavigate('invite')}"));
+});
+

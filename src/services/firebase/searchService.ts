@@ -141,7 +141,8 @@ export async function loadSearchableCorpus(params: {
     followingArray,
     joinedSpaceIds,
     privateSpaceIds,
-    suspendedUids
+    suspendedUids,
+    true
   );
 
   const blockedSet = new Set(params.blockedUserIds);

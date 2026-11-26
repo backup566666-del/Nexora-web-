@@ -28,6 +28,7 @@ import {
   reviewFraudAlertAdmin,
   reviewReferralClaimAdmin,
   reviewTaskSubmissionAdmin,
+  seedStarterTasksAdmin,
   subscribeAllInvitationsAdmin,
   subscribeAllReferralClaimsAdmin,
   subscribeAllTaskSubmissionsAdmin,
@@ -724,9 +725,36 @@ export function RewardsAndPaymentsAdminPanel() {
       {tab === 'tasks' && (
         <div className="space-y-6">
           <form onSubmit={handleCreateTask} className="p-5 rounded-2xl border border-white/10 bg-white/[0.02] space-y-3">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-bold text-white">Create Strictly Free Task</h4>
-              <span className="text-[11px] text-emerald-300 font-semibold">freeToParticipate = true</span>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-sm font-bold text-white">Create Strictly Free Task</h4>
+                <span className="text-[11px] text-emerald-300 font-semibold">freeToParticipate = true</span>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  setFeedback(null);
+                  try {
+                    const count = await seedStarterTasksAdmin(profile, roleDoc);
+                    setFeedback({
+                      type: 'ok',
+                      text:
+                        count > 0
+                          ? `Seeded ${count} starter free earning task(s).`
+                          : 'All 5 starter tasks already exist.',
+                    });
+                  } catch (err) {
+                    setFeedback({
+                      type: 'err',
+                      text: extractReadableErrorMessage(err, 'Could not seed starter tasks.'),
+                    });
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/30 text-xs font-semibold text-emerald-200"
+              >
+                <Sparkles size={13} />
+                Seed Starter Tasks
+              </button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <input
@@ -818,7 +846,21 @@ export function RewardsAndPaymentsAdminPanel() {
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
-                        onClick={() => reviewTaskSubmissionAdmin(profile, roleDoc, sub.id, 'approved')}
+                        onClick={async () => {
+                          setFeedback(null);
+                          try {
+                            await reviewTaskSubmissionAdmin(profile, roleDoc, sub.id, 'approved');
+                            setFeedback({
+                              type: 'ok',
+                              text: `Approved "${sub.taskTitle}" and credited +${sub.rewardPoints} KP to @${sub.userUsername}.`,
+                            });
+                          } catch (err) {
+                            setFeedback({
+                              type: 'err',
+                              text: extractReadableErrorMessage(err, 'Could not approve task submission.'),
+                            });
+                          }
+                        }}
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-xs font-semibold text-white"
                       >
                         <CheckCircle2 size={13} />
@@ -826,7 +868,21 @@ export function RewardsAndPaymentsAdminPanel() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => reviewTaskSubmissionAdmin(profile, roleDoc, sub.id, 'rejected', 'Insufficient proof')}
+                        onClick={async () => {
+                          setFeedback(null);
+                          try {
+                            await reviewTaskSubmissionAdmin(profile, roleDoc, sub.id, 'rejected', 'Insufficient proof');
+                            setFeedback({
+                              type: 'ok',
+                              text: `Rejected submission for "${sub.taskTitle}" by @${sub.userUsername}.`,
+                            });
+                          } catch (err) {
+                            setFeedback({
+                              type: 'err',
+                              text: extractReadableErrorMessage(err, 'Could not reject task submission.'),
+                            });
+                          }
+                        }}
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-600 text-xs font-semibold text-white"
                       >
                         <XCircle size={13} />
